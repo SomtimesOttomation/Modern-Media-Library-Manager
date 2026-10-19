@@ -1405,29 +1405,37 @@ function Write-MetaStore {
 
 function Merge-MetaStore {
     # Applies the store to freshly scanned records (called on the UI thread right after every scan).
+    # A title can be filed under several keys (IMDb id, TMDB id, title+year): all of them apply, fetched values first, typed-in values last.
     param([object[]]$Records, [string]$Path)
     $store = Read-MetaStore -Path $Path
     if ($store.Count -eq 0) { return }
     foreach ($rec in $Records) {
-        $entry = $null
-        foreach ($k in (Get-MetaKeys $rec)) { if ($store.ContainsKey($k)) { $entry = $store[$k]; break } }
-        if ($null -eq $entry) { continue }
+        $entries = @()
+        foreach ($k in (Get-MetaKeys $rec)) { if ($store.ContainsKey($k)) { $entries += , $store[$k] } }
+        if ($entries.Count -eq 0) { continue }
+        [array]::Reverse($entries)                      # weakest key first, so the best key has the last word
+        $manualNames = @{}
+        foreach ($entry in $entries) { foreach ($n in $entry.Manual.Keys) { $manualNames[$n] = $true } }
         $notes = @()
-        foreach ($name in @($entry.Scraped.Keys)) {
-            $cur = $rec.$name
-            if ((Test-ValueEmpty $cur) -or ($entry.Force -contains $name)) {
-                if ($entry.Manual.ContainsKey($name)) { continue }
-                $f = $script:Fields | Where-Object { $_.Name -eq $name } | Select-Object -First 1
-                if ($null -eq $f) { continue }
-                try { Set-RecField $rec $name ([Convert]::ChangeType($entry.Scraped[$name], $script:TypeMap[$f.Type])) } catch { continue }
-                $notes += ('{0}: {1}' -f $name, $entry.Sources[$name])
+        foreach ($entry in $entries) {
+            foreach ($name in @($entry.Scraped.Keys)) {
+                if ($manualNames.ContainsKey($name)) { continue }
+                $cur = $rec.$name
+                if ((Test-ValueEmpty $cur) -or ($entry.Force -contains $name)) {
+                    $f = $script:Fields | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+                    if ($null -eq $f) { continue }
+                    try { Set-RecField $rec $name ([Convert]::ChangeType($entry.Scraped[$name], $script:TypeMap[$f.Type])) } catch { continue }
+                    $notes += ('{0}: {1}' -f $name, $entry.Sources[$name])
+                }
             }
         }
-        foreach ($name in @($entry.Manual.Keys)) {
-            $f = $script:Fields | Where-Object { $_.Name -eq $name } | Select-Object -First 1
-            if ($null -eq $f) { continue }
-            try { Set-RecField $rec $name ([Convert]::ChangeType($entry.Manual[$name], $script:TypeMap[$f.Type])) } catch { continue }
-            $notes += ('{0}: manual' -f $name)
+        foreach ($entry in $entries) {
+            foreach ($name in @($entry.Manual.Keys)) {
+                $f = $script:Fields | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+                if ($null -eq $f) { continue }
+                try { Set-RecField $rec $name ([Convert]::ChangeType($entry.Manual[$name], $script:TypeMap[$f.Type])) } catch { continue }
+                $notes += ('{0}: manual' -f $name)
+            }
         }
         if ($notes.Count -gt 0) { Set-RecField $rec 'MetaSources' ($notes -join '; ') }
     }
@@ -2855,7 +2863,9 @@ $btnCols = New-FlatButton 'Columns' 90 'secondary'
 $btnCols.Location = New-Object Drawing.Point(1166, 10); $btnCols.Anchor = 'Top,Right'
 $btnFetch = New-FlatButton 'Fetch info' 100 'secondary'
 $btnFetch.Location = New-Object Drawing.Point(1056, 10); $btnFetch.Anchor = 'Top,Right'
-$toolbar.Controls.AddRange(@($btnViewGrid, $btnViewDetail, $btnViewDash, $lblFilter, $txtFilter, $lblCount, $btnFetch, $btnCols))
+$btnEdit = New-FlatButton 'Edit info' 100 'secondary'
+$btnEdit.Location = New-Object Drawing.Point(946, 10); $btnEdit.Anchor = 'Top,Right'
+$toolbar.Controls.AddRange(@($btnViewGrid, $btnViewDetail, $btnViewDash, $lblFilter, $txtFilter, $lblCount, $btnEdit, $btnFetch, $btnCols))
 
 # empty-state message
 $lblEmpty = New-Object Windows.Forms.Label
@@ -2949,6 +2959,7 @@ function Set-View {
     $lblFilter.Visible = $showFilter; $txtFilter.Visible = $showFilter; $lblCount.Visible = $showFilter
     $btnCols.Visible   = $hasData -and ($View -eq 'grid')
     $btnFetch.Visible  = $hasData -and ($View -eq 'grid')
+    $btnEdit.Visible   = $hasData -and ($View -eq 'grid')
     foreach ($pair in @(@($btnViewGrid, 'grid'), @($btnViewDetail, 'detail'), @($btnViewDash, 'dashboard'))) {
         $btn = $pair[0]
         if ($pair[1] -eq $View) {
@@ -3343,6 +3354,216 @@ $btnFetch.Add_Click({
         $btnScan.Enabled = $true; $btnBrowse.Enabled = $true; $btnDash.Enabled = $true; $btnSaveHtml.Enabled = $true; $btnExport.Enabled = $true; $btnCancel.Enabled = $false; $btnFetch.Enabled = $true
     }
 })
+
+#region ---------------------------------------------------------------- Metadata editor (typed-in values)
+# Typed-in values are saved ONLY in this app's own store (metadata\store.json in the settings folder). Media files, NFO files,
+# the scan cache and the Plex server are never touched. They are applied on top of every scan, and always beat fetched values.
+$script:EditFields = @(
+    @{ N = 'Year';              L = 'Year';                          K = 'int';    Min = 1888; Max = 2100; H = 'e.g. 1999' },
+    @{ N = 'Genre';             L = 'Genre';                         K = 'text';   H = 'separate with ;' },
+    @{ N = 'MPAARating';        L = 'MPAA rating';                   K = 'text';   H = 'PG, PG-13, R ...' },
+    @{ N = 'Rating';            L = 'Rating';                        K = 'double'; Min = 0; Max = 10; H = '0 - 10' },
+    @{ N = 'Studio';            L = 'Studio';                        K = 'text';   H = '' },
+    @{ N = 'Director';          L = 'Director';                      K = 'text';   H = 'separate with ;' },
+    @{ N = 'RTCritic';          L = 'Rotten Tomatoes - critics';     K = 'int';    Min = 0; Max = 100; H = '% (0 - 100)' },
+    @{ N = 'RTAudience';        L = 'Rotten Tomatoes - audience';    K = 'int';    Min = 0; Max = 100; H = '% (0 - 100)' },
+    @{ N = 'CinemaScore';       L = 'CinemaScore';                   K = 'grade';  H = 'A+ to F' },
+    @{ N = 'BoxOfficeDomestic'; L = 'All-time domestic';             K = 'money';  H = '$ or 12.5M' },
+    @{ N = 'BoxOfficeWorldwide';L = 'All-time worldwide';            K = 'money';  H = '$ or 1.2B' },
+    @{ N = 'OpeningDomestic';   L = 'Opening weekend - domestic';    K = 'money';  H = '$ or 12.5M' },
+    @{ N = 'OpeningWorldwide';  L = 'Opening weekend - worldwide';   K = 'money';  H = '$ or 12.5M' }
+)
+
+function Get-EditText {
+    param($Spec, $Value)
+    if (Test-ValueEmpty $Value) { return '' }
+    switch ($Spec.K) {
+        'money'  { return ('{0:N0}' -f [double]$Value) }
+        'double' { return [string]::Format([Globalization.CultureInfo]::InvariantCulture, '{0:0.0}', [double]$Value) }
+        default  { return [string]$Value }
+    }
+}
+
+function ConvertFrom-EditText {
+    # Text typed into the editor -> a typed value, or throws a message that names the field.
+    param($Spec, [string]$Text)
+    $L = $Spec.L
+    switch ($Spec.K) {
+        'text'   { return $Text }
+        'int' {
+            $v = 0
+            if (-not [int]::TryParse($Text.Replace(',', ''), [ref]$v)) { throw "${L}: enter a whole number." }
+            if ($v -lt $Spec.Min -or $v -gt $Spec.Max) { throw "${L}: must be between $($Spec.Min) and $($Spec.Max)." }
+            return $v
+        }
+        'double' {
+            $v = 0.0
+            if (-not [double]::TryParse($Text, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$v)) { throw "${L}: enter a number such as 7.4." }
+            if ($v -lt $Spec.Min -or $v -gt $Spec.Max) { throw "${L}: must be between $($Spec.Min) and $($Spec.Max)." }
+            return [Math]::Round($v, 1)
+        }
+        'grade' {
+            $g = $Text.Trim().ToUpperInvariant()
+            if ($g -notmatch '^(A\+|A-|A|B\+|B-|B|C\+|C-|C|D\+|D-|D|F)$') { throw "${L}: use a grade from A+ to F." }
+            return $g
+        }
+        'money' {
+            $t = $Text.Trim().Replace('$', '').Replace(',', '').Replace(' ', '').ToUpperInvariant()
+            $mul = 1.0
+            if ($t -match '^(.*?)([KMB])$') {
+                $t = $Matches[1]
+                $mul = switch ($Matches[2]) { 'K' { 1e3 } 'M' { 1e6 } 'B' { 1e9 } }
+            }
+            $v = 0.0
+            if (-not [double]::TryParse($t, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$v) -or $v -lt 0) { throw "${L}: enter dollars, such as 1250000 or 1.25M." }
+            return [Math]::Round($v * $mul)
+        }
+    }
+}
+
+function Find-MetaEntry {
+    # The store entry a record is filed under (any of its keys), or $null.
+    param([hashtable]$Store, $Rec)
+    foreach ($k in (Get-MetaKeys $Rec)) { if ($Store.ContainsKey($k)) { return @{ Key = $k; Entry = $Store[$k] } } }
+    $null
+}
+
+function Show-MetaEditor {
+    # Returns @{ Put = @{Field = value}; Del = @(Field,...) } or $null when cancelled.
+    param($Rec, [hashtable]$Manual)
+    $dlg = New-DialogForm 'Edit info' 600 640
+    $title = [string]$Rec.Title; if ($Rec.Year -gt 0) { $title = "$title ($($Rec.Year))" }
+    $head = New-Label $title 24 16 $script:cText $script:fontTitle
+    $head.AutoSize = $false; $head.Size = New-Object Drawing.Size(552, 28)
+    $sub = New-Object Windows.Forms.Label
+    $sub.Location = New-Object Drawing.Point(24, 46); $sub.Size = New-Object Drawing.Size(552, 36)
+    $sub.ForeColor = $script:cMuted; $sub.BackColor = [Drawing.Color]::Transparent
+    $sub.Text = "Typed-in values are saved in this app's own data file only - never in your media files, NFO files or Plex. They win over fetched values and are re-applied on every scan. Empty a field that says 'edited' to go back to the original."
+
+    $pnl = New-Object Windows.Forms.Panel
+    $pnl.Location = New-Object Drawing.Point(0, 90); $pnl.Size = New-Object Drawing.Size(600, 456)
+    $pnl.AutoScroll = $true; $pnl.BackColor = $script:cPanel
+    $script:EdBoxes = @{}; $script:EdInit = @{}; $script:EdSpecs = @{}
+    $y = 4
+    foreach ($sp in $script:EditFields) {
+        if ($sp.N -eq 'RTCritic') {
+            $y += 8; $pnl.Controls.Add((New-Label 'SCORES AND MONEY' 24 $y $script:cMuted $script:fontSmall)); $y += 24
+        }
+        elseif ($sp.N -eq 'Year') { $pnl.Controls.Add((New-Label 'ABOUT THE TITLE' 24 $y $script:cMuted $script:fontSmall)); $y += 24 }
+        $lbl = New-Label $sp.L 24 ($y + 4) $script:cText $script:fontBase
+        $tb = New-Object Windows.Forms.TextBox
+        $tb.Location = New-Object Drawing.Point(230, $y); $tb.Size = New-Object Drawing.Size(200, 26)
+        $tb.BorderStyle = 'FixedSingle'; $tb.BackColor = $script:cPanel2; $tb.ForeColor = $script:cText
+        $init = Get-EditText $sp $Rec.($sp.N)
+        $tb.Text = $init
+        $script:EdBoxes[$sp.N] = $tb; $script:EdInit[$sp.N] = $init; $script:EdSpecs[$sp.N] = $sp
+        $hint = if ($Manual.ContainsKey($sp.N)) { 'edited' } else { [string]$sp.H }
+        $hl = New-Label $hint 440 ($y + 5) $(if ($Manual.ContainsKey($sp.N)) { $script:cAccent } else { $script:cMuted }) $script:fontSmall
+        $pnl.Controls.AddRange(@($lbl, $tb, $hl))
+        $y += 34
+    }
+    $err = New-Object Windows.Forms.Label
+    $err.Location = New-Object Drawing.Point(24, 552); $err.Size = New-Object Drawing.Size(552, 20)
+    $err.ForeColor = (RGB 255 107 129); $err.BackColor = [Drawing.Color]::Transparent
+    $script:EdErr = $err; $script:EdDlg = $dlg; $script:EdManual = $Manual; $script:EdResult = $null
+
+    $ok = New-FlatButton 'Save' 100 'primary'; $ok.Location = New-Object Drawing.Point(370, 584)
+    $cancel = New-FlatButton 'Cancel' 100 'secondary'; $cancel.Location = New-Object Drawing.Point(476, 584)
+    $cancel.DialogResult = [Windows.Forms.DialogResult]::Cancel
+    $dlg.AcceptButton = $ok; $dlg.CancelButton = $cancel
+    $ok.Add_Click({
+        $set = @{}; $clear = @()
+        try {
+            foreach ($n in $script:EdBoxes.Keys) {
+                $txt = $script:EdBoxes[$n].Text.Trim()
+                if ($txt -eq $script:EdInit[$n]) { continue }
+                if ($txt -eq '') { if ($script:EdManual.ContainsKey($n)) { $clear += $n }; continue }
+                $set[$n] = ConvertFrom-EditText $script:EdSpecs[$n] $txt
+            }
+        }
+        catch { $script:EdErr.Text = $_.Exception.Message; return }
+        $script:EdResult = @{ Put = $set; Del = $clear }
+        $script:EdDlg.DialogResult = [Windows.Forms.DialogResult]::OK
+    })
+    $dlg.Controls.AddRange(@($head, $sub, $pnl, $err, $ok, $cancel))
+    $res = $dlg.ShowDialog($form)
+    $dlg.Dispose()
+    if ($res -ne [Windows.Forms.DialogResult]::OK) { return $null }
+    $script:EdResult
+}
+
+function Edit-SelectedMetadata {
+    if ($script:ScanResults.Count -eq 0 -or $grid.DataSource -isnot [System.Data.DataTable]) { return }
+    $row = $null
+    if ($grid.SelectedRows.Count -eq 1) { $row = $grid.SelectedRows[0] }
+    elseif ($grid.SelectedRows.Count -eq 0 -and $null -ne $grid.CurrentRow) { $row = $grid.CurrentRow }
+    if ($null -eq $row -or $null -eq $row.DataBoundItem) {
+        [Windows.Forms.MessageBox]::Show('Select one title in the grid first (click its row), then click Edit info.', 'Edit info', 'OK', 'Information') | Out-Null; return
+    }
+    $drv = $row.DataBoundItem
+    $rec = $null
+    $pk = [string]$drv['PlexKey']; $fp = [string]$drv['FullPath']
+    foreach ($r in $script:ScanResults) {
+        if (($pk -and [string]$r.PlexKey -eq $pk) -or (-not $pk -and [string]$r.FullPath -eq $fp)) { $rec = $r; break }
+    }
+    if ($null -eq $rec) { return }
+
+    $store = Read-MetaStore -Path $script:MetaStorePath
+    $found = Find-MetaEntry $store $rec
+    $manual = if ($found) { $found.Entry.Manual } else { @{} }
+    $res = Show-MetaEditor -Rec $rec -Manual $manual
+    if ($null -eq $res -or ($res.Put.Count -eq 0 -and $res.Del.Count -eq 0)) { return }
+
+    # 1) the store file
+    if ($found) { $key = $found.Key; $entry = $found.Entry }
+    else { $key = (Get-MetaKeys $rec)[0]; $entry = @{ Manual = @{}; Scraped = @{}; Force = @(); Sources = @{}; At = '' } }
+    foreach ($n in $res.Put.Keys) { $entry.Manual[$n] = $res.Put[$n] }
+    foreach ($n in $res.Del) { $entry.Manual.Remove($n) }
+    $entry.At = (Get-Date).ToString('s')
+    if ($entry.Manual.Count -eq 0 -and $entry.Scraped.Count -eq 0) { $store.Remove($key) } else { $store[$key] = $entry }
+    try { Write-MetaStore -Path $script:MetaStorePath -Store $store }
+    catch { [Windows.Forms.MessageBox]::Show("Could not save the changes:`n$_", 'Edit info', 'OK', 'Error') | Out-Null; return }
+
+    # 2) what is on screen right now (the next scan re-applies the store by itself)
+    $note = @()
+    foreach ($n in $res.Put.Keys) {
+        $f = $script:Fields | Where-Object { $_.Name -eq $n } | Select-Object -First 1
+        $typed = [Convert]::ChangeType($res.Put[$n], $script:TypeMap[$f.Type])
+        Set-RecField $rec $n $typed
+        $drv.Row[$n] = $typed
+    }
+    foreach ($n in $res.Del) {
+        if ($entry.Scraped.ContainsKey($n)) {
+            $f = $script:Fields | Where-Object { $_.Name -eq $n } | Select-Object -First 1
+            try { $typed = [Convert]::ChangeType($entry.Scraped[$n], $script:TypeMap[$f.Type]); Set-RecField $rec $n $typed; $drv.Row[$n] = $typed } catch { }
+        }
+        else { $note += $n }
+    }
+    $names = @($res.Put.Keys) + @($res.Del)
+    $keep = @(([string]$rec.MetaSources -split '; ') | Where-Object { $t = $_; $_ -and -not ($res.Put.Keys -contains ($t -split ':')[0]) -and -not ($res.Del -contains ($t -split ':')[0]) })
+    $keep += @($res.Put.Keys | ForEach-Object { '{0}: manual' -f $_ })
+    Set-RecField $rec 'MetaSources' ($keep -join '; ')
+    $drv.Row['MetaSources'] = [string]$rec.MetaSources
+    $script:DashboardStale = $true
+    $lblStatus.Text = 'Saved {0} change(s) for {1}.' -f $names.Count, $rec.Title
+    if ($note.Count -gt 0) { $lblStatus.Text += ' The original value for ' + ($note -join ', ') + ' comes back on the next scan.' }
+}
+
+$btnEdit.Add_Click({ Edit-SelectedMetadata })
+$tip.SetToolTip($btnEdit, "Type in values the online sources do not have (Rotten Tomatoes audience, CinemaScore, opening weekend...)`nfor the selected title. Saved in this app's data file only - never in your media files or Plex.")
+
+# right-click a row for the same editor
+$gridMenu = New-Object Windows.Forms.ContextMenuStrip
+$miEdit = $gridMenu.Items.Add('Edit info...')
+$miEdit.Add_Click({ Edit-SelectedMetadata })
+$grid.Add_CellMouseDown({
+    param($s, $e)
+    if ($e.Button -eq [Windows.Forms.MouseButtons]::Right -and $e.RowIndex -ge 0) {
+        $grid.ClearSelection(); $grid.Rows[$e.RowIndex].Selected = $true; $grid.CurrentCell = $grid.Rows[$e.RowIndex].Cells[$e.ColumnIndex]
+        $gridMenu.Show($grid, $grid.PointToClient([Windows.Forms.Cursor]::Position))
+    }
+})
+#endregion
 
 # right-click a column header to hide it quickly (bring it back with the Columns button)
 $grid.Add_ColumnHeaderMouseClick({

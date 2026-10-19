@@ -11,6 +11,7 @@ It reads either a local or network (UNC) folder with MediaInfo, or a Plex server
 - **Live Workers pane:** per-reader file, stage, load and throughput.
 - **Rich technical fields:** resolution, video and audio codecs, HDR and Dolby Vision profile (optional FEL/MEL probe with ffmpeg and dovi_tool), subtitles, chapters, runtime, source clues.
 - **Fetch info:** look up year, genre, rating, studio, director, certification, Rotten Tomatoes critic score and box office from TMDB, the IMDb ratings file and OMDb. Your hand-typed values always win.
+- **Edit info:** select a title (button or right-click) and type in what no free source has: Rotten Tomatoes audience score, CinemaScore, opening weekends, all-time box office, or corrections to year, genre and so on.
 - **Views and export:** grid, detail view with posters, an interactive dashboard (WebView2, with a browser fallback), CSV export and saved HTML.
 - **Filtering:** free text, or `field:value` such as `source:unknown` or `resolution:2160p`.
 - **Remembers** your folder, options and column layout.
@@ -38,13 +39,41 @@ Click the gear button, then paste your keys under **Online lookups**. They are s
 | [IMDb ratings file](https://developer.imdb.com/non-commercial-datasets/) | none | rating and votes (downloaded weekly) |
 | [OMDb](https://www.omdbapi.com/apikey.aspx) | free key (optional, 1,000 requests a day) | Rotten Tomatoes critic score, domestic box office |
 
-Fetched and hand-typed values are kept in `%LOCALAPPDATA%\Modern-Media-Library-Manager\metadata\store.json`, never written into your media files.
+Fetched and hand-typed values are kept in `%LOCALAPPDATA%\Modern-Media-Library-Manager\metadata\store.json`, never written into your media files (see [What it touches](#what-it-touches-on-your-system)).
+
+There is no free, permitted source for the Rotten Tomatoes audience score, CinemaScore or opening-weekend figures, so Fetch info leaves those empty. Type them in with **Edit info**.
 
 Optional: save TMDB's official logo as `lib\tmdb-logo.png` (see [TMDB's logo and attribution page](https://www.themoviedb.org/about/logos-attribution)) and it appears in the Credits box.
 
 ## Plex
 
 Choose **Plex server**, enter the server address (for example `http://plex-server:32400`) and click **Token...** the first time. The token is stored encrypted (DPAPI).
+
+## What it touches on your system
+
+**Your media is read-only.** The app never creates, changes, renames, moves or deletes your media files, and it never writes anything into your library folders. This includes `.nfo` files and poster images: they are only read. Nothing is written back to Plex either; every request to the Plex server is a read (GET).
+
+Everything the app does write is its own working data, listed here:
+
+| What | Where | Why |
+| --- | --- | --- |
+| Settings (folder, options, column layout, encrypted tokens and keys) | `%LOCALAPPDATA%\Modern-Media-Library-Manager\settings.json` | remembers your setup |
+| Scan cache (one small JSON file per media file) | `...\Cache\` | makes rescans fast; **Rebuild local cache** deletes and recreates these |
+| Poster thumbnails | `...\Thumbs\` | grid, detail view and dashboard |
+| Fetched and typed-in values | `...\metadata\store.json` | **Fetch info** and **Edit info**; applied on top of every scan, so they survive cache rebuilds |
+| IMDb ratings file | `...\datasets\` | downloaded weekly for **Fetch info** |
+| Full MediaInfo text per file | `...\Inform\` | source-clue research |
+| Live dashboard page | `...\Dashboard\` | the dashboard shown inside the app |
+| WebView2 DLLs | `lib\` next to the script | downloaded once for the embedded dashboard |
+| The `Get-MediaInfo` PowerShell module | your PowerShell module folder (current user) | installed on first local scan if missing |
+| Files you ask for | where you choose | **Export CSV** and **Save HTML** (a saved dashboard also gets a `thumbs` folder beside it unless posters are embedded) |
+| Temporary files | your Windows temp folder, deleted straight after | only when **Detect FEL / MEL** is on: a short video sample is extracted for analysis, never your original file |
+
+What it reads: media files (through MediaInfo, and ffmpeg for the optional FEL/MEL probe), `.nfo` and poster files beside them, and your Plex libraries. Online lookups send only titles, years and IDs to TMDB, OMDb and IMDb's public file; your keys go only to their own service.
+
+To reset the app completely, close it and delete the `%LOCALAPPDATA%\Modern-Media-Library-Manager` folder. Your media is unaffected.
+
+Writing `.nfo` sidecar files is not implemented. If it is added, it will be opt-in, with a preview before anything is written.
 
 ## Status
 

@@ -1,0 +1,659 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Media Dashboard</title>
+<style>
+:root{
+  --bg:#0B0E1A; --panel:#131830; --panel2:#1A2040; --line:#232B4D; --text:#E8EBF7; --muted:#8B93B5;
+  --accent:#6C8CFF; --accent2:#B06CFF; --good:#4ADE80; --warn:#FFB86C; --bad:#FF6C8A; --radius:16px;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  font-family:'Segoe UI',Inter,system-ui,-apple-system,sans-serif;color:var(--text);background:var(--bg);
+  background-image:radial-gradient(900px 520px at 6% -8%,rgba(108,140,255,.20),transparent 60%),
+                   radial-gradient(800px 520px at 100% 0%,rgba(176,108,255,.15),transparent 60%);
+  background-attachment:fixed;min-height:100vh;
+}
+.wrap{max-width:1680px;margin:0 auto;padding:0 32px 80px}
+
+/* ---------- top bar ---------- */
+.top{position:sticky;top:0;z-index:30;margin:0 -32px;padding:16px 32px 12px;
+  background:rgba(11,14,26,.78);backdrop-filter:blur(14px);border-bottom:1px solid rgba(35,43,77,.7)}
+.top-row{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:14px}
+.logo{width:44px;height:44px;border-radius:13px;display:grid;place-items:center;font-weight:800;font-size:18px;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 8px 26px rgba(108,140,255,.38)}
+h1{font-size:22px;margin:0;letter-spacing:.2px}
+.sub{color:var(--muted);font-size:13px;margin-top:2px}
+.chips{display:flex;gap:8px;flex-wrap:wrap;align-items:center;min-height:30px;margin-top:10px}
+.chip{display:inline-flex;align-items:center;gap:8px;padding:5px 6px 5px 12px;border-radius:999px;font-size:12px;
+  background:rgba(108,140,255,.14);border:1px solid rgba(108,140,255,.45);color:#cfd8ff}
+.chip button{all:unset;cursor:pointer;width:18px;height:18px;border-radius:50%;display:grid;place-items:center;
+  background:rgba(255,255,255,.12);font-size:11px}
+.chip button:hover{background:rgba(255,255,255,.25)}
+.btn{all:unset;cursor:pointer;padding:8px 16px;border-radius:10px;font-size:13px;font-weight:600;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;box-shadow:0 6px 18px rgba(108,140,255,.3)}
+.btn:hover{filter:brightness(1.1)}
+.btn.ghost{background:transparent;border:1px solid var(--line);color:var(--muted);box-shadow:none}
+.hint{color:var(--muted);font-size:12px}
+
+/* ---------- KPIs ---------- */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:16px;margin:26px 0 8px}
+.kpi{position:relative;overflow:hidden;border-radius:var(--radius);padding:20px 22px;
+  background:linear-gradient(160deg,var(--panel2),var(--panel));border:1px solid var(--line)}
+.kpi:before{content:"";position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,var(--accent),var(--accent2))}
+.kpi .l{color:var(--muted);font-size:11.5px;text-transform:uppercase;letter-spacing:1px}
+.kpi .v{white-space:nowrap;font-size:34px;font-weight:700;margin-top:8px;letter-spacing:-.6px;font-variant-numeric:tabular-nums}
+
+/* ---------- sections / cards ---------- */
+.section{margin:34px 0 14px;display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.section h2{font-size:15px;margin:0;text-transform:uppercase;letter-spacing:1.4px;color:#C8CFEA}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:16px}
+.card{background:linear-gradient(160deg,var(--panel2),var(--panel));border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px 20px;
+  animation:rise .5s ease both}
+.card h3{margin:0 0 14px;font-size:13.5px;font-weight:600;color:#DDE2F7;display:flex;justify-content:space-between;align-items:center}
+.card h3 small{color:var(--muted);font-weight:400;font-size:11.5px}
+.span2{grid-column:span 2}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@media (max-width:860px){.span2{grid-column:auto}.wrap{padding:0 16px 60px}.top{margin:0 -16px;padding:14px 16px 10px}}
+
+/* donut */
+.donut-wrap{display:flex;align-items:center;gap:18px}
+.donut{width:150px;height:150px;flex:none}
+.donut .seg{cursor:pointer;transition:opacity .2s,stroke-width .2s}
+.donut .seg:hover{stroke-width:24}
+.donut .seg.dim{opacity:.28}
+.dc-num{fill:var(--text);font-size:17px;font-weight:700;text-anchor:middle}
+.dc-sub{fill:var(--muted);font-size:8.5px;text-anchor:middle;text-transform:uppercase;letter-spacing:.8px}
+.legend{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px}
+.lg{display:flex;align-items:center;gap:8px;font-size:12.5px;cursor:pointer;padding:3px 6px;border-radius:7px;transition:background .15s,opacity .15s}
+.lg:hover{background:rgba(255,255,255,.06)}
+.lg.dim{opacity:.4}
+.lg .dot{width:10px;height:10px;border-radius:3px;flex:none}
+.lg .n{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lg .c{color:var(--muted);font-variant-numeric:tabular-nums}
+
+/* bars */
+.bars{display:flex;flex-direction:column;gap:7px}
+.bar{display:grid;grid-template-columns:minmax(80px,32%) 1fr 64px;gap:10px;align-items:center;font-size:12.5px;cursor:pointer;padding:2px 4px;border-radius:8px}
+.bar:hover{background:rgba(255,255,255,.05)}
+.bar.dim{opacity:.38}
+.bars.wide .bar{grid-template-columns:minmax(150px,62%) 1fr 40px}
+.bl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#CBD2EE}
+.bt{height:10px;border-radius:6px;background:rgba(255,255,255,.07);overflow:hidden}
+.bf{height:100%;border-radius:6px;transition:width .5s cubic-bezier(.2,.8,.2,1)}
+.bv{text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+
+/* columns */
+.cols{display:flex;align-items:flex-end;gap:8px;min-height:176px}
+.col{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:5px;cursor:pointer;padding:2px 0;border-radius:8px}
+.col:hover{background:rgba(255,255,255,.05)}
+.col.dim{opacity:.38}
+.cv{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.cb{width:100%;max-width:48px;border-radius:8px 8px 3px 3px;background:linear-gradient(180deg,var(--accent2),var(--accent));transition:height .5s cubic-bezier(.2,.8,.2,1)}
+.cl{font-size:11px;color:#B4BCDD;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.empty{color:var(--muted);font-size:13px;padding:24px 0;text-align:center}
+
+/* insights */
+.lists{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px}
+.rank{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.rank li{display:flex;justify-content:space-between;gap:12px;font-size:13px;padding:7px 10px;border-radius:9px;cursor:pointer;background:rgba(255,255,255,.03)}
+.rank li:hover{background:rgba(108,140,255,.16)}
+.rank li span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rank li b{color:#BFC8F2;font-weight:600;white-space:nowrap;font-variant-numeric:tabular-nums}
+.health{display:flex;flex-wrap:wrap;gap:10px}
+.hchip{cursor:pointer;padding:9px 14px;border-radius:12px;font-size:12.5px;border:1px solid var(--line);background:rgba(255,255,255,.03);display:flex;gap:10px;align-items:center;transition:all .15s}
+.hchip b{font-size:15px;color:var(--warn)}
+.hchip.zero b{color:var(--good)}
+.hchip:hover{border-color:var(--accent);background:rgba(108,140,255,.1)}
+.hchip.on{border-color:var(--accent);background:rgba(108,140,255,.2)}
+
+/* poster wall */
+.tools{display:flex;gap:10px;flex-wrap:wrap}
+.tools input,.tools select{all:unset;box-sizing:border-box;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 12px;font-size:13px;color:var(--text)}
+.tools input{min-width:260px}
+.tools input:focus,.tools select:focus{border-color:var(--accent)}
+.tools select option{background:var(--panel)}
+.wall{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:18px}
+.pc{cursor:pointer;transition:transform .18s}
+.pc:hover{transform:translateY(-4px)}
+.pimg{position:relative;aspect-ratio:2/3;border-radius:12px;overflow:hidden;background:var(--panel2);border:1px solid var(--line);box-shadow:0 10px 28px rgba(0,0,0,.35)}
+.pimg img{width:100%;height:100%;object-fit:cover;display:block}
+.ph{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:14px;font-weight:600;font-size:14px;color:#aab3d8;
+  background:linear-gradient(160deg,#1d2447,#10152c)}
+.badges{position:absolute;left:8px;top:8px;display:flex;flex-direction:column;gap:4px;align-items:flex-start}
+.b{font-size:10.5px;font-weight:700;letter-spacing:.4px;padding:3px 7px;border-radius:6px;background:rgba(10,12,24,.82);backdrop-filter:blur(4px);border:1px solid rgba(255,255,255,.14)}
+.b-hdr{background:linear-gradient(135deg,rgba(176,108,255,.9),rgba(108,140,255,.9));border:none}
+.rt{position:absolute;right:8px;bottom:8px;font-size:11.5px;font-weight:700;padding:3px 8px;border-radius:999px;background:rgba(10,12,24,.85);color:#FFD166}
+.pt{margin-top:9px;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ps{font-size:11.5px;color:var(--muted);margin-top:2px}
+.more{display:flex;justify-content:center;margin-top:26px}
+
+/* modal */
+.modal{position:fixed;inset:0;z-index:60;background:rgba(5,7,16,.72);backdrop-filter:blur(10px);display:grid;place-items:center;padding:24px;animation:fade .2s ease}
+.modal[hidden]{display:none}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+.sheet{width:min(1040px,100%);max-height:90vh;overflow:auto;border-radius:20px;border:1px solid var(--line);
+  background:linear-gradient(160deg,#1B2142,#10152B);box-shadow:0 30px 80px rgba(0,0,0,.55);display:grid;grid-template-columns:280px 1fr;gap:28px;padding:28px;position:relative}
+.sheet .x{all:unset;position:absolute;right:16px;top:14px;z-index:2;cursor:pointer;width:32px;height:32px;display:grid;place-items:center;border-radius:50%;background:rgba(255,255,255,.08)}
+.sheet .x:hover{background:rgba(255,255,255,.18)}
+.sheet .pimg{box-shadow:0 14px 40px rgba(0,0,0,.5)}
+.sheet h2{margin:0;font-size:26px;letter-spacing:-.2px}
+.meta{color:var(--muted);font-size:13px;margin:6px 0 12px;display:flex;gap:10px;flex-wrap:wrap}
+.tag{font-style:italic;color:#B9C1E6;margin-bottom:10px}
+.plot{font-size:14px;line-height:1.6;color:#D3D9F2;margin:0 0 14px}
+.gchips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+.gchips span{font-size:11.5px;padding:4px 10px;border-radius:999px;background:rgba(108,140,255,.15);border:1px solid rgba(108,140,255,.35)}
+.specs{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;margin-top:14px}
+.spec{background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+.spec h4{margin:0 0 8px;font-size:11px;letter-spacing:1.2px;text-transform:uppercase;color:var(--accent)}
+.spec dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:12.5px}
+.spec dt{color:var(--muted)}
+.spec dd{margin:0;word-break:break-word}
+.sdot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;vertical-align:1px}
+
+/* device compatibility */
+.cx{display:flex;flex-direction:column;gap:10px}
+.cxr{display:grid;grid-template-columns:minmax(120px,26%) 1fr 76px;gap:12px;align-items:center;font-size:12.5px}
+.cxn{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#CBD2EE;cursor:help}
+.cxb{display:flex;height:18px;border-radius:9px;overflow:hidden;background:rgba(255,255,255,.07);gap:2px}
+.cxs{height:100%;cursor:pointer;transition:filter .15s,opacity .15s,width .5s cubic-bezier(.2,.8,.2,1);min-width:3px}
+.cxs:hover{filter:brightness(1.25)}
+.cxs.dim{opacity:.28}
+.cxp{text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+.cxlegend{display:flex;gap:6px 16px;flex-wrap:wrap;margin-top:16px;font-size:11.5px;color:var(--muted)}
+.cxlegend span{display:inline-flex;align-items:center;cursor:help}
+.cxlegend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:6px}
+.cxnote{margin-top:10px;font-size:11.5px;color:var(--muted);line-height:1.55}
+.cxnote b{color:#C8CFEA;font-weight:600}
+@media (max-width:760px){.sheet{grid-template-columns:1fr}.sheet .pimg{max-width:220px}}
+footer{margin-top:50px;text-align:center;color:var(--muted);font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="top">
+    <div class="top-row">
+      <div class="brand">
+        <div class="logo">M</div>
+        <div><h1 id="title">Media Library</h1><div class="sub" id="subtitle"></div></div>
+      </div>
+      <div class="hint">Click any chart segment, bar or health tile to filter everything.</div>
+    </div>
+    <div class="chips" id="chips"></div>
+  </div>
+
+  <div class="kpis" id="kpis"></div>
+
+  <div class="section"><h2>Library Breakdown</h2></div>
+  <div class="grid" id="charts"></div>
+
+  <div class="section"><h2>HDR &amp; Device Compatibility</h2><span class="hint">Click a segment to filter the library</span></div>
+  <div class="grid" id="hdrcharts"></div>
+
+  <div class="section"><h2>Insights</h2></div>
+  <div class="lists">
+    <div class="card"><h3>Largest files <small>click to open</small></h3><ul class="rank" id="largest"></ul></div>
+    <div class="card"><h3>Lowest bits per pixel <small>possible quality concern</small></h3><ul class="rank" id="lowbpp"></ul></div>
+    <div class="card"><h3>Library health <small>click to filter</small></h3><div class="health" id="health"></div></div>
+  </div>
+
+  <div class="section">
+    <h2>Collection <span class="hint" id="wallcount"></span></h2>
+    <div class="tools">
+      <input id="q" type="search" placeholder="Search title, genre, cast, studio...">
+      <select id="sort">
+        <option value="title">Title A–Z</option>
+        <option value="year">Year (newest)</option>
+        <option value="rating">Rating (highest)</option>
+        <option value="size">File size (largest)</option>
+        <option value="added">Recently added</option>
+        <option value="bitrate">Video bitrate</option>
+      </select>
+    </div>
+  </div>
+  <div class="wall" id="wall"></div>
+  <div class="more"><button class="btn ghost" id="more" hidden>Show more</button></div>
+
+  <footer id="foot"></footer>
+</div>
+
+<div class="modal" id="modal" hidden></div>
+
+<script>
+(function(){
+'use strict';
+
+/* ================= data ================= */
+const DATA = [].concat(__DATA__);
+const META = __META__;
+
+const hasVideo = DATA.some(r => r.Type === 'Video');
+const base = hasVideo ? DATA.filter(r => r.Type === 'Video') : DATA;
+
+const v   = (x, d) => (x === undefined || x === null || x === '') ? d : x;
+const num = x => { const n = +x; return isFinite(n) ? n : 0; };
+const splitList = s => String(s || '').split(/\s*;\s*/).filter(Boolean);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmtInt  = n => Math.round(n).toLocaleString();
+const fmtSize = gb => gb >= 1000 ? (gb / 1000).toFixed(2) + ' TB' : gb.toFixed(gb >= 100 ? 0 : 1) + ' GB';
+const fmtHMS  = min => { const t = Math.round((+min || 0) * 60); return Math.floor(t / 3600) + ':' + String(Math.floor(t % 3600 / 60)).padStart(2, '0') + ':' + String(t % 60).padStart(2, '0'); };
+// Library-scale runtime: "1y 28d 7h 53m 12s" (leading zero units dropped; a year is 365 days)
+const fmtRun  = min => {
+  let t = Math.round((+min || 0) * 60);
+  const y = Math.floor(t / 31536000); t -= y * 31536000;
+  const d = Math.floor(t / 86400);    t -= d * 86400;
+  const h = Math.floor(t / 3600);     t -= h * 3600;
+  const m = Math.floor(t / 60), s = t - m * 60;
+  const parts = [[y,'y'],[d,'d'],[h,'h'],[m,'m'],[s,'s']];
+  const first = parts.findIndex(p => p[0] > 0);
+  return (first < 0 ? [[0,'s']] : parts.slice(first)).map(p => p[0] + p[1]).join(' ');
+};
+const sum = (rows, f) => rows.reduce((a, r) => a + num(r[f]), 0);
+
+base.forEach((r, i) => {
+  r._i = i;
+  r.Title = v(r.Title, r.FileName || 'Untitled');
+  r.Year = num(r.Year);
+  r.Decade = r.Year > 0 ? (Math.floor(r.Year / 10) * 10) + 's' : 'Unknown';
+  r._genres = splitList(r.Genre);
+  r._search = [r.Title, r.Show, r.Library, r.Genre, r.Cast, r.Studio, r.Director, r.Year, r.Collection, r.FileName].join(' ').toLowerCase();
+});
+
+const PALETTE = ['#6C8CFF','#B06CFF','#FF6CA8','#FFB86C','#4ADE80','#22D3EE','#F472B6','#FACC15','#A3E635','#FB7185','#38BDF8','#C084FC'];
+const FIXED = {
+  'Dolby Vision':'#B06CFF','HDR10+':'#FF6CA8','HDR10':'#FFB86C','HLG':'#22D3EE','SDR':'#4B5578','Unknown':'#3A4366','None':'#3A4366',
+  '4K':'#B06CFF','1440p':'#FF6CA8','1080p':'#6C8CFF','720p':'#22D3EE','SD':'#4B5578'
+};
+const colorFor = (k, i) => FIXED[k] || PALETTE[i % PALETTE.length];
+
+/* ================= chart definitions ================= */
+const ratingBucket = r => { const x = num(r.Rating); return x > 0 ? (Math.min(Math.floor(x), 9) + '–' + (Math.min(Math.floor(x), 9) + 1)) : 'NR'; };
+
+// "P8.1 · single layer", "P7 · FEL", "P7 · dual layer" (FEL/MEL not verified), "P5 · single layer"
+const dvLabel = r => {
+  if (r.HDRType !== 'Dolby Vision') return null;
+  if (!r.DVProfile) return 'Profile unknown';
+  const lay = r.DVLayer === 'FEL' ? 'FEL' : r.DVLayer === 'MEL' ? 'MEL' : r.DVLayer === 'Dual layer' ? 'dual layer' : 'single layer';
+  return 'P' + r.DVProfile + ' · ' + lay;
+};
+
+const CHARTS = [
+  {id:'library',  title:'Library',             kind:'donut', keys:r=>[v(r.Library,'Library')]},
+  {id:'res',     title:'Resolution',          kind:'donut', keys:r=>[v(r.ResolutionClass,'Unknown')], order:['4K','1440p','1080p','720p','SD','Unknown']},
+  {id:'hdr',      title:'Dynamic Range',       kind:'donut', group:'hdr', keys:r=>[v(r.HDRType,'SDR')], order:['Dolby Vision','HDR10+','HDR10','HLG','SDR']},
+  {id:'dvprof',   title:'Dolby Vision Profile & Layer', kind:'bar', group:'hdr', sub:'DV titles only', keys:r=>{const l=dvLabel(r);return l?[l]:[]}, top:8},
+  {id:'hdrstack', title:'HDR Format Stack',    kind:'bar',   group:'hdr', sub:'incl. fallback', wide:true, keys:r=>[v(r.HDRStack, v(r.HDRType,'SDR'))], top:9},
+  {id:'vcodec',   title:'Video Codec',         kind:'bar',   keys:r=>[v(r.VideoCodec,'Unknown')], top:8},
+  {id:'source',   title:'Source',              kind:'donut', keys:r=>[v(r.Source,'Unknown')]},
+  {id:'acodec',   title:'Audio Format',        kind:'bar',   keys:r=>[v(r.AudioFormat,'Unknown')], top:8},
+  {id:'layout',   title:'Audio Channels',      kind:'donut', keys:r=>[v(r.AudioLayout,'Unknown')], order:['7.1','5.1','Stereo','Mono','Unknown']},
+  {id:'object',   title:'Immersive Audio',     kind:'donut', keys:r=>[v(r.ObjectAudio,'None')], order:['Dolby Atmos','DTS:X','None']},
+  {id:'container',title:'Container',           kind:'donut', keys:r=>[v(r.Container,'Unknown')]},
+  {id:'storage',  title:'Storage by Resolution',kind:'bar',  keys:r=>[v(r.ResolutionClass,'Unknown')], measure:'size', order:['4K','1440p','1080p','720p','SD','Unknown']},
+  {id:'genre',    title:'Top Genres',          kind:'bar',   keys:r=>r._genres.length?r._genres:['Unknown'], top:10},
+  {id:'studio',   title:'Top Studios',         kind:'bar',   keys:r=>[v(r.Studio,'Unknown')], top:8},
+  {id:'mpaa',     title:'Content Rating',      kind:'donut', keys:r=>[v(r.MPAARating,'Unrated')]},
+  {id:'decade',   title:'Releases by Decade',  kind:'cols',  keys:r=>[r.Decade], sort:'key', span:2},
+  {id:'added',    title:'Added to Library (by year)', kind:'cols', keys:r=>[(r.Added||'').slice(0,4)||'Unknown'], sort:'key', span:2},
+  {id:'rating',   title:'Rating Distribution', kind:'cols',  keys:r=>[ratingBucket(r)], sort:'key'},
+  {id:'alang',    title:'Audio Languages',     kind:'bar',   keys:r=>{const l=splitList(r.AudioLanguages);return l.length?l:['Unknown']}, top:8},
+  {id:'slang',    title:'Subtitle Languages',  kind:'bar',   keys:r=>{const l=splitList(r.SubtitleLanguages);return l.length?l:['None']}, top:8},
+  {id:'bitdepth', title:'Bit Depth',           kind:'donut', group:'hdr', keys:r=>[num(r.BitDepth)>0?num(r.BitDepth)+'-bit':'Unknown']}
+];
+
+/* ================= device compatibility ================= */
+const STATUS = {
+  full:     {label:'Full',     color:'#4ADE80', tip:'Plays in its native format'},
+  partial:  {label:'Partial',  color:'#FACC15', tip:'Plays as Dolby Vision, but the enhancement layer (FEL) is ignored'},
+  fallback: {label:'Fallback', color:'#FB923C', tip:'Plays, but drops to HDR10 / HDR10+ / SDR'},
+  none:     {label:'Fails',    color:'#FF6C8A', tip:'Wrong colours or no playback'}
+};
+const ST_ORDER = ['full', 'partial', 'fallback', 'none'];
+
+/* Capability tables - curated from published specs and community reports (Oct 2026), NOT lab-tested.
+   Hover a device name for its caveats, and edit the flags below to match your own hardware / apps.
+     dv5, dv8   single-layer Dolby Vision profile 5 and profile 8.x (1 = supported)
+     hdr10p     HDR10+ (0 = file falls back to plain HDR10)        hlg   HLG
+     dv7        how a dual-layer Profile 7 file is handled:
+                'fel'   both layers - FEL and MEL play fully
+                'base'  base layer + RPU only - MEL looks right, FEL loses its enhancement layer
+                'mel'   MEL plays as Dolby Vision, FEL falls back to HDR10
+                'hdr10' no dual-layer support - the HDR10 base layer is shown */
+const DEVICE_GROUPS = [
+  {id:'tv', title:'TV Compatibility', devices:[
+    {id:'sony',    name:'Sony',    dv5:1, dv8:1, hdr10p:0, hlg:1, dv7:'base', note:'Dolby Vision, HDR10, HLG - no HDR10+. Profile 7 via built-in apps is assumed to play the base layer only (not verified per model).'},
+    {id:'lg',      name:'LG',      dv5:1, dv8:1, hdr10p:0, hlg:1, dv7:'base', note:'Dolby Vision, HDR10, HLG - no HDR10+. Profile 7 via built-in apps is assumed to play the base layer only (not verified per model).'},
+    {id:'samsung', name:'Samsung', dv5:0, dv8:0, hdr10p:1, hlg:1, dv7:'hdr10', note:'HDR10+ and HDR10 only - Samsung has never supported Dolby Vision, so DV files fall back to HDR10 and Profile 5 shows wrong (green/purple) colours.'},
+    {id:'tcl',     name:'TCL',     dv5:1, dv8:1, hdr10p:1, hlg:1, dv7:'base', note:'Dolby Vision and HDR10+ on most models since 2020 - entry-level sets can differ. Profile 7 assumed base layer only.'},
+    {id:'hisense', name:'Hisense', dv5:1, dv8:1, hdr10p:1, hlg:1, dv7:'base', note:'Dolby Vision and HDR10+ on most models since 2021 - entry-level sets can differ. Profile 7 assumed base layer only.'}
+  ]},
+  {id:'box', title:'Streamer & Player Compatibility', devices:[
+    {id:'shield',  name:'Nvidia Shield TV',            dv5:1, dv8:1, hdr10p:0, hlg:1, dv7:'base',  note:'Plays Dolby Vision P5 / P8.1. Cannot decode the FEL (enhancement layer ignored, community-reported). No HDR10+ on the current hardware.'},
+    {id:'atv1',    name:'Apple TV 4K (2017 / 2021)',   dv5:1, dv8:1, hdr10p:0, hlg:1, dv7:'hdr10', note:'Single-layer Dolby Vision only - dual-layer Profile 7 is not played (HDR10 base layer shown). No HDR10+ on 1st/2nd generation.'},
+    {id:'atv3',    name:'Apple TV 4K (2022)',          dv5:1, dv8:1, hdr10p:1, hlg:1, dv7:'hdr10', note:'Single-layer Dolby Vision plus HDR10+. Dual-layer Profile 7 is not played (HDR10 base layer shown).'},
+    {id:'atv4',    name:'Apple TV 4K (2026, A19)',     dv5:1, dv8:1, hdr10p:1, hlg:1, dv7:'hdr10', note:'Announced 13 Oct 2026, ships 13 Nov. Same HDR10+ / Dolby Vision support as its predecessor; Profile 7 behaviour assumed unchanged.'},
+    {id:'am6b',    name:'Ugoos AM6B+ (CoreELEC-ng)',   dv5:1, dv8:1, hdr10p:0, hlg:1, dv7:'fel',   note:'CoreELEC-ng plays Dolby Vision P4 / 5 / 7 FEL / 7 MEL / 8.1 / 8.4. HDR10+ support not confirmed - counted as an HDR10 fallback.'},
+    {id:'firetv',  name:'Fire TV Stick 4K Max',        dv5:1, dv8:1, hdr10p:1, hlg:1, dv7:'base',  note:'Dolby Vision, HDR10+, HLG per Amazon specs. Profile 7 assumed base layer only (not verified).'},
+    {id:'gtv',     name:'Google TV Streamer',          dv5:1, dv8:1, hdr10p:1, hlg:1, dv7:'base',  note:'Google lists Dolby Vision, HDR10, HDR10+, HLG. Profile 7 assumed base layer only; some users report Plex/Jellyfin Profile 8 quirks.'},
+    {id:'roku',    name:'Roku Ultra',                  dv5:1, dv8:1, hdr10p:1, hlg:1, dv7:'base',  note:'Dolby Vision and HDR10+ (HDR10+ added by 2020 firmware). Profile 7 assumed base layer only (not verified).'},
+    {id:'zidoo',   name:'Zidoo Z9X',                   dv5:1, dv8:1, hdr10p:1, hlg:1, dv7:'mel',   note:'Reports (older firmware): MEL plays in Dolby Vision, FEL falls back to HDR10. Check current firmware.'}
+  ]}
+];
+const ALL_DEVICES = DEVICE_GROUPS.flatMap(g => g.devices);
+
+// What kind of HDR file is this?  (sdr | hdr10 | hdr10p | hlg | dv5 | dv7 | dv8 | dvx)
+function hdrClass(r){
+  const t = r.HDRType;
+  if (!t || t === 'SDR') return {k:'sdr'};
+  if (t === 'Dolby Vision'){
+    const p = String(r.DVProfile || ''), major = parseInt(p, 10);
+    if (major === 5) return {k:'dv5'};
+    if (major === 7) return {k:'dv7', layer:r.DVLayer};
+    if (major === 8) return {k:'dv8'};
+    return {k:'dvx'};
+  }
+  if (t === 'HDR10+') return {k:'hdr10p'};
+  if (t === 'HLG') return {k:'hlg'};
+  return {k:'hdr10'};
+}
+// full | partial | fallback | none  (null for SDR titles - compatibility only concerns HDR / DV files)
+function deviceStatus(dev, r){
+  const c = hdrClass(r);
+  switch (c.k){
+    case 'sdr':    return null;
+    case 'hdr10':  return 'full';
+    case 'hlg':    return dev.hlg ? 'full' : 'fallback';
+    case 'hdr10p': return dev.hdr10p ? 'full' : 'fallback';
+    case 'dv5':    return dev.dv5 ? 'full' : 'none';
+    case 'dv8':    return dev.dv8 ? 'full' : 'fallback';
+    case 'dv7': {
+      const mel = c.layer === 'MEL';      // 'FEL' and an unverified 'Dual layer' are both treated as the harder FEL case
+      if (dev.dv7 === 'fel')  return 'full';
+      if (dev.dv7 === 'base') return mel ? 'full' : 'partial';
+      if (dev.dv7 === 'mel')  return mel ? 'full' : 'fallback';
+      return 'fallback';
+    }
+    default:       return dev.dv8 ? 'partial' : 'fallback';   // rare profiles (4, 10, ...)
+  }
+}
+
+const HEALTH = [
+  {id:'h_nfo',   label:'Missing NFO',         pred:r=>!r.HasNfo},
+  {id:'h_poster',label:'Missing poster',      pred:r=>!r.HasPoster},
+  {id:'h_subs',  label:'No subtitles',        pred:r=>!(num(r.SubtitleTracks)>0)},
+  {id:'h_stereo',label:'Stereo-only audio',   pred:r=>num(r.AudioChannels)>0 && num(r.AudioChannels)<=2},
+  {id:'h_lowbr', label:'Video < 2 Mbps',      pred:r=>num(r.VideoBitRateMbps)>0 && num(r.VideoBitRateMbps)<2},
+  {id:'h_sd',    label:'SD resolution',       pred:r=>r.ResolutionClass==='SD'},
+  {id:'h_src',   label:'Unknown source',      pred:r=>v(r.Source,'Unknown')==='Unknown'},
+  {id:'h_noyear',label:'No release year',     pred:r=>!(r.Year>0)}
+];
+
+const KPIS = [
+  {id:'k1', label:'Titles',            val:rows=>rows.length,                         fmt:fmtInt},
+  {id:'k2', label:'Library Size',      val:rows=>sum(rows,'FileSizeGB'),              fmt:fmtSize},
+  {id:'k3', label:'Total Runtime',     val:rows=>sum(rows,'RuntimeMin'),              fmt:fmtRun},
+  {id:'k4', label:'Avg Video Bitrate', val:rows=>{const a=rows.filter(r=>num(r.VideoBitRateMbps)>0);return a.length?sum(a,'VideoBitRateMbps')/a.length:0}, fmt:n=>n.toFixed(1)+' Mbps'},
+  {id:'k5', label:'4K Content',        val:rows=>rows.length?rows.filter(r=>r.ResolutionClass==='4K').length/rows.length*100:0, fmt:n=>n.toFixed(0)+'%'},
+  {id:'k6', label:'HDR / Dolby Vision',val:rows=>rows.length?rows.filter(r=>r.HDRType&&r.HDRType!=='SDR').length/rows.length*100:0, fmt:n=>n.toFixed(0)+'%'}
+];
+
+/* ================= state ================= */
+const filters = new Map();        // id -> {label, pred, chart?, key?}
+let q = '', sortBy = 'title', shown = 60;
+
+const $ = (s, r) => (r || document).querySelector(s);
+
+function filtered(excludeId){
+  return base.filter(r => { for (const [id, f] of filters) { if (id !== excludeId && !f.pred(r)) return false; } return true; });
+}
+function counts(cfg, rows){
+  const m = new Map();
+  for (const r of rows){
+    const w = cfg.measure === 'size' ? num(r.FileSizeGB) : 1;
+    for (const k of new Set(cfg.keys(r))) m.set(k, (m.get(k) || 0) + w);
+  }
+  return m;
+}
+function ordered(cfg, m, sel){
+  let e = [...m.entries()];
+  if (cfg.order){ const o = cfg.order; e.sort((a,b) => ((o.indexOf(a[0])<0?99:o.indexOf(a[0])) - (o.indexOf(b[0])<0?99:o.indexOf(b[0]))) || b[1]-a[1]); }
+  else if (cfg.sort === 'key'){ e.sort((a,b) => String(a[0]).localeCompare(String(b[0]), undefined, {numeric:true})); }
+  else e.sort((a,b) => b[1]-a[1]);
+  if (cfg.top) e = e.slice(0, cfg.top);
+  if (sel && !e.some(x => x[0] === sel)) e.push([sel, m.get(sel) || 0]);
+  return e;
+}
+const fmtVal = (cfg, n) => cfg.measure === 'size' ? fmtSize(n) : fmtInt(n);
+
+/* ================= renderers ================= */
+function donut(cfg, entries, sel){
+  const total = entries.reduce((a,e) => a + e[1], 0) || 1;
+  const R = 54, C = 2 * Math.PI * R; let off = 0, segs = '', legend = '';
+  entries.forEach(([k, val], i) => {
+    const frac = val / total;
+    const len = Math.max(frac * C - (entries.length > 1 ? 2 : 0), 0.001);
+    const col = colorFor(k, i), dim = sel && sel !== k ? ' dim' : '';
+    segs += `<circle class="seg${dim}" data-chart="${cfg.id}" data-key="${esc(k)}" cx="70" cy="70" r="${R}" fill="none" stroke="${col}" stroke-width="20" stroke-dasharray="${len} ${C - len}" stroke-dashoffset="${-off}" transform="rotate(-90 70 70)"><title>${esc(k)}: ${fmtVal(cfg,val)} (${(frac*100).toFixed(1)}%)</title></circle>`;
+    legend += `<div class="lg${dim}" data-chart="${cfg.id}" data-key="${esc(k)}"><span class="dot" style="background:${col}"></span><span class="n">${esc(k)}</span><span class="c">${fmtVal(cfg,val)} · ${(frac*100).toFixed(0)}%</span></div>`;
+    off += frac * C;
+  });
+  return `<div class="donut-wrap"><svg viewBox="0 0 140 140" class="donut">${segs}<text x="70" y="68" class="dc-num">${fmtVal(cfg,total)}</text><text x="70" y="83" class="dc-sub">${cfg.measure==='size'?'total':'titles'}</text></svg><div class="legend">${legend}</div></div>`;
+}
+function bars(cfg, entries, sel){
+  const max = Math.max(...entries.map(e => e[1]), 1);
+  return `<div class="bars${cfg.wide ? ' wide' : ''}">` + entries.map(([k, val], i) => {
+    const c = colorFor(k, i), dim = sel && sel !== k ? ' dim' : '';
+    return `<div class="bar${dim}" data-chart="${cfg.id}" data-key="${esc(k)}"><span class="bl" title="${esc(k)}">${esc(k)}</span><div class="bt"><div class="bf" style="width:${(val/max*100).toFixed(1)}%;background:linear-gradient(90deg,${c},${c}AA)"></div></div><span class="bv">${fmtVal(cfg,val)}</span></div>`;
+  }).join('') + '</div>';
+}
+function cols(cfg, entries, sel){
+  const max = Math.max(...entries.map(e => e[1]), 1);
+  return '<div class="cols">' + entries.map(([k, val]) => {
+    const dim = sel && sel !== k ? ' dim' : '';
+    return `<div class="col${dim}" data-chart="${cfg.id}" data-key="${esc(k)}" title="${esc(k)}: ${fmtVal(cfg,val)}"><span class="cv">${fmtVal(cfg,val)}</span><div class="cb" style="height:${Math.max(val/max*120,3)}px"></div><span class="cl">${esc(k)}</span></div>`;
+  }).join('') + '</div>';
+}
+
+function buildChartShells(){
+  const main = [], hdr = [];
+  CHARTS.forEach((c, i) => {
+    const html = `<div class="card${c.span===2?' span2':''}" id="c_${c.id}" style="animation-delay:${i*40}ms"><h3>${esc(c.title)}<small></small></h3><div class="body"></div></div>`;
+    (c.group === 'hdr' ? hdr : main).push(html);
+  });
+  const legend = ST_ORDER.map(k => `<span title="${esc(STATUS[k].tip)}"><i style="background:${STATUS[k].color}"></i>${STATUS[k].label}</span>`).join('');
+  DEVICE_GROUPS.forEach((g, i) => hdr.push(
+    `<div class="card span2" id="x_${g.id}" style="animation-delay:${(CHARTS.length+i)*40}ms"><h3>${esc(g.title)}<small></small></h3><div class="cx"></div><div class="cxlegend">${legend}</div><div class="cxnote"></div></div>`));
+  $('#charts').innerHTML = main.join('');
+  $('#hdrcharts').innerHTML = hdr.join('');
+}
+
+function renderCompat(){
+  for (const g of DEVICE_GROUPS){
+    const card = $('#x_' + g.id); if (!card) continue;
+    let html = '', best = null, anyHdr = false;
+    for (const dev of g.devices){
+      const fid = 'cx_' + dev.id, f = filters.get(fid), sel = f ? f.key : null;
+      const cnt = {full:0, partial:0, fallback:0, none:0}; let tot = 0;
+      for (const r of filtered(fid)){ const s = deviceStatus(dev, r); if (s){ cnt[s]++; tot++; } }
+      if (tot) anyHdr = true;
+      const pct = tot ? cnt.full / tot * 100 : 0;
+      if (tot && (!best || pct > best.pct)) best = {name: dev.name, pct};
+      const segs = ST_ORDER.filter(k => cnt[k] > 0).map(k =>
+        `<div class="cxs${sel && sel !== k ? ' dim' : ''}" data-dev="${dev.id}" data-st="${k}" style="width:${(cnt[k]/tot*100).toFixed(2)}%;background:${STATUS[k].color}" title="${esc(dev.name)} · ${STATUS[k].label}: ${fmtInt(cnt[k])} titles (${(cnt[k]/tot*100).toFixed(1)}%) — ${esc(STATUS[k].tip)}"></div>`).join('');
+      html += `<div class="cxr"><span class="cxn" title="${esc(dev.note)}">${esc(dev.name)}</span><div class="cxb">${segs}</div><span class="cxp">${tot ? pct.toFixed(0) + '% full' : '–'}</span></div>`;
+    }
+    $('.cx', card).innerHTML = anyHdr ? html : '<div class="empty">No HDR or Dolby Vision titles in the current view</div>';
+    $('small', card).textContent = best ? 'Best match: ' + best.name + ' · ' + best.pct.toFixed(0) + '% full' : '';
+
+    const rows = filtered();
+    const hdrRows = rows.filter(r => hdrClass(r).k !== 'sdr').length;
+    const dv7 = rows.filter(r => hdrClass(r).k === 'dv7');
+    const unv = dv7.filter(r => r.DVLayer === 'Dual layer').length;
+    let note = `Counts the <b>${fmtInt(hdrRows)}</b> HDR / Dolby Vision titles in view (SDR titles are excluded). Hover a name for caveats — tables are curated from public specs and community reports, not lab-tested.`;
+    if (g.id === 'box' && dv7.length)
+      note += ` <b>${fmtInt(dv7.length)}</b> Profile 7 title${dv7.length === 1 ? '' : 's'} (dual-layer) ${dv7.length === 1 ? 'is' : 'are'} the main compatibility risk` + (unv ? `; ${fmtInt(unv)} ${unv === 1 ? 'is' : 'are'} not yet verified as FEL or MEL and counted as FEL.` : '.');
+    $('.cxnote', card).innerHTML = note;
+  }
+}
+function renderCharts(){
+  for (const cfg of CHARTS){
+    const rows = filtered(cfg.id);
+    const f = filters.get(cfg.id), sel = f ? f.key : null;
+    const entries = ordered(cfg, counts(cfg, rows), sel);
+    const card = $('#c_' + cfg.id);
+    $('small', card).textContent = cfg.sub || (cfg.measure === 'size' ? 'by size' : '');
+    $('.body', card).innerHTML = entries.length
+      ? (cfg.kind === 'donut' ? donut(cfg, entries, sel) : cfg.kind === 'bar' ? bars(cfg, entries, sel) : cols(cfg, entries, sel))
+      : '<div class="empty">No data for the current filters</div>';
+  }
+}
+
+function animate(el, to, fmt){
+  const from = el._v || 0; el._v = to;
+  const t0 = performance.now(), dur = 600;
+  if (el._r && window.cancelAnimationFrame) cancelAnimationFrame(el._r);
+  // long values (e.g. "1y 28d 7h 53m 12s") shrink so the tile never wraps
+  const put = n => { const s = fmt(n); el.textContent = s; el.style.fontSize = s.length > 15 ? '18px' : s.length > 10 ? '22px' : ''; };
+  if (!window.requestAnimationFrame){ put(to); return; }
+  const step = t => { const p = Math.min((t - t0) / dur, 1), e = 1 - Math.pow(1 - p, 3); put(from + (to - from) * e); if (p < 1) el._r = requestAnimationFrame(step); };
+  el._r = requestAnimationFrame(step);
+}
+function buildKpis(){
+  $('#kpis').innerHTML = KPIS.map(k => `<div class="kpi"><div class="l">${k.label}</div><div class="v" id="${k.id}">–</div></div>`).join('');
+}
+function renderKpis(rows){ KPIS.forEach(k => animate($('#' + k.id), k.val(rows), k.fmt)); }
+
+function renderInsights(rows){
+  const li = (r, right) => `<li data-open="${r._i}"><span>${esc(r.Title)}${r.Year>0?' ('+r.Year+')':''}</span><b>${right}</b></li>`;
+  const big = rows.slice().sort((a,b) => num(b.FileSizeGB) - num(a.FileSizeGB)).slice(0, 7);
+  $('#largest').innerHTML = big.length ? big.map(r => li(r, fmtSize(num(r.FileSizeGB)))).join('') : '<div class="empty">No data</div>';
+  const low = rows.filter(r => num(r.BitsPerPixel) > 0).sort((a,b) => num(a.BitsPerPixel) - num(b.BitsPerPixel)).slice(0, 7);
+  $('#lowbpp').innerHTML = low.length ? low.map(r => li(r, num(r.BitsPerPixel).toFixed(3) + ' bpp')).join('') : '<div class="empty">No data</div>';
+}
+function renderHealth(){
+  $('#health').innerHTML = HEALTH.map(h => {
+    const n = filtered(h.id).filter(h.pred).length, on = filters.has(h.id);
+    return `<div class="hchip${n===0?' zero':''}${on?' on':''}" data-health="${h.id}"><b>${fmtInt(n)}</b><span>${h.label}</span></div>`;
+  }).join('');
+}
+function renderChips(){
+  const box = $('#chips');
+  if (!filters.size){ box.innerHTML = '<span class="hint">No filters active — showing the whole library</span>'; return; }
+  box.innerHTML = [...filters.entries()].map(([id, f]) => `<span class="chip">${esc(f.label)}<button data-remove="${id}" title="Remove">✕</button></span>`).join('')
+    + '<button class="btn ghost" id="clear">Clear all</button>';
+}
+
+const SORTS = {
+  title:   (a,b) => a.Title.localeCompare(b.Title, undefined, {numeric:true, sensitivity:'base'}),
+  year:    (a,b) => b.Year - a.Year,
+  rating:  (a,b) => num(b.Rating) - num(a.Rating),
+  size:    (a,b) => num(b.FileSizeGB) - num(a.FileSizeGB),
+  added:   (a,b) => String(b.Added||'').localeCompare(String(a.Added||'')),
+  bitrate: (a,b) => num(b.VideoBitRateMbps) - num(a.VideoBitRateMbps)
+};
+function renderWall(rows){
+  const t = q.trim().toLowerCase();
+  let list = t ? rows.filter(r => r._search.includes(t)) : rows.slice();
+  list.sort(SORTS[sortBy] || SORTS.title);
+  $('#wallcount').textContent = '· ' + fmtInt(list.length) + ' shown';
+  $('#wall').innerHTML = list.slice(0, shown).map(r => {
+    const hdrT = v(r.HDRType, 'SDR');
+    const hdr = hdrT === 'Dolby Vision' && r.DVProfile ? 'DV P' + r.DVProfile + (r.DVLayer === 'FEL' || r.DVLayer === 'MEL' ? ' ' + r.DVLayer : '') : hdrT;
+    return `<div class="pc" data-open="${r._i}"><div class="pimg">${r.Poster ? `<img loading="lazy" src="${esc(r.Poster)}" alt="">` : `<div class="ph">${esc(r.Title)}</div>`}`
+      + `<div class="badges"><span class="b">${esc(v(r.ResolutionClass,'?'))}</span>${hdrT !== 'SDR' ? `<span class="b b-hdr">${esc(hdr)}</span>` : ''}</div>`
+      + (num(r.Rating) > 0 ? `<div class="rt">★ ${num(r.Rating).toFixed(1)}</div>` : '') + `</div>`
+      + `<div class="pt" title="${esc(r.Title)}">${esc(r.Title)}</div><div class="ps">${r.Year>0?r.Year+' · ':''}${fmtSize(num(r.FileSizeGB))}</div></div>`;
+  }).join('') || '<div class="empty" style="grid-column:1/-1">Nothing matches the current filters</div>';
+  $('#more').hidden = list.length <= shown;
+}
+
+function update(){
+  const rows = filtered();
+  renderKpis(rows); renderCharts(); renderCompat(); renderInsights(rows); renderHealth(); renderChips(); renderWall(rows);
+}
+
+/* ================= modal ================= */
+function spec(title, pairs){
+  const p = pairs.filter(x => x[1] !== '' && x[1] != null && x[1] !== 0 && x[1] !== '0');
+  if (!p.length) return '';
+  return `<div class="spec"><h4>${title}</h4><dl>${p.map(x => `<dt>${x[0]}</dt><dd>${esc(x[1])}</dd>`).join('')}</dl></div>`;
+}
+function openModal(i){
+  const r = base[i]; if (!r) return;
+  const hdr = v(r.HDRStack, v(r.HDRType, 'SDR'));
+  const compat = hdrClass(r).k === 'sdr' ? '' :
+    `<div class="spec"><h4>Device compatibility</h4><dl>${ALL_DEVICES.map(d => { const s = deviceStatus(d, r);
+      return `<dt title="${esc(d.note)}">${esc(d.name)}</dt><dd><span class="sdot" style="background:${STATUS[s].color}"></span>${STATUS[s].label}</dd>`; }).join('')}</dl></div>`;
+  const html =`<div class="sheet"><button class="x" data-close="1">✕</button>
+    <div><div class="pimg">${r.Poster ? `<img src="${esc(r.Poster)}" alt="">` : `<div class="ph">${esc(r.Title)}</div>`}</div></div>
+    <div>
+      <h2>${esc(r.Title)}</h2>
+      <div class="meta">${[r.Year>0?r.Year:'', num(r.RuntimeMin)>0?fmtHMS(r.RuntimeMin):'', r.MPAARating, num(r.Rating)>0?'★ '+num(r.Rating).toFixed(1):''].filter(Boolean).map(esc).join(' · ')}</div>
+      ${r.Tagline ? `<div class="tag">${esc(r.Tagline)}</div>` : ''}
+      ${r.Plot ? `<p class="plot">${esc(r.Plot)}</p>` : ''}
+      <div class="gchips">${r._genres.map(g => `<span>${esc(g)}</span>`).join('')}</div>
+      <div class="specs">
+        ${spec('Video', [['Resolution', r.Resolution], ['Class', r.ResolutionClass], ['Codec', [r.VideoCodec, r.FormatProfile].filter(Boolean).join(' ')],
+          ['Bitrate', num(r.VideoBitRateMbps)>0 ? num(r.VideoBitRateMbps).toFixed(1)+' Mbps' : ''], ['Frame rate', num(r.FrameRate)>0 ? num(r.FrameRate)+' fps' : ''],
+          ['Bit depth', num(r.BitDepth)>0 ? r.BitDepth+'-bit' : ''], ['Dynamic range', hdr], ['DV profile', r.DVProfile ? 'P' + r.DVProfile : ''], ['DV layer', r.DVLayer], ['DV base layer', r.DVBase],
+          ['Chroma', r.ChromaSubsampling], ['Encoder', r.Encoder]])}
+        ${spec('Audio', [['Format', r.AudioFormat], ['Immersive', r.ObjectAudio], ['Channels', r.AudioLayout], ['Bitrate', num(r.AudioBitRateKbps)>0 ? r.AudioBitRateKbps+' kbps' : ''],
+          ['Languages', r.AudioLanguages], ['Tracks', num(r.AudioTracks)]])}
+        ${spec('Subtitles', [['Tracks', num(r.SubtitleTracks)], ['Languages', r.SubtitleLanguages], ['Formats', r.SubtitleFormats]])}
+        ${spec('File', [['Container', r.Container], ['Size', fmtSize(num(r.FileSizeGB))], ['Source', r.Source], ['Added', r.Added], ['Path', r.FullPath]])}
+        ${spec('People & Studio', [['Director', r.Director], ['Cast', r.Cast], ['Studio', r.Studio], ['Country', r.Country], ['Collection', r.Collection], ['IMDB', r.IMDBID], ['TMDB', r.TMDBID]])}
+        ${compat}
+      </div>
+    </div></div>`;
+  const m = $('#modal'); m.innerHTML = html; m.hidden = false; document.body.style.overflow = 'hidden';
+}
+function closeModal(){ $('#modal').hidden = true; document.body.style.overflow = ''; }
+
+/* ================= events ================= */
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-chart],[data-dev],[data-open],[data-health],[data-remove],[data-close],#clear,#more,#modal');
+  if (!t) return;
+  if (t.id === 'modal' && e.target === t || t.dataset.close){ closeModal(); return; }
+  if (t.dataset.open !== undefined){ openModal(+t.dataset.open); return; }
+  if (t.id === 'clear'){ filters.clear(); shown = 60; update(); return; }
+  if (t.id === 'more'){ shown += 60; update(); return; }
+  if (t.dataset.remove){ filters.delete(t.dataset.remove); shown = 60; update(); return; }
+  if (t.dataset.health){
+    const h = HEALTH.find(x => x.id === t.dataset.health);
+    if (filters.has(h.id)) filters.delete(h.id); else filters.set(h.id, {label:h.label, pred:h.pred});
+    shown = 60; update(); return;
+  }
+  if (t.dataset.dev){
+    const dev = ALL_DEVICES.find(d => d.id === t.dataset.dev), st = t.dataset.st, fid = 'cx_' + dev.id;
+    const cur = filters.get(fid);
+    if (cur && cur.key === st) filters.delete(fid);
+    else filters.set(fid, {label: dev.name + ': ' + STATUS[st].label, key: st, pred: r => deviceStatus(dev, r) === st});
+    shown = 60; update(); return;
+  }
+  if (t.dataset.chart){
+    const cfg = CHARTS.find(c => c.id === t.dataset.chart), key = t.dataset.key;
+    const cur = filters.get(cfg.id);
+    if (cur && cur.key === key) filters.delete(cfg.id);
+    else filters.set(cfg.id, {label: cfg.title + ': ' + key, key, pred: r => cfg.keys(r).includes(key)});
+    shown = 60; update();
+  }
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+$('#q').addEventListener('input', e => { q = e.target.value; shown = 60; renderWall(filtered()); });
+$('#sort').addEventListener('change', e => { sortBy = e.target.value; renderWall(filtered()); });
+
+/* ================= boot ================= */
+document.title = (META.library || 'Media Library') + ' — Dashboard';
+$('#title').textContent = META.library || 'Media Library';
+$('#subtitle').textContent = fmtInt(base.length) + ' titles · generated ' + META.generated;
+$('#foot').textContent = 'Generated by Media Info Scanner · ' + META.generated;
+buildKpis(); buildChartShells(); update();
+})();
+</script>
+</body>
+</html>

@@ -108,7 +108,7 @@ $script:FieldDefs = @(
 
     'FileName|string|File|1',          'Container|string|File|1',          'Ext|string|File|0',
     'Type|string|File|0',              'FileSizeGB|double|File|1',         'OverallBitRateMbps|double|File|0',
-    'Source|string|File|1',            'Added|string|File|1',              'Modified|string|File|0',
+    'Source|string|File|1',            'SourceWhy|string|File|0',          'Added|string|File|1',              'Modified|string|File|0',
     'Directory|string|File|0',         'FullPath|string|File|0',
 
     'HasNfo|bool|Library|0',           'HasPoster|bool|Library|0',         'PosterPath|string|Library|0',
@@ -368,6 +368,79 @@ function Resolve-SourceLabel {
         '5'   { 'WEB-DL (inferred)' }
         '8.1' { 'DV/HDR Hybrid (inferred)' }
         default { 'Unknown' }
+    }
+}
+
+# ---- Source labels, worked out from the measurements (file names are NOT used) -------------------------
+# Six plain labels plus DV/HDR Hybrid. Movies only: TV episodes keep the older name-based label until TV support is finished.
+$script:SourceLabels  = @('4K Remux', '4K Web-DL', 'Blu-ray Remux', 'Blu-ray Encode', 'DVD', 'DV/HDR Hybrid', 'Unknown')
+$script:Uhd4kMinGB    = 30      # a 4K file below this is a Web-DL (size decides first)
+$script:Fhd1080MinGB  = 15      # a 1080p stream copy below this is an encode
+$script:Uhd4kMinMbps  = 35      # a 4K HEVC file at or above this video bitrate is remux-class even when it is small (short films)
+
+function Get-SourceClass {
+    # Returns @{ Label; Why } for one record.
+    param($Rec)
+    $rc    = [string]$Rec.ResolutionClass
+    $codec = [string]$Rec.VideoCodec
+    $gb    = 0.0; try { $gb = [double]$Rec.FileSizeGB } catch { }
+    $gbT   = '{0:N1} GB' -f $gb
+    $dvp   = [string]$Rec.DVProfile
+    $hasDV = ([string]$Rec.HDRType -eq 'Dolby Vision') -or ($dvp -ne '')
+    $enc   = ([string]$Rec.VideoEncLib + ' ' + [string]$Rec.Encoder)
+    $x     = ''; if ($enc -match '(?i)(x26[45])') { $x = $Matches[1].ToLowerInvariant() }
+    $ff    = ''; if ($enc -match '(?i)(hevc_nvenc|h264_nvenc|hevc_qsv|h264_qsv|hevc_amf|h264_amf|libx26[45]|Lavc)') { $ff = 'ffmpeg' }     # re-encoded with ffmpeg: never a disc remux
+    $mbps  = 0.0; try { $mbps = [double]$Rec.VideoBitRateMbps } catch { }
+
+    if (-not $codec -or @('4K', '1440p', '1080p', '720p', 'SD') -notcontains $rc) {
+        return @{ Label = 'Unknown'; Why = 'No usable video stream or resolution' }
+    }
+    if ($rc -eq 'SD') { return @{ Label = 'DVD'; Why = '480p/576p or below' } }
+
+    if ($hasDV -and $x) {
+        $pt = if ($dvp) { "profile $dvp" } else { 'profile unknown' }
+        return @{ Label = 'DV/HDR Hybrid'; Why = "Dolby Vision ($pt) with an $x encoder tag, $rc, $gbT" }
+    }
+
+    if ($rc -eq '4K') {
+        if ($codec -ne 'HEVC') { return @{ Label = '4K Web-DL'; Why = "4K but $codec - UHD discs are HEVC, $gbT" } }
+        if ($ff)               { return @{ Label = '4K Web-DL'; Why = "4K re-encoded with ffmpeg, $gbT" } }
+        if ($dvp -match '^5')  { return @{ Label = '4K Web-DL'; Why = "Dolby Vision profile 5 is streaming-only, $gbT" } }
+        if ($dvp -match '^7')  { return @{ Label = '4K Remux';  Why = "Dolby Vision profile 7 (dual layer) is a disc format, $gbT" } }
+        if ($gb -ge $script:Uhd4kMinGB) {
+            $w = "4K HEVC, $gbT ($($script:Uhd4kMinGB) GB or more)"
+            if ($x) { $w += ", $x tag" }
+            return @{ Label = '4K Remux'; Why = $w }
+        }
+        if ((-not $x) -and $mbps -ge $script:Uhd4kMinMbps) {
+            return @{ Label = '4K Remux'; Why = ('4K HEVC, {0} but {1:N0} Mbps video (remux-class bitrate, short film)' -f $gbT, $mbps) }
+        }
+        $w = "4K HEVC, $gbT (under $($script:Uhd4kMinGB) GB)"
+        if ($x) { $w += ", $x re-encode" }
+        return @{ Label = '4K Web-DL'; Why = $w }
+    }
+
+    if ($rc -eq '1080p') {
+        $disc = ($codec -eq 'VC-1') -or ($codec -eq 'MPEG') -or ([string]$Rec.Container -eq 'BDAV')
+        $copy = (@('AVC', 'VC-1', 'MPEG') -contains $codec) -and (-not $x) -and (-not $ff)
+        if ($copy -and ($disc -or $gb -ge $script:Fhd1080MinGB)) {
+            return @{ Label = 'Blu-ray Remux'; Why = "1080p $codec, no encoder tag, $gbT" }
+        }
+        $w = if ($x) { "1080p, $x re-encode" } else { "1080p $codec, $gbT" }
+        if ($copy) { $w += " (stream copy but under $($script:Fhd1080MinGB) GB)" }
+        return @{ Label = 'Blu-ray Encode'; Why = $w }
+    }
+    @{ Label = 'Blu-ray Encode'; Why = "$rc, $codec, $gbT" }
+}
+
+function Set-SourceLabels {
+    param([object[]]$Records)
+    foreach ($rec in $Records) {
+        if ([string]$rec.Show) { continue }               # TV episodes: not yet
+        if ([string]$rec.Type -eq 'Audio') { continue }
+        $c = Get-SourceClass $rec
+        Set-RecField $rec 'Source' $c.Label
+        Set-RecField $rec 'SourceWhy' $c.Why
     }
 }
 #endregion
@@ -998,13 +1071,45 @@ function Get-PlexTags {
     $v -join '; '
 }
 
+function Get-PlexRatings {
+    # All the scores Plex carries for one item: Imdb / Tmdb (0-10), RTCritic / RTAudience (percent, 0 = none).
+    # Plex lists them as <Rating image= value= type=> children, and as rating / audienceRating attributes with ratingImage / audienceRatingImage.
+    param($Node)
+    $o = @{ Imdb = 0.0; Tmdb = 0.0; RTCritic = 0; RTAudience = 0 }
+    if ($null -eq $Node) { return $o }
+    $pairs = New-Object System.Collections.Generic.List[object]
+    foreach ($n in @($Node.SelectNodes('Rating'))) { $pairs.Add(@($n.GetAttribute('image'), $n.GetAttribute('value'), $n.GetAttribute('type'))) }
+    $pairs.Add(@($Node.GetAttribute('ratingImage'),         $Node.GetAttribute('rating'),         'critic'))
+    $pairs.Add(@($Node.GetAttribute('audienceRatingImage'), $Node.GetAttribute('audienceRating'), 'audience'))
+    foreach ($p in $pairs) {
+        $img = [string]$p[0]; $val = ConvertTo-SafeDouble $p[1]
+        if (-not $img -or $val -le 0) { continue }
+        if     ($img -like 'imdb://*')          { if ($o.Imdb -le 0) { $o.Imdb = $val } }
+        elseif ($img -like 'themoviedb://*')    { if ($o.Tmdb -le 0) { $o.Tmdb = $val } }
+        elseif ($img -like 'rottentomatoes://*') {
+            $pct = [int][math]::Round($val * 10)
+            if ($pct -lt 1 -or $pct -gt 100) { continue }
+            if ($img -match 'upright|spilled') { if ($o.RTAudience -le 0) { $o.RTAudience = $pct } }
+            else                               { if ($o.RTCritic   -le 0) { $o.RTCritic   = $pct } }
+        }
+    }
+    $o
+}
+
 function Get-PlexRating {
+    # The single generic rating: IMDb, else TMDB, else a Plex score that is not from Rotten Tomatoes.
     param($Node)
     if ($null -eq $Node) { return 0.0 }
-    $imdb = @($Node.SelectNodes('Rating') | Where-Object { $_.GetAttribute('image') -like 'imdb://*' }) | Select-Object -First 1
-    if ($null -ne $imdb) { $r = ConvertTo-SafeDouble $imdb.GetAttribute('value'); if ($r -gt 0) { return $r } }
-    $r = ConvertTo-SafeDouble $Node.GetAttribute('audienceRating'); if ($r -gt 0) { return $r }
-    ConvertTo-SafeDouble $Node.GetAttribute('rating')
+    $r = Get-PlexRatings $Node
+    if ($r.Imdb -gt 0) { return $r.Imdb }
+    if ($r.Tmdb -gt 0) { return $r.Tmdb }
+    if ([string]$Node.GetAttribute('audienceRatingImage') -notlike 'rottentomatoes://*') {
+        $a = ConvertTo-SafeDouble $Node.GetAttribute('audienceRating'); if ($a -gt 0) { return $a }
+    }
+    if ([string]$Node.GetAttribute('ratingImage') -notlike 'rottentomatoes://*') {
+        return (ConvertTo-SafeDouble $Node.GetAttribute('rating'))
+    }
+    0.0
 }
 
 function Get-PlexAudioFormat {
@@ -1086,6 +1191,10 @@ function ConvertFrom-PlexVideo {
     $rating = Get-PlexRating $Video
     if ($rating -le 0 -and $null -ne $Show) { $rating = Get-PlexRating $Show }
     $rec.Rating     = $rating
+    $rt = Get-PlexRatings $Video
+    if ($rt.RTCritic -le 0 -and $rt.RTAudience -le 0 -and $null -ne $Show) { $rt = Get-PlexRatings $Show }
+    if ($rt.RTCritic   -gt 0) { $rec.RTCritic   = $rt.RTCritic }
+    if ($rt.RTAudience -gt 0) { $rec.RTAudience = $rt.RTAudience }
     $rec.Studio     = $meta.GetAttribute('studio')
     $rec.Director   = Get-PlexTags $Video 'Director' 3
     $rec.Cast       = Get-PlexTags $meta 'Role' 6
@@ -1280,7 +1389,7 @@ function Invoke-PlexScan {
     $byKey = @{}
     $todo  = New-Object System.Collections.Generic.List[object]
     foreach ($s in $stubs) {
-        $ck = Join-Path $script:CacheFolder ((Get-StringHash ('plex|{0}|{1}|{2}|{3}' -f $BaseUrl.ToLowerInvariant(), $s.Key, $s.Updated, $script:CacheVersion)) + '.json')
+        $ck = Join-Path $script:CacheFolder ((Get-StringHash ('plex|{0}|{1}|{2}|{3}|rt1' -f $BaseUrl.ToLowerInvariant(), $s.Key, $s.Updated, $script:CacheVersion)) + '.json')
         $s | Add-Member -NotePropertyName CacheFile -NotePropertyValue $ck -Force
         if ($Rebuild) { Remove-Item -LiteralPath $ck -Force -ErrorAction SilentlyContinue }
         $hit = $null
@@ -1855,7 +1964,7 @@ $script:WorkerFunctions = @(
     'Get-AudioLabel', 'Get-AudioLayout', 'Get-SourceFromName', 'Resolve-SourceLabel', 'Initialize-MediaInfoModule', 'Get-Mi', 'Get-MiFirst', 'Save-MediaInfoText', 'Get-SidecarFiles', 'Get-ExternalAudioFiles',
     'Read-NfoRoot', 'Get-NfoText', 'Get-MediaInfoCachePath', 'Repair-CachedRecord', 'Get-MediaInfoRecord',
     'New-PlexRequest', 'Get-PlexXml', 'Get-PlexSections', 'Get-PlexStubs', 'Get-PlexMetadataMap', 'Get-PlexShowNode',
-    'Save-PlexPoster', 'Convert-PlexEpoch', 'Get-PlexTags', 'Get-PlexRating', 'Get-PlexAudioFormat', 'ConvertFrom-PlexVideo',
+    'Save-PlexPoster', 'Convert-PlexEpoch', 'Get-PlexTags', 'Get-PlexRatings', 'Get-PlexRating', 'Get-PlexAudioFormat', 'ConvertFrom-PlexVideo',
     'Invoke-PlexScan', 'Invoke-FolderScan',
     'Set-RecField', 'Test-ValueEmpty', 'Get-MetaKeys', 'Read-MetaStore', 'Write-MetaStore', 'Invoke-JsonGet', 'Get-ImdbRatingMap', 'Invoke-MetadataScrape'
 )
@@ -3130,9 +3239,11 @@ $grid.Add_CellPainting({
             $g.FillRectangle($wht, $ix + 6, $iy + 6, 3, 10)
         }
         else {
+            $grn = New-Object Drawing.SolidBrush((RGB 112 168 44))
             $g.FillEllipse($yel, $ix + 11, $iy + 11, 5, 5); $g.FillEllipse($yel, $ix + 14, $iy + 8, 4, 4)
-            $g.FillPolygon($red, [Drawing.Point[]]@((New-Object Drawing.Point(($ix + 0), ($iy + 4))), (New-Object Drawing.Point(($ix + 12), ($iy + 8))), (New-Object Drawing.Point(($ix + 9), ($iy + 15))), (New-Object Drawing.Point(($ix + 2), ($iy + 12)))))
+            $g.FillPolygon($grn, [Drawing.Point[]]@((New-Object Drawing.Point(($ix + 0), ($iy + 4))), (New-Object Drawing.Point(($ix + 12), ($iy + 8))), (New-Object Drawing.Point(($ix + 9), ($iy + 15))), (New-Object Drawing.Point(($ix + 2), ($iy + 12)))))
             $g.FillRectangle($wht, $ix + 5, $iy + 7, 3, 5)
+            $grn.Dispose()
         }
         $red.Dispose(); $wht.Dispose(); $yel.Dispose()
     }
@@ -3365,6 +3476,7 @@ $script:EditFields = @(
     @{ N = 'Rating';            L = 'Rating';                        K = 'double'; Min = 0; Max = 10; H = '0 - 10' },
     @{ N = 'Studio';            L = 'Studio';                        K = 'text';   H = '' },
     @{ N = 'Director';          L = 'Director';                      K = 'text';   H = 'separate with ;' },
+    @{ N = 'Source';            L = 'Source';                        K = 'source'; H = 'e.g. 4K Remux' },
     @{ N = 'RTCritic';          L = 'Rotten Tomatoes - critics';     K = 'int';    Min = 0; Max = 100; H = '% (0 - 100)' },
     @{ N = 'RTAudience';        L = 'Rotten Tomatoes - audience';    K = 'int';    Min = 0; Max = 100; H = '% (0 - 100)' },
     @{ N = 'CinemaScore';       L = 'CinemaScore';                   K = 'grade';  H = 'A+ to F' },
@@ -3401,6 +3513,11 @@ function ConvertFrom-EditText {
             if (-not [double]::TryParse($Text, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$v)) { throw "${L}: enter a number such as 7.4." }
             if ($v -lt $Spec.Min -or $v -gt $Spec.Max) { throw "${L}: must be between $($Spec.Min) and $($Spec.Max)." }
             return [Math]::Round($v, 1)
+        }
+        'source' {
+            $hit = $script:SourceLabels | Where-Object { $_ -eq $Text.Trim() } | Select-Object -First 1
+            if (-not $hit) { throw "${L}: use one of " + ($script:SourceLabels -join ', ') + '.' }
+            return $hit
         }
         'grade' {
             $g = $Text.Trim().ToUpperInvariant()
@@ -3533,7 +3650,12 @@ function Edit-SelectedMetadata {
         $drv.Row[$n] = $typed
     }
     foreach ($n in $res.Del) {
-        if ($entry.Scraped.ContainsKey($n)) {
+        if ($n -eq 'Source') {
+            $c = Get-SourceClass $rec
+            Set-RecField $rec 'Source' $c.Label; Set-RecField $rec 'SourceWhy' $c.Why
+            $drv.Row['Source'] = $c.Label; $drv.Row['SourceWhy'] = $c.Why
+        }
+        elseif ($entry.Scraped.ContainsKey($n)) {
             $f = $script:Fields | Where-Object { $_.Name -eq $n } | Select-Object -First 1
             try { $typed = [Convert]::ChangeType($entry.Scraped[$n], $script:TypeMap[$f.Type]); Set-RecField $rec $n $typed; $drv.Row[$n] = $typed } catch { }
         }
@@ -3793,6 +3915,7 @@ function Complete-Scan {
             return
         }
         if ($results.Count -gt 0) {
+            try { Set-SourceLabels -Records $results } catch { }          # measured labels first, then fetched / typed-in values on top
             try { Merge-MetaStore -Records $results -Path $script:MetaStorePath } catch { }
             $table = ConvertTo-DataTable -Records $results
             $grid.DataSource = $table

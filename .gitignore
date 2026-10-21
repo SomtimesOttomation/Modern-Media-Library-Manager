@@ -1,0 +1,9 @@
+# local data and downloads
+lib/*.dll
+lib/*.exe
+lib/tmdb-logo.png
+*.settings.json
+!package.json
+*.log
+Thumbs.db
+desktop.ini

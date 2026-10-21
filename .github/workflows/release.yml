@@ -1,0 +1,100 @@
+# Builds a release when you push a version tag (for example v1.2.0):
+#   - zips only the files an end user needs
+#   - writes SHA256SUMS.txt (the zip and each script)
+#   - records a GitHub build-provenance attestation for the zip
+#   - scans the zip on VirusTotal (needs the VT_API_KEY secret; skipped with a note if it is missing)
+#   - publishes the release with the hashes and the scan link in the notes
+# See RELEASING.md for the one-time setup and the two commands to run each time.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Fetch the tag message
+        run: git fetch --depth=1 --force origin "+refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+
+      - name: Build the zip and the checksums
+        run: |
+          set -euo pipefail
+          STAGE="dist/stage/Modern-Media-Library-Manager"
+          ZIP="dist/Modern-Media-Library-Manager-${GITHUB_REF_NAME}.zip"
+          mkdir -p "$STAGE/lib"
+          for f in Modern-Media-Library-Manager.ps1 dashboard-template.html Run-ModernMediaLibraryManager.cmd README.md LICENSE; do
+            cp "$f" "$STAGE/"
+          done
+          cp lib/README.txt "$STAGE/lib/"
+          (cd dist/stage && zip -qr -X "../$(basename "$ZIP")" Modern-Media-Library-Manager)
+          {
+            (cd dist && sha256sum "$(basename "$ZIP")")
+            (cd "$STAGE" && sha256sum Modern-Media-Library-Manager.ps1 dashboard-template.html Run-ModernMediaLibraryManager.cmd)
+          } > dist/SHA256SUMS.txt
+          echo "ZIP=$ZIP" >> "$GITHUB_ENV"
+          cat dist/SHA256SUMS.txt
+
+      - name: Attest the build provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: dist/*.zip
+
+      - name: Scan the zip on VirusTotal
+        continue-on-error: true
+        env:
+          VT_API_KEY: ${{ secrets.VT_API_KEY }}
+        run: |
+          set -euo pipefail
+          SHA="$(sha256sum "$ZIP" | cut -d' ' -f1)"
+          echo "VT_URL=https://www.virustotal.com/gui/file/${SHA}" >> "$GITHUB_ENV"
+          echo "VT_SUMMARY=the scan did not finish; open the report link to see the result" >> "$GITHUB_ENV"
+          if [ -z "${VT_API_KEY:-}" ]; then
+            echo "VT_SUMMARY=not scanned (the VT_API_KEY secret is not set)" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          ID="$(curl -sS --fail -X POST https://www.virustotal.com/api/v3/files -H "x-apikey: ${VT_API_KEY}" -F "file=@${ZIP}" | jq -r '.data.id')"
+          for i in $(seq 1 30); do
+            R="$(curl -sS --fail "https://www.virustotal.com/api/v3/analyses/${ID}" -H "x-apikey: ${VT_API_KEY}")"
+            if [ "$(echo "$R" | jq -r '.data.attributes.status')" = "completed" ]; then
+              echo "VT_SUMMARY=$(echo "$R" | jq -r '.data.attributes.stats | "\(.malicious) malicious, \(.suspicious) suspicious, \(.harmless) harmless, \(.undetected) undetected"')" >> "$GITHUB_ENV"
+              break
+            fi
+            sleep 10
+          done
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          SHA="$(sha256sum "$ZIP" | cut -d' ' -f1)"
+          {
+            git for-each-ref --format='%(contents)' "refs/tags/${GITHUB_REF_NAME}"
+            echo
+            echo "## Verify this download"
+            echo
+            echo "SHA-256 of the zip (compare ignoring upper or lower case):"
+            echo
+            echo "    ${SHA}"
+            echo
+            echo "In PowerShell:  Get-FileHash .\\$(basename "$ZIP") -Algorithm SHA256"
+            echo
+            echo "SHA256SUMS.txt lists the zip and each script inside it."
+            echo
+            echo "- VirusTotal: [report for this zip](${VT_URL:-https://www.virustotal.com}) - ${VT_SUMMARY:-not scanned}"
+            echo "- Build provenance: gh attestation verify $(basename "$ZIP") --repo ${GITHUB_REPOSITORY}"
+            echo
+            echo "The script is not code-signed. See the README sections \"Verify your download\" and \"Network activity\"."
+          } > dist/notes.md
+          gh release create "$GITHUB_REF_NAME" "$ZIP" dist/SHA256SUMS.txt --title "$GITHUB_REF_NAME" --notes-file dist/notes.md

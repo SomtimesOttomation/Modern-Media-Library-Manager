@@ -131,6 +131,16 @@ h1{font-size:22px;margin:0;letter-spacing:.2px}
 .pt{margin-top:9px;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ps{font-size:11.5px;color:var(--muted);margin-top:2px}
 .more{display:flex;justify-content:center;margin-top:26px}
+.top-right{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.tophint{margin-top:6px}
+
+/* collection popup */
+.sheet.wsheet{display:flex;flex-direction:column;gap:14px;width:min(1280px,100%);height:90vh;max-height:90vh;overflow:hidden;padding:22px 26px 14px}
+.wsheet .wh{display:flex;align-items:flex-end;justify-content:space-between;gap:14px 18px;flex-wrap:wrap;padding-right:44px}
+.wsheet .eyebrow{font-size:11px;font-weight:700;letter-spacing:1.3px;color:var(--muted);text-transform:uppercase;margin-bottom:4px}
+.wsheet h2{font-size:22px}
+.wsheet .wbody{overflow:auto;flex:1;min-height:0;padding:6px 8px 18px 2px;margin-right:-6px}
+.wsheet .wall{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
 
 /* modal */
 .modal{position:fixed;inset:0;z-index:60;background:rgba(5,7,16,.72);backdrop-filter:blur(10px);display:grid;place-items:center;padding:24px;animation:fade .2s ease}
@@ -182,9 +192,10 @@ footer{margin-top:50px;text-align:center;color:var(--muted);font-size:12px}
         <div class="logo">M</div>
         <div><h1 id="title">Media Library</h1><div class="sub" id="subtitle"></div></div>
       </div>
-      <div class="hint">Click any chart segment, bar or health tile to filter everything.</div>
+      <div class="top-right"><button class="btn" id="viewwall">View Collection</button></div>
     </div>
     <div class="chips" id="chips"></div>
+    <div class="hint tophint">Click on Dashboard elements for additional filtering</div>
   </div>
 
   <div class="kpis" id="kpis"></div>
@@ -203,11 +214,12 @@ footer{margin-top:50px;text-align:center;color:var(--muted);font-size:12px}
   </div>
 
   <div class="section">
-    <h2>Collection <span class="hint" id="wallcount"></span></h2>
+    <h2>Titles <span class="hint" id="wallcount"></span></h2>
     <div class="tools">
       <input id="q" type="search" placeholder="Search title, genre, cast, studio...">
       <select id="sort">
         <option value="title">Title A–Z</option>
+        <option value="release">Release date (oldest)</option>
         <option value="year">Year (newest)</option>
         <option value="rating">Rating (highest)</option>
         <option value="size">File size (largest)</option>
@@ -543,12 +555,14 @@ function renderHealth(){
 }
 function renderChips(){
   const box = $('#chips');
-  if (!filters.size){ box.innerHTML = '<span class="hint">No filters active — showing the whole library</span>'; return; }
+  if (!filters.size){ box.innerHTML = '<span class="hint">No Active Filters</span>'; return; }
   box.innerHTML = [...filters.entries()].map(([id, f]) => `<span class="chip">${esc(f.label)}<button data-remove="${id}" title="Remove">✕</button></span>`).join('')
     + '<button class="btn ghost" id="clear">Clear all</button>';
 }
 
+const relKey = r => (r.Year > 0 ? String(r.Year) : '9999') + '|' + String(r.ReleaseDate || '') + '|' + String(r.Title || '').toLowerCase();
 const SORTS = {
+  release: (a,b) => relKey(a).localeCompare(relKey(b)),
   title:   (a,b) => a.Title.localeCompare(b.Title, undefined, {numeric:true, sensitivity:'base'}),
   year:    (a,b) => b.Year - a.Year,
   rating:  (a,b) => num(b.Rating) - num(a.Rating),
@@ -556,19 +570,20 @@ const SORTS = {
   added:   (a,b) => String(b.Added||'').localeCompare(String(a.Added||'')),
   bitrate: (a,b) => num(b.VideoBitRateMbps) - num(a.VideoBitRateMbps)
 };
-function renderWall(rows){
-  const t = q.trim().toLowerCase();
-  let list = t ? rows.filter(r => r._search.includes(t)) : rows.slice();
-  list.sort(SORTS[sortBy] || SORTS.title);
-  $('#wallcount').textContent = '· ' + fmtInt(list.length) + ' shown';
-  $('#wall').innerHTML = list.slice(0, shown).map(r => {
+function cardHtml(r){
     const hdrT = v(r.HDRType, 'SDR');
     const hdr = hdrT === 'Dolby Vision' && r.DVProfile ? 'DV P' + r.DVProfile + (r.DVLayer === 'FEL' || r.DVLayer === 'MEL' ? ' ' + r.DVLayer : '') : hdrT;
     return `<div class="pc" data-open="${r._i}"><div class="pimg">${r.Poster ? `<img loading="lazy" src="${esc(r.Poster)}" alt="">` : `<div class="ph">${esc(r.Title)}</div>`}`
       + `<div class="badges"><span class="b">${esc(v(r.ResolutionClass,'?'))}</span>${hdrT !== 'SDR' ? `<span class="b b-hdr">${esc(hdr)}</span>` : ''}</div>`
       + (num(r.Rating) > 0 ? `<div class="rt">★ ${num(r.Rating).toFixed(1)}</div>` : '') + `</div>`
       + `<div class="pt" title="${esc(r.Title)}">${esc(r.Title)}</div><div class="ps">${r.Year>0?r.Year+' · ':''}${fmtSize(num(r.FileSizeGB))}</div></div>`;
-  }).join('') || '<div class="empty" style="grid-column:1/-1">Nothing matches the current filters</div>';
+}
+function renderWall(rows){
+  const t = q.trim().toLowerCase();
+  let list = t ? rows.filter(r => r._search.includes(t)) : rows.slice();
+  list.sort(SORTS[sortBy] || SORTS.title);
+  $('#wallcount').textContent = '· ' + fmtInt(list.length) + ' shown';
+  $('#wall').innerHTML = list.slice(0, shown).map(cardHtml).join('') || '<div class="empty" style="grid-column:1/-1">Nothing matches the current filters</div>';
   $('#more').hidden = list.length <= shown;
 }
 
@@ -585,6 +600,8 @@ function spec(title, pairs){
 }
 function openModal(i){
   const r = base[i]; if (!r) return;
+  if (wallOpen){ const b = document.querySelector('.wbody'); wallScroll = b ? b.scrollTop : 0; }
+  backToWall = wallOpen; wallOpen = false;
   const hdr = v(r.HDRStack, v(r.HDRType, 'SDR'));
   const compat = hdrClass(r).k === 'sdr' ? '' :
     `<div class="spec"><h4>Device compatibility</h4><dl>${ALL_DEVICES.map(d => { const s = deviceStatus(d, r);
@@ -612,12 +629,40 @@ function openModal(i){
     </div></div>`;
   const m = $('#modal'); m.innerHTML = html; m.hidden = false; document.body.style.overflow = 'hidden';
 }
-function closeModal(){ $('#modal').hidden = true; document.body.style.overflow = ''; }
+function closeModal(){
+  if (backToWall){ openWall(true); return; }       // closing a title sheet that was opened from the collection popup returns to the popup
+  wallOpen = false;
+  $('#modal').hidden = true; document.body.style.overflow = '';
+}
+
+/* ================= collection popup ================= */
+let wallOpen = false, backToWall = false, wallScroll = 0, pq = '', psort = 'title';
+const SORT_OPTS = [['title','Title A–Z'],['release','Release date (oldest)'],['year','Year (newest)'],['rating','Rating (highest)'],['size','File size (largest)'],['added','Recently added'],['bitrate','Video bitrate']];
+function renderPopupWall(){
+  const t = pq.trim().toLowerCase();
+  const rows = filtered();
+  const list = (t ? rows.filter(r => r._search.includes(t)) : rows.slice()).sort(SORTS[psort] || SORTS.title);
+  $('#pcount').textContent = fmtInt(list.length) + ' shown';
+  $('#pwall').innerHTML = list.map(cardHtml).join('') || '<div class="empty" style="grid-column:1/-1">Nothing matches the current filters</div>';
+}
+function openWall(keepScroll){
+  wallOpen = true; backToWall = false;
+  const name = META.collection || META.library || 'Media Library';
+  const html = `<div class="sheet wsheet"><button class="x" data-close="1">✕</button>
+    <div class="wh"><div><div class="eyebrow">${META.collection ? 'Collection' : 'Library'} · <span id="pcount"></span></div><h2>${esc(name)}</h2></div>
+      <div class="tools"><input id="pq" type="search" placeholder="Search title, genre, cast, studio..." value="${esc(pq)}">
+      <select id="psort">${SORT_OPTS.map(o => `<option value="${o[0]}"${o[0] === psort ? ' selected' : ''}>${o[1]}</option>`).join('')}</select></div></div>
+    <div class="wbody"><div class="wall" id="pwall"></div></div></div>`;
+  const m = $('#modal'); m.innerHTML = html; m.hidden = false; document.body.style.overflow = 'hidden';
+  renderPopupWall();
+  if (keepScroll){ const b = document.querySelector('.wbody'); if (b) b.scrollTop = wallScroll; }
+}
 
 /* ================= events ================= */
 document.addEventListener('click', e => {
-  const t = e.target.closest('[data-chart],[data-dev],[data-open],[data-health],[data-remove],[data-close],#clear,#more,#modal');
+  const t = e.target.closest('[data-chart],[data-dev],[data-open],[data-health],[data-remove],[data-close],#clear,#more,#modal,#viewwall');
   if (!t) return;
+  if (t.id === 'viewwall'){ openWall(false); return; }
   if (t.id === 'modal' && e.target === t || t.dataset.close){ closeModal(); return; }
   if (t.dataset.open !== undefined){ openModal(+t.dataset.open); return; }
   if (t.id === 'clear'){ filters.clear(); shown = 60; update(); return; }
@@ -646,12 +691,17 @@ document.addEventListener('click', e => {
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 $('#q').addEventListener('input', e => { q = e.target.value; shown = 60; renderWall(filtered()); });
 $('#sort').addEventListener('change', e => { sortBy = e.target.value; renderWall(filtered()); });
+$('#modal').addEventListener('input', e => { if (e.target.id === 'pq'){ pq = e.target.value; renderPopupWall(); } });
+$('#modal').addEventListener('change', e => { if (e.target.id === 'psort'){ psort = e.target.value; renderPopupWall(); } });
 
 /* ================= boot ================= */
 document.title = (META.library || 'Media Library') + ' — Dashboard';
 $('#title').textContent = META.library || 'Media Library';
 $('#subtitle').textContent = fmtInt(base.length) + ' titles · generated ' + META.generated;
 $('#foot').textContent = 'Generated by Media Info Scanner · ' + META.generated;
+$('#viewwall').textContent = META.collection ? 'View Collection' : 'View Library';
+if (META.dateOrder){ sortBy = 'release'; $('#sort').value = 'release'; }      // a collection kept in release order opens that way
+psort = sortBy;
 buildKpis(); buildChartShells(); update();
 })();
 </script>

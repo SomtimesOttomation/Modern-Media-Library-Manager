@@ -117,7 +117,7 @@ $script:FieldDefs = @(
     'PlexThumb|string|Library|0',       'MetaSources|string|Library|0',
 
     # Scores and money (filled by Fetch info or typed by hand; whole US dollars)
-    'RTCritic|int|Ratings|1',          'RTAudience|int|Ratings|1',         'CinemaScore|string|Ratings|1',
+    'RTCritic|int|Ratings|1',          'RTAudience|int|Ratings|1',         'CinemaScore|string|Ratings|1',   'RatingSource|string|Ratings|0',
     'BoxOfficeDomestic|double|Box office|1', 'BoxOfficeWorldwide|double|Box office|1',
     'OpeningDomestic|double|Box office|0',   'OpeningWorldwide|double|Box office|0',
 
@@ -832,6 +832,7 @@ function Get-MediaInfoRecord {
             $mpaa            = (Get-NfoText $root 'mpaa') -replace '(?i)^\s*(rated|usa?)[:\s]+', ''
             $rec.MPAARating  = $mpaa.Trim()
             $rating = Get-NfoText $root "ratings/rating[@name='imdb']/value"
+            $rec.RatingSource = if ($rating) { 'IMDb' } else { '' }
             if (-not $rating) { $rating = (Get-NfoText $root 'ratings/rating/value') -split ';' | Select-Object -First 1 }
             if (-not $rating) { $rating = Get-NfoText $root 'rating' }
             $rec.Rating      = ConvertTo-SafeDouble $rating
@@ -1113,6 +1114,16 @@ function Get-PlexRating {
     0.0
 }
 
+function Get-PlexRatingSource {
+    # Which service Get-PlexRating took the number from ('IMDb', 'TMDB', or '' when it is only a generic Plex score).
+    param($Node)
+    if ($null -eq $Node) { return '' }
+    $r = Get-PlexRatings $Node
+    if ($r.Imdb -gt 0) { return 'IMDb' }
+    if ($r.Tmdb -gt 0) { return 'TMDB' }
+    ''
+}
+
 function Get-PlexAudioFormat {
     # -> @{ Label; Object } using the same names the MediaInfo path produces
     param([string]$Codec, [string]$Profile, [string]$Display)
@@ -1192,6 +1203,9 @@ function ConvertFrom-PlexVideo {
     $rating = Get-PlexRating $Video
     if ($rating -le 0 -and $null -ne $Show) { $rating = Get-PlexRating $Show }
     $rec.Rating     = $rating
+    $rsrc = Get-PlexRatingSource $Video
+    if ($rsrc -eq '' -and (Get-PlexRating $Video) -le 0 -and $null -ne $Show) { $rsrc = Get-PlexRatingSource $Show }
+    $rec.RatingSource = $rsrc
     $rt = Get-PlexRatings $Video
     if ($rt.RTCritic -le 0 -and $rt.RTAudience -le 0 -and $null -ne $Show) { $rt = Get-PlexRatings $Show }
     if ($rt.RTCritic   -gt 0) { $rec.RTCritic   = $rt.RTCritic }
@@ -1390,7 +1404,7 @@ function Invoke-PlexScan {
     $byKey = @{}
     $todo  = New-Object System.Collections.Generic.List[object]
     foreach ($s in $stubs) {
-        $ck = Join-Path $script:CacheFolder ((Get-StringHash ('plex|{0}|{1}|{2}|{3}|rt1' -f $BaseUrl.ToLowerInvariant(), $s.Key, $s.Updated, $script:CacheVersion)) + '.json')
+        $ck = Join-Path $script:CacheFolder ((Get-StringHash ('plex|{0}|{1}|{2}|{3}|rt2' -f $BaseUrl.ToLowerInvariant(), $s.Key, $s.Updated, $script:CacheVersion)) + '.json')
         $s | Add-Member -NotePropertyName CacheFile -NotePropertyValue $ck -Force
         if ($Rebuild) { Remove-Item -LiteralPath $ck -Force -ErrorAction SilentlyContinue }
         $hit = $null
@@ -1536,6 +1550,7 @@ function Merge-MetaStore {
                     if ($null -eq $f) { continue }
                     try { Set-RecField $rec $name ([Convert]::ChangeType($entry.Scraped[$name], $script:TypeMap[$f.Type])) } catch { continue }
                     $notes += ('{0}: {1}' -f $name, $entry.Sources[$name])
+                    if ($name -eq 'Rating') { Set-RecField $rec 'RatingSource' ([string]$entry.Sources[$name]) }
                 }
             }
         }
@@ -1545,6 +1560,7 @@ function Merge-MetaStore {
                 if ($null -eq $f) { continue }
                 try { Set-RecField $rec $name ([Convert]::ChangeType($entry.Manual[$name], $script:TypeMap[$f.Type])) } catch { continue }
                 $notes += ('{0}: manual' -f $name)
+                if ($name -eq 'Rating') { Set-RecField $rec 'RatingSource' '' }
             }
         }
         if ($notes.Count -gt 0) { Set-RecField $rec 'MetaSources' ($notes -join '; ') }
@@ -1793,6 +1809,7 @@ function Invoke-MetadataScrape {
             $cur = $rec.$name
             if ((Test-ValueEmpty $cur) -or ($Overwrite -and "$cur" -ne "$v")) {
                 Set-RecField $rec $name ([Convert]::ChangeType($v, $script:TypeMap[$f.Type]))
+                if ($name -eq 'Rating') { Set-RecField $rec 'RatingSource' ([string]$got[$name].Source) }
                 $changed = $true
             }
             $entry.Scraped[$name] = $v
@@ -2019,7 +2036,7 @@ $script:WorkerFunctions = @(
     'Get-AudioLabel', 'Get-AudioLayout', 'Get-SourceFromName', 'Resolve-SourceLabel', 'Initialize-MediaInfoModule', 'Get-Mi', 'Get-MiFirst', 'Save-MediaInfoText', 'Get-SidecarFiles', 'Get-ExternalAudioFiles',
     'Read-NfoRoot', 'Get-NfoText', 'Get-MediaInfoCachePath', 'Repair-CachedRecord', 'Get-MediaInfoRecord',
     'New-PlexRequest', 'Get-PlexXml', 'Get-PlexSections', 'Get-PlexStubs', 'Get-PlexMetadataMap', 'Get-PlexShowNode',
-    'Save-PlexPoster', 'Convert-PlexEpoch', 'Get-PlexTags', 'Get-PlexRatings', 'Get-PlexRating', 'Get-PlexAudioFormat', 'ConvertFrom-PlexVideo',
+    'Save-PlexPoster', 'Convert-PlexEpoch', 'Get-PlexTags', 'Get-PlexRatings', 'Get-PlexRating', 'Get-PlexRatingSource', 'Get-PlexAudioFormat', 'ConvertFrom-PlexVideo',
     'Invoke-PlexScan', 'Invoke-FolderScan',
     'Set-RecField', 'Test-ValueEmpty', 'Get-MetaKeys', 'Read-MetaStore', 'Write-MetaStore', 'Invoke-JsonGet', 'Get-ImdbRatingMap', 'Get-TitleKey', 'Find-TmdbMovieId', 'Add-FetchDetail', 'Invoke-MetadataScrape'
 )
@@ -3146,9 +3163,56 @@ $lblDMeta = New-Object Windows.Forms.Label
 $lblDMeta.Location = New-Object Drawing.Point(206, 52); $lblDMeta.Size = New-Object Drawing.Size(660, 22)
 $lblDMeta.Anchor = 'Top,Left,Right'; $lblDMeta.ForeColor = $script:cAccent
 $lblDPlot = New-Object Windows.Forms.Label
-$lblDPlot.Location = New-Object Drawing.Point(206, 82); $lblDPlot.Size = New-Object Drawing.Size(660, 180)
-$lblDPlot.Anchor = 'Top,Left,Right,Bottom'; $lblDPlot.ForeColor = $script:cMuted
-$headPanel.Controls.AddRange(@($picPoster, $lblDTitle, $lblDMeta, $lblDPlot))
+$lblDPlot.Location = New-Object Drawing.Point(206, 82); $lblDPlot.Size = New-Object Drawing.Size(660, 104)
+$lblDPlot.Anchor = 'Top,Left,Right'; $lblDPlot.ForeColor = $script:cMuted; $lblDPlot.AutoEllipsis = $true
+# Ratings and box office strip along the bottom of the header (rows without a value are left out)
+$pnlScores = New-Object Windows.Forms.Panel
+$pnlScores.Location = New-Object Drawing.Point(206, 194); $pnlScores.Size = New-Object Drawing.Size(660, 72)
+$pnlScores.Anchor = 'Top,Left,Right'; $pnlScores.BackColor = $script:cPanel
+$lblScoreCap1 = New-Label 'RATINGS' 12 11 $script:cAccent $script:fontSmall
+$lblScoreCap2 = New-Label 'BOX OFFICE' 12 41 $script:cAccent $script:fontSmall
+$lblScores = New-Object Windows.Forms.Panel       # custom painted: label, tomato / splat and value for each score
+$lblScores.Location = New-Object Drawing.Point(104, 8); $lblScores.Size = New-Object Drawing.Size(540, 24); $lblScores.Anchor = 'Top,Left,Right'
+$lblScores.BackColor = [Drawing.Color]::Transparent; $lblScores.Tag = @()
+$lblScores.Add_Paint({
+    param($s, $e)
+    $g = $e.Graphics; $g.SmoothingMode = 'AntiAlias'
+    $items = @($s.Tag)
+    if ($items.Count -eq 0) { return }
+    $x = 0
+    $flags = [Windows.Forms.TextFormatFlags]::NoPadding -bor [Windows.Forms.TextFormatFlags]::VerticalCenter -bor [Windows.Forms.TextFormatFlags]::Left
+    foreach ($it in $items) {
+        if ($null -eq $it) { continue }
+        if ($it.L) {
+            $w = [Windows.Forms.TextRenderer]::MeasureText($g, $it.L, $script:fontBase, (New-Object Drawing.Size(2000, 24)), $flags).Width
+            [Windows.Forms.TextRenderer]::DrawText($g, $it.L, $script:fontBase, (New-Object Drawing.Rectangle($x, 0, ($w + 4), $s.Height)), $script:cMuted, $flags)
+            $x += $w + 8
+        }
+        if ($it.I -ge 0) {
+            $iy = [int](($s.Height - 16) / 2)
+            if ($it.I -eq 1) {
+                $br = New-Object Drawing.SolidBrush((RGB 230 52 40)); $g.FillEllipse($br, $x, $iy + 2, 15, 14); $br.Dispose()
+                $lf = New-Object Drawing.SolidBrush((RGB 70 170 70))
+                $g.FillPolygon($lf, [Drawing.Point[]]@((New-Object Drawing.Point(($x + 7), ($iy + 4))), (New-Object Drawing.Point(($x + 3), ($iy + 1))), (New-Object Drawing.Point(($x + 7), ($iy + 2))), (New-Object Drawing.Point(($x + 11), ($iy + 0))), (New-Object Drawing.Point(($x + 9), ($iy + 4)))))
+                $lf.Dispose()
+            }
+            else {
+                $br = New-Object Drawing.SolidBrush((RGB 112 168 44))
+                $g.FillEllipse($br, $x + 1, $iy + 6, 14, 9); $g.FillEllipse($br, $x + 4, $iy + 2, 8, 8); $g.FillEllipse($br, $x - 1, $iy + 9, 5, 5); $g.FillEllipse($br, $x + 11, $iy + 8, 5, 5)
+                $br.Dispose()
+            }
+            $x += 20
+        }
+        $w = [Windows.Forms.TextRenderer]::MeasureText($g, $it.T, $script:fontBold, (New-Object Drawing.Size(2000, 24)), $flags).Width
+        [Windows.Forms.TextRenderer]::DrawText($g, $it.T, $script:fontBold, (New-Object Drawing.Rectangle($x, 0, ($w + 4), $s.Height)), $script:cText, $flags)
+        $x += $w + 26
+    }
+})
+$lblMoney = New-Object Windows.Forms.Label
+$lblMoney.Location = New-Object Drawing.Point(104, 38); $lblMoney.Size = New-Object Drawing.Size(540, 24); $lblMoney.Anchor = 'Top,Left,Right'
+$lblMoney.ForeColor = $script:cText; $lblMoney.BackColor = [Drawing.Color]::Transparent; $lblMoney.AutoEllipsis = $true; $lblMoney.TextAlign = 'MiddleLeft'
+$pnlScores.Controls.AddRange(@($lblScoreCap1, $lblScoreCap2, $lblScores, $lblMoney))
+$headPanel.Controls.AddRange(@($picPoster, $lblDTitle, $lblDMeta, $lblDPlot, $pnlScores))
 $rightPane.Controls.Add($attrGrid)         # Fill first, then Top
 $rightPane.Controls.Add($headPanel)
 $detailHost.Controls.Add($rightPane)       # Fill first, then Left
@@ -3201,6 +3265,14 @@ function Set-View {
     }
 }
 
+function Format-MoneyShort {
+    param([double]$V)
+    if ($V -le 0) { return '' }
+    if ($V -ge 1e9) { return '$' + ($V / 1e9).ToString('0.00', $script:Culture) + 'B' }
+    if ($V -ge 1e6) { return '$' + ($V / 1e6).ToString($(if ($V -ge 1e8) { '0' } else { '0.0' }), $script:Culture) + 'M' }
+    return '$' + $V.ToString('N0', $script:Culture)
+}
+
 function Show-RecordDetail {
     param($Record)
     $attrGrid.Rows.Clear()
@@ -3219,6 +3291,22 @@ function Show-RecordDetail {
     $plot = [string]$Record.Plot
     if ($Record.Tagline) { $plot = "$($Record.Tagline)`r`n`r`n$plot" }
     $lblDPlot.Text = $plot
+
+    $sc = @()
+    if ($Record.Rating -gt 0) {
+        $rl = switch ([string]$Record.RatingSource) { 'IMDb' { 'IMDB Rating' } 'TMDB' { 'TMDB Rating' } default { 'Rating' } }
+        $sc += @{ L = $rl; T = (('{0:N1}' -f $Record.Rating) + $(if ($Record.Votes -gt 0) { ' (' + ([int]$Record.Votes).ToString('N0', $script:Culture) + ' votes)' } else { '' })); I = -1 }
+    }
+    if ($Record.RTCritic   -gt 0) { $sc += @{ L = 'RT Critics';  T = ('{0}%' -f $Record.RTCritic);   I = $(if ($Record.RTCritic   -ge 60) { 1 } else { 0 }) } }
+    if ($Record.RTAudience -gt 0) { $sc += @{ L = 'RT Audience'; T = ('{0}%' -f $Record.RTAudience); I = $(if ($Record.RTAudience -ge 60) { 1 } else { 0 }) } }
+    if ($Record.CinemaScore) { $sc += @{ L = 'CinemaScore'; T = [string]$Record.CinemaScore; I = -1 } }
+    $mn = @()
+    $v = Format-MoneyShort ([double]$Record.BoxOfficeDomestic);  if ($v) { $mn += "Domestic $v" }
+    $v = Format-MoneyShort ([double]$Record.BoxOfficeWorldwide); if ($v) { $mn += "Worldwide $v" }
+    $v = Format-MoneyShort ([double]$Record.OpeningDomestic);    if ($v) { $mn += "Opening $v" }
+    if ($sc.Count -eq 0) { $sc += @{ L = ''; T = 'None yet'; I = -1 } }
+    $lblScores.Tag = $sc; $lblScores.Invalidate()
+    $lblMoney.Text  = $(if ($mn.Count -gt 0) { $mn -join '   |   ' } else { 'None yet' })
 
     # poster (load from bytes so the file is not locked)
     if ($picPoster.Image) { $picPoster.Image.Dispose(); $picPoster.Image = $null }

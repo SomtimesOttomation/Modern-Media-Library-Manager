@@ -114,7 +114,9 @@ h1{font-size:22px;margin:0;letter-spacing:.2px}
 /* poster wall */
 .tools{display:flex;gap:10px;flex-wrap:wrap}
 .tools input,.tools select{all:unset;box-sizing:border-box;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 12px;font-size:13px;color:var(--text)}
-.tools input{min-width:260px}
+.tools input[type=search]{min-width:260px}
+.dupchk{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);cursor:pointer;user-select:none}
+.dupchk input[type=checkbox]{all:revert;width:16px;height:16px;margin:0;accent-color:var(--accent);cursor:pointer}
 .tools input:focus,.tools select:focus{border-color:var(--accent)}
 .tools select option{background:var(--panel)}
 .wall{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:18px}
@@ -135,7 +137,8 @@ h1{font-size:22px;margin:0;letter-spacing:.2px}
 .tophint{margin-top:6px}
 
 /* collection popup */
-.sheet.wsheet{display:flex;flex-direction:column;gap:14px;width:min(1280px,100%);height:90vh;max-height:90vh;overflow:hidden;padding:22px 26px 14px}
+.sheet.wsheet{display:flex;flex-direction:column;gap:14px;width:min(1280px,100%);height:calc(100vh - 24px);max-height:calc(100vh - 24px);overflow:hidden;padding:22px 26px 14px}
+.modal:has(.wsheet){padding:12px}      /* the popup uses the whole height of the window, 12px clear of the top and bottom edges, and follows the window as it is resized */
 .wsheet .wh{display:flex;align-items:flex-end;justify-content:space-between;gap:14px 18px;flex-wrap:wrap;padding-right:44px}
 .wsheet .eyebrow{font-size:11px;font-weight:700;letter-spacing:1.3px;color:var(--muted);text-transform:uppercase;margin-bottom:4px}
 .wsheet h2{font-size:22px}
@@ -151,6 +154,10 @@ h1{font-size:22px;margin:0;letter-spacing:.2px}
 .sheet .x{all:unset;position:absolute;right:16px;top:14px;z-index:2;cursor:pointer;width:32px;height:32px;display:grid;place-items:center;border-radius:50%;background:rgba(255,255,255,.08)}
 .sheet .x:hover{background:rgba(255,255,255,.18)}
 .sheet .pimg{box-shadow:0 14px 40px rgba(0,0,0,.5)}
+.sheet .pcol{display:flex;flex-direction:column;gap:12px;min-width:0}
+.pcol .spec dl{grid-template-columns:1fr auto}
+.pcol .spec dd{text-align:right;font-weight:600}
+.rti{width:15px;height:15px;vertical-align:-3px;margin-right:6px}
 .sheet h2{margin:0;font-size:26px;letter-spacing:-.2px}
 .meta{color:var(--muted);font-size:13px;margin:6px 0 12px;display:flex;gap:10px;flex-wrap:wrap}
 .tag{font-style:italic;color:#B9C1E6;margin-bottom:10px}
@@ -252,6 +259,7 @@ const num = x => { const n = +x; return isFinite(n) ? n : 0; };
 const splitList = s => String(s || '').split(/\s*;\s*/).filter(Boolean);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmtInt  = n => Math.round(n).toLocaleString();
+const fmtMoney = n => { n = +n || 0; if (n <= 0) return ''; if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B'; if (n >= 1e6) return '$' + (n / 1e6).toFixed(n >= 1e8 ? 0 : 1) + 'M'; return '$' + Math.round(n).toLocaleString(); };
 const fmtSize = gb => gb >= 1000 ? (gb / 1000).toFixed(2) + ' TB' : gb.toFixed(gb >= 100 ? 0 : 1) + ' GB';
 const fmtHMS  = min => { const t = Math.round((+min || 0) * 60); return Math.floor(t / 3600) + ':' + String(Math.floor(t % 3600 / 60)).padStart(2, '0') + ':' + String(t % 60).padStart(2, '0'); };
 // Library-scale runtime: "1y 28d 7h 53m 12s" (leading zero units dropped; a year is 365 days)
@@ -596,7 +604,7 @@ function update(){
 function spec(title, pairs){
   const p = pairs.filter(x => x[1] !== '' && x[1] != null && x[1] !== 0 && x[1] !== '0');
   if (!p.length) return '';
-  return `<div class="spec"><h4>${title}</h4><dl>${p.map(x => `<dt>${x[0]}</dt><dd>${esc(x[1])}</dd>`).join('')}</dl></div>`;
+  return `<div class="spec"><h4>${title}</h4><dl>${p.map(x => `<dt>${x[0]}</dt><dd>${x[1] && x[1].html ? x[1].html : esc(x[1])}</dd>`).join('')}</dl></div>`;
 }
 function openModal(i){
   const r = base[i]; if (!r) return;
@@ -607,7 +615,7 @@ function openModal(i){
     `<div class="spec"><h4>Device compatibility</h4><dl>${ALL_DEVICES.map(d => { const s = deviceStatus(d, r);
       return `<dt title="${esc(d.note)}">${esc(d.name)}</dt><dd><span class="sdot" style="background:${STATUS[s].color}"></span>${STATUS[s].label}</dd>`; }).join('')}</dl></div>`;
   const html =`<div class="sheet"><button class="x" data-close="1">✕</button>
-    <div><div class="pimg">${r.Poster ? `<img src="${esc(r.Poster)}" alt="">` : `<div class="ph">${esc(r.Title)}</div>`}</div></div>
+    <div class="pcol"><div class="pimg">${r.Poster ? `<img src="${esc(r.Poster)}" alt="">` : `<div class="ph">${esc(r.Title)}</div>`}</div>${scoreCards(r)}</div>
     <div>
       <h2>${esc(r.Title)}</h2>
       <div class="meta">${[r.Year>0?r.Year:'', num(r.RuntimeMin)>0?fmtHMS(r.RuntimeMin):'', r.MPAARating, num(r.Rating)>0?'★ '+num(r.Rating).toFixed(1):''].filter(Boolean).map(esc).join(' · ')}</div>
@@ -629,6 +637,20 @@ function openModal(i){
     </div></div>`;
   const m = $('#modal'); m.innerHTML = html; m.hidden = false; document.body.style.overflow = 'hidden';
 }
+/* Ratings and box office, under the poster. Only the rows that have a value are shown. */
+const TOMATO = '<svg class="rti" viewBox="0 0 16 16" aria-label="Fresh"><circle cx="8" cy="9.2" r="6.4" fill="#E63428"/><path d="M8 5 4.8 2.2 8 3.2 11.4 1.4 10 5z" fill="#46AA46"/></svg>';
+const SPLAT  = '<svg class="rti" viewBox="0 0 16 16" aria-label="Rotten"><g fill="#70A82C"><ellipse cx="8" cy="10" rx="6.6" ry="4.4"/><circle cx="8" cy="6" r="4"/><circle cx="2.4" cy="12.6" r="2.2"/><circle cx="13.6" cy="12" r="2.2"/><circle cx="12.6" cy="4" r="1.5"/></g></svg>';
+function scoreCards(r){
+  const rt = x => num(x) > 0 ? { html: (num(x) >= 60 ? TOMATO : SPLAT) + Math.round(num(x)) + '%' } : '';
+  const rlabel = r.RatingSource === 'IMDb' ? 'IMDB Rating' : r.RatingSource === 'TMDB' ? 'TMDB Rating' : 'Rating';
+  const rating = [[rlabel, num(r.Rating) > 0 ? num(r.Rating).toFixed(1) + (num(r.Votes) > 0 ? '  (' + fmtInt(num(r.Votes)) + ' votes)' : '') : ''],
+    ['RT Critics', rt(r.RTCritic)], ['RT Audience', rt(r.RTAudience)], ['CinemaScore', r.CinemaScore]];
+  const money = [['Domestic (all-time)', fmtMoney(r.BoxOfficeDomestic)], ['Worldwide (all-time)', fmtMoney(r.BoxOfficeWorldwide)],
+    ['Opening, domestic', fmtMoney(r.OpeningDomestic)], ['Opening, worldwide', fmtMoney(r.OpeningWorldwide)]];
+  const has = rows => rows.some(x => x[1]);
+  return (has(rating) ? spec('Ratings', rating) : '') + (has(money) ? spec('Box office', money) : '')
+    || '<div class="spec"><h4>Ratings &amp; box office</h4><div class="sub">None yet. Use Fetch info, or Edit info to type them in.</div></div>';
+}
 function closeModal(){
   if (backToWall){ openWall(true); return; }       // closing a title sheet that was opened from the collection popup returns to the popup
   wallOpen = false;
@@ -636,13 +658,28 @@ function closeModal(){
 }
 
 /* ================= collection popup ================= */
-let wallOpen = false, backToWall = false, wallScroll = 0, pq = '', psort = 'title';
+let wallOpen = false, backToWall = false, wallScroll = 0, pq = '', psort = 'title', pdup = false;
 const SORT_OPTS = [['title','Title A–Z'],['release','Release date (oldest)'],['year','Year (newest)'],['rating','Rating (highest)'],['size','File size (largest)'],['added','Recently added'],['bitrate','Video bitrate']];
+/* One title can be in the library several times (a 4K and a 1080p copy, say). The key is the IMDb id, else the TMDB id, else title + year;
+   the copy kept is the biggest file, so the best-quality one stands in for the rest. */
+function dupKey(r){
+  if (r.IMDBID) return 'i' + r.IMDBID;
+  if (r.TMDBID) return 't' + r.TMDBID;
+  return 'n' + String(r.Title).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() + '|' + (r.Year || '');
+}
+function dedupe(rows){
+  const best = new Map();
+  rows.forEach(r => { const k = dupKey(r), o = best.get(k); if (!o || num(r.FileSizeGB) > num(o.FileSizeGB)) best.set(k, r); });
+  return rows.filter(r => best.get(dupKey(r)) === r);
+}
 function renderPopupWall(){
   const t = pq.trim().toLowerCase();
-  const rows = filtered();
+  let rows = filtered();
+  const before = rows.length;
+  if (pdup) rows = dedupe(rows);
+  const hidden = before - rows.length;
   const list = (t ? rows.filter(r => r._search.includes(t)) : rows.slice()).sort(SORTS[psort] || SORTS.title);
-  $('#pcount').textContent = fmtInt(list.length) + ' shown';
+  $('#pcount').textContent = fmtInt(list.length) + ' shown' + (pdup && hidden > 0 ? ' · ' + fmtInt(hidden) + ' duplicate' + (hidden === 1 ? '' : 's') + ' hidden' : '');
   $('#pwall').innerHTML = list.map(cardHtml).join('') || '<div class="empty" style="grid-column:1/-1">Nothing matches the current filters</div>';
 }
 function openWall(keepScroll){
@@ -651,7 +688,8 @@ function openWall(keepScroll){
   const html = `<div class="sheet wsheet"><button class="x" data-close="1">✕</button>
     <div class="wh"><div><div class="eyebrow">${META.collection ? 'Collection' : 'Library'} · <span id="pcount"></span></div><h2>${esc(name)}</h2></div>
       <div class="tools"><input id="pq" type="search" placeholder="Search title, genre, cast, studio..." value="${esc(pq)}">
-      <select id="psort">${SORT_OPTS.map(o => `<option value="${o[0]}"${o[0] === psort ? ' selected' : ''}>${o[1]}</option>`).join('')}</select></div></div>
+      <select id="psort">${SORT_OPTS.map(o => `<option value="${o[0]}"${o[0] === psort ? ' selected' : ''}>${o[1]}</option>`).join('')}</select>
+      <label class="dupchk"><input type="checkbox" id="pdup"${pdup ? ' checked' : ''}> Hide duplicates</label></div></div>
     <div class="wbody"><div class="wall" id="pwall"></div></div></div>`;
   const m = $('#modal'); m.innerHTML = html; m.hidden = false; document.body.style.overflow = 'hidden';
   renderPopupWall();
@@ -692,7 +730,10 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal()
 $('#q').addEventListener('input', e => { q = e.target.value; shown = 60; renderWall(filtered()); });
 $('#sort').addEventListener('change', e => { sortBy = e.target.value; renderWall(filtered()); });
 $('#modal').addEventListener('input', e => { if (e.target.id === 'pq'){ pq = e.target.value; renderPopupWall(); } });
-$('#modal').addEventListener('change', e => { if (e.target.id === 'psort'){ psort = e.target.value; renderPopupWall(); } });
+$('#modal').addEventListener('change', e => {
+  if (e.target.id === 'psort'){ psort = e.target.value; renderPopupWall(); }
+  else if (e.target.id === 'pdup'){ pdup = e.target.checked; renderPopupWall(); }
+});
 
 /* ================= boot ================= */
 document.title = (META.library || 'Media Library') + ' — Dashboard';

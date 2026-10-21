@@ -12,16 +12,26 @@ A release is built by GitHub, not on a laptop, so the zip, its hash and the scan
 
 ## Each release
 
-1. Merge or commit the changes to the default branch.
-2. Tag the commit and push the tag. The tag message becomes the top of the release notes, so write what changed:
+Merge or commit the changes to the default branch first. Then pick one way to start the release. Both end the same way.
 
-       git tag -a v1.2.0 -m "Collections, release-date order, popup"
-       git push origin v1.2.0
+**In the browser (no command line)**
 
-3. Open the Actions tab and watch the "Release" run. When it finishes, the release appears with:
-   - the zip, named `Modern-Media-Library-Manager-v1.2.0.zip`
-   - `SHA256SUMS.txt`
-   - the zip's SHA-256, the VirusTotal link and result, and the attestation command in the notes
+1. On the repository's main page, click Releases in the right-hand column, then "Draft a new release".
+2. Click "Choose a tag", type a version such as `v1.2.0`, and click "Create new tag: v1.2.0 on publish".
+3. Give it the title `v1.2.0` and describe what changed in the description box.
+4. Click "Publish release".
+
+**From a command line**
+
+    git tag -a v1.2.0 -m "Collections, release-date order, popup"
+    git push origin v1.2.0
+
+Either way, open the Actions tab and watch the "Release" run. When it finishes (a green tick), the release has:
+- the zip, named `Modern-Media-Library-Manager-v1.2.0.zip`
+- `SHA256SUMS.txt`
+- your description, followed by the zip's SHA-256, the VirusTotal link and result, and the attestation command
+
+If you created the release in the browser, the workflow keeps what you wrote and adds the files and the verification block to it.
 
 ## Checking a release yourself
 

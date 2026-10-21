@@ -12,6 +12,8 @@ A release is built by GitHub, not on a laptop, so the zip, its hash and the scan
 
 ## Each release
 
+Bump `$script:AppVersion` near the top of `Modern-Media-Library-Manager.ps1` to the new version (for tag `v1.2.0` it is `'1.2.0'`) and merge that to the default branch. The release workflow stops with a clear message if the number and the tag disagree, because the in-app updater compares them.
+
 Merge or commit the changes to the default branch first. Then pick one way to start the release. Both end the same way.
 
 **In the browser (no command line)**

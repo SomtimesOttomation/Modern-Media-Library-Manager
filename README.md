@@ -144,6 +144,16 @@ To reset the app completely, close it and delete the `%LOCALAPPDATA%\Modern-Medi
 
 Writing `.nfo` sidecar files is not implemented. If it is added, it will be opt-in, with a preview before anything is written.
 
+## Updating
+
+Click **Check for updates** at the bottom right of the window. The app asks GitHub for the latest release and, if there is a newer one, shows what changed. Nothing is downloaded until you click **Download update**. It then:
+
+1. downloads the release zip and its `SHA256SUMS.txt`, and checks the zip against that checksum (a mismatch discards it);
+2. unpacks it to a staging folder and checks the files inside, including that the new script is readable and carries the release's version number;
+3. waits for you to click **Restart to finish updating**. The app closes, the new files go in (the old ones are kept in `%LOCALAPPDATA%\Modern-Media-Library-Manager\Update\previous`), the new version starts and re-runs your last scan from the cache. If it fails to start, the old version is put back automatically.
+
+If only the dashboard template changed, no restart is needed. Your settings, token, scan cache, collections and the `lib\` files are never touched. The checksum comes from the same release as the zip, so it proves the download is complete and intact; to prove who built it, use the attestation check in [Verify your download](#verify-your-download).
+
 ## Network activity
 
 The app connects only to the places below. Nothing is sent anywhere else, and there is no telemetry.
@@ -154,6 +164,7 @@ The app connects only to the places below. Nothing is sent anywhere else, and th
 | **PowerShell Gallery** | First local-folder scan, if the `Get-MediaInfo` module is not installed | Installs the module for the current user (Windows PowerShell may also offer to install its NuGet provider) | Install it yourself first: `Install-Module Get-MediaInfo -Scope CurrentUser`; Plex scans do not need it |
 | **datasets.imdbws.com** | **Fetch info**, about once a week | Downloads IMDb's public ratings file. Nothing about your library is sent | Do not use **Fetch info** |
 | **themoviedb.org** and **omdbapi.com** | **Fetch info**, only if you pasted a key | Titles, years and IMDb or TMDB ids, plus your own key | Leave the keys empty |
+| **api.github.com** and **github.com** | Only when you click **Check for updates** (bottom right), and again if you then choose **Download update** | Asks for the latest release, then downloads its zip and checksum file. Nothing about you or your library is sent | Never click it |
 | **Your Plex server** | Plex scans | Read-only requests with your token, to the address you entered | Use a local-folder scan |
 
 Local-folder scans and the saved HTML dashboards make no connections of their own. Your files, paths and file names are never uploaded.

@@ -4,6 +4,25 @@ A Windows desktop app that scans a movie library and turns it into something you
 
 It reads a local or network folder with MediaInfo, or talks to a Plex server, and remembers what it has already read so rescans are fast. **Your media is only ever read, never changed.**
 
+## Verify your download
+
+The script is not code-signed, so Windows will treat it as an unknown download. Please check what you have before running it:
+
+1. **Get it from the [Releases page](../../releases)**, not from a copy someone else posted.
+2. **Compare the SHA-256 hash.** Every release lists the hash of its zip file (and of each script inside it) in the release notes and in `SHA256SUMS.txt`. In PowerShell:
+
+   ```powershell
+   Get-FileHash .\Modern-Media-Library-Manager-v1.2.0.zip -Algorithm SHA256
+   ```
+
+   The `Hash` line must match the release notes (upper or lower case does not matter). If it does not, do not run it. Releases are also built by GitHub from the tagged source and carry a build-provenance attestation you can check with `gh attestation verify`.
+3. **Check the scan report.** Release notes link to a VirusTotal report for that exact zip. A PowerShell script that downloads its helper files can draw a flag or two from heuristic engines; the report shows which engines said what, so you can judge for yourself.
+4. **Read the source.** It is a plain-text PowerShell script and an HTML template. Nothing is compiled or obfuscated, and the full list of what it reads, writes and connects to is in [What it touches on your system](#what-it-touches-on-your-system) and [Network activity](#network-activity).
+
+The hash is published with each release rather than written in this file, because this file is inside the zip and would change the very hash it describes.
+
+The launcher starts PowerShell with `-ExecutionPolicy Bypass` for that one process only. Because the script is unsigned and came from the internet, Windows blocks it otherwise. It changes no system setting. If you prefer, run `Get-ChildItem . -Recurse | Unblock-File` once and start the `.ps1` file yourself.
+
 ## Highlights
 
 - **Two sources.** A local or UNC folder (MediaInfo, plus `.nfo` and poster files beside each movie) or a Plex server.
@@ -13,10 +32,23 @@ It reads a local or network folder with MediaInfo, or talks to a Plex server, an
 - **Edit info.** Type in what no free source offers (Rotten Tomatoes audience score, CinemaScore, opening weekends, all-time box office) or correct anything else. Your values always win and survive rescans.
 - **Fast and responsive.** Scans run in the background, read several files in parallel, resume from a per-file cache and show a rainbow progress bar for the current step plus an overall bar, each with an ETA.
 - **Views and export.** Grid, detail view, dashboard (embedded WebView2, with a browser fallback), CSV export and saved HTML.
-- **Filtering.** Free text, or `field:value` such as `source:unknown` or `resolution:2160p`.
+- **Filtering.** Free text, or `field:value` terms such as `source:unknown` or `resolution:2160p`. Number columns take ranges and comparisons (`year:1980-1989`, `rating:>=7.5`), and several terms combine to narrow further. As you type, a drop-down suggests field names and the values that actually exist in your library (with counts); Down and Enter pick one.
+- **Collections.** Your own named title lists, either hand-picked from the grid or saved as a rule (a filter plus an optional sort and limit, so a "top 10" works). Pick one and the grid, detail view, dashboard and exports show only its titles, and the dashboard takes the collection's name as its title. See [Collections](#collections).
 - **Remembers** your source, options, window size and column layout.
 
 TV shows are not supported yet; the option is visible but disabled.
+
+## Collections
+
+A collection is a named list of titles that you can run the dashboard on: a franchise, a genre, a studio, a decade, a top 10, whatever you feel like that day.
+
+- **Hand-picked.** Select titles in the grid (Ctrl-click or Shift-click for several), then click **Add selected...** or right-click and choose **Add to collection...**. Type a new name to create the collection on the spot.
+- **Rule.** A saved filter that is re-evaluated on every scan, so it stays current as your library changes. It uses the same syntax as the filter box, plus an optional sort and limit. A top 10 is a rule with no filter, sorted by rating (highest first), limited to 10.
+- **Using one.** Pick it in the **Collection** box under the toolbar. The grid, detail view, dashboard, CSV export and saved HTML all follow it, and **All titles** switches back to the whole library.
+- **Release order.** Tick **By release date** on a collection to keep it in chronological order, oldest first (a franchise in release order, or a top 10 shown by year). The grid, detail list, dashboard and popup all follow it.
+- **View Collection.** The dashboard has a **View Collection** button that opens the collection's posters in a popup window, with search and sort. It follows any chart filters you have clicked, opens a title's full details when you click a poster, and works in a saved HTML file too.
+
+Collections work with both Plex and local scans. They are matched by IMDb or TMDB id, falling back to title and year, so they survive rescans, renames and moving between Plex and a folder. They are saved only in this app's own data file; nothing is written to Plex or to your media.
 
 ## Requirements
 
@@ -90,6 +122,7 @@ Everything the app does write is its own working data:
 | Settings (folder, options, column layout, encrypted tokens and keys) | `%LOCALAPPDATA%\Modern-Media-Library-Manager\settings.json` | remembers your setup |
 | Scan cache (one small JSON file per media file) | `...\Cache\` | makes rescans fast; **Rebuild local cache** deletes and recreates these |
 | Poster thumbnails | `...\Thumbs\` | grid, detail view and dashboard |
+| Collections (named title lists) | `...\collections.json` | **Collections** |
 | Fetched and typed-in values | `...\metadata\store.json` | **Fetch info** and **Edit info**; applied on top of every scan, so they survive cache rebuilds |
 | IMDb ratings file | `...\datasets\` | downloaded weekly for **Fetch info** |
 | Full MediaInfo text per file | `...\Inform\` | reference for source-clue research |
@@ -104,6 +137,20 @@ What it reads: media files (through MediaInfo, and ffmpeg for the optional FEL/M
 To reset the app completely, close it and delete the `%LOCALAPPDATA%\Modern-Media-Library-Manager` folder. Your media is unaffected.
 
 Writing `.nfo` sidecar files is not implemented. If it is added, it will be opt-in, with a preview before anything is written.
+
+## Network activity
+
+The app connects only to the places below. Nothing is sent anywhere else, and there is no telemetry.
+
+| Connects to | When | What is sent or fetched | How to avoid it |
+| --- | --- | --- | --- |
+| **nuget.org** | First time the dashboard is shown in the app window, if the three WebView2 files are missing | Downloads the Microsoft.Web.WebView2 package and extracts three DLLs into `lib\` | Copy `Microsoft.Web.WebView2.Core.dll`, `Microsoft.Web.WebView2.WinForms.dll` and `WebView2Loader.dll` into `lib\` yourself; or use **Save HTML** and open the file in your browser |
+| **PowerShell Gallery** | First local-folder scan, if the `Get-MediaInfo` module is not installed | Installs the module for the current user (Windows PowerShell may also offer to install its NuGet provider) | Install it yourself first: `Install-Module Get-MediaInfo -Scope CurrentUser`; Plex scans do not need it |
+| **datasets.imdbws.com** | **Fetch info**, about once a week | Downloads IMDb's public ratings file. Nothing about your library is sent | Do not use **Fetch info** |
+| **themoviedb.org** and **omdbapi.com** | **Fetch info**, only if you pasted a key | Titles, years and IMDb or TMDB ids, plus your own key | Leave the keys empty |
+| **Your Plex server** | Plex scans | Read-only requests with your token, to the address you entered | Use a local-folder scan |
+
+Local-folder scans and the saved HTML dashboards make no connections of their own. Your files, paths and file names are never uploaded.
 
 ## Status
 

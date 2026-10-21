@@ -48,6 +48,7 @@ $script:ThumbFolder     = Join-Path $script:AppData 'Thumbs'
 $script:LibFolder       = Join-Path $script:AppRoot 'lib'                          # WebView2 DLLs live here (auto-downloaded)
 $script:SettingsPath    = Join-Path $script:AppData 'settings.json'
 $script:MetaStorePath   = Join-Path $script:AppData 'metadata\store.json'      # fetched + hand-typed values
+$script:CollectionsPath = Join-Path $script:AppData 'collections.json'         # custom title lists (collections)
 $script:DataFolder      = Join-Path $script:AppData 'datasets'                 # IMDb ratings file
 $script:InformFolder     = Join-Path $script:AppData 'Inform'                       # full MediaInfo text per file (source-clue research)
 $script:LiveFolder      = Join-Path $script:AppData 'Dashboard'                    # dashboard shown inside the app
@@ -2219,6 +2220,8 @@ function New-MediaDashboard {
         [Parameter(Mandatory)][object[]]$Records,
         [Parameter(Mandatory)][string]$OutFile,
         [string]$LibraryName = 'Media Library',
+        [string]$CollectionName = '',
+        [switch]$DateOrder,
         [switch]$EmbedPosters
     )
 
@@ -2258,7 +2261,7 @@ function New-MediaDashboard {
     }
 
     $json = (ConvertTo-Json -InputObject $rows.ToArray() -Depth 4 -Compress).Replace('</', '<\/')
-    $meta = ConvertTo-Json -Compress -InputObject @{ generated = (Get-Date -Format 'yyyy-MM-dd HH:mm'); library = $LibraryName }
+    $meta = ConvertTo-Json -Compress -InputObject @{ generated = (Get-Date -Format 'yyyy-MM-dd HH:mm'); library = $LibraryName; collection = $CollectionName; dateOrder = [bool]$DateOrder }
 
     $html = [IO.File]::ReadAllText($script:TemplatePath, [Text.Encoding]::UTF8)
     $html = $html.Replace('__META__', $meta).Replace('__DATA__', $json)
@@ -2298,17 +2301,28 @@ function Install-WebView2Package {
     # Entries are matched by pattern (not exact path) so small package layout changes do not break it.
     param([Parameter(Mandatory)][string]$Folder)
 
-    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    # TLS 1.2 (plus 1.3 where this Windows has it); some networks close the connection when older protocols are offered
+    try { [Net.ServicePointManager]::SecurityProtocol = ([Net.SecurityProtocolType]3072 -bor [Net.SecurityProtocolType]12288) }
+    catch { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]3072 }
     try { [Net.WebRequest]::DefaultWebProxy.Credentials = [Net.CredentialCache]::DefaultNetworkCredentials } catch { }
     $oldProgress = $ProgressPreference
     $ProgressPreference = 'SilentlyContinue'          # the progress bar makes Invoke-WebRequest very slow in 5.1
     $tmp = Join-Path ([IO.Path]::GetTempPath()) ('webview2-' + [guid]::NewGuid().ToString('N') + '.nupkg')
     try {
         $base  = 'https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2'
-        $index = Invoke-RestMethod -Uri "$base/index.json"
-        $ver   = @($index.versions | Where-Object { $_ -notmatch '-' }) | Select-Object -Last 1
-        if (-not $ver) { throw 'No stable WebView2 package version was found on nuget.org.' }
-        Invoke-WebRequest -Uri "$base/$ver/microsoft.web.webview2.$ver.nupkg" -OutFile $tmp -UseBasicParsing
+        $ver = $null
+        for ($try = 1; $try -le 3; $try++) {          # a dropped connection is common on the first try; the CDN answers on the next
+            try {
+                if (-not $ver) {
+                    $index = Invoke-RestMethod -Uri "$base/index.json"
+                    $ver   = @($index.versions | Where-Object { $_ -notmatch '-' }) | Select-Object -Last 1
+                    if (-not $ver) { throw 'No stable WebView2 package version was found on nuget.org.' }
+                }
+                Invoke-WebRequest -Uri "$base/$ver/microsoft.web.webview2.$ver.nupkg" -OutFile $tmp -UseBasicParsing
+                break
+            }
+            catch { if ($try -ge 3) { throw }; Start-Sleep -Seconds (2 * $try) }
+        }
 
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         $zip = [IO.Compression.ZipFile]::OpenRead($tmp)
@@ -2677,24 +2691,24 @@ $radLocal  = New-FlatRadio 'Local folder' 24 54
 $lblFolder = New-Label 'LIBRARY FOLDER' 200 14 $script:cMuted $script:fontSmall
 $txtFolder = New-Object Windows.Forms.TextBox
 $txtFolder.Location = New-Object Drawing.Point(200, 36)
-$txtFolder.Size = New-Object Drawing.Size(924, 28)
+$txtFolder.Size = New-Object Drawing.Size(916, 28)
 $txtFolder.Anchor = 'Top,Left,Right'
 $txtFolder.BackColor = $script:cPanel2; $txtFolder.ForeColor = $script:cText
 $txtFolder.BorderStyle = 'FixedSingle'; $txtFolder.Font = New-Object Drawing.Font('Segoe UI', 11)
 $btnBrowse = New-FlatButton 'Browse...' 110 'secondary'
-$btnBrowse.Location = New-Object Drawing.Point(1146, 35); $btnBrowse.Anchor = 'Top,Right'
+$btnBrowse.Location = New-Object Drawing.Point(1138, 35); $btnBrowse.Anchor = 'Top,Right'
 
 # Local scans read several files at once; this is how many (Plex scans do not use it).
-$lblPar = New-Label 'PARALLEL FILES' 924 13 $script:cMuted $script:fontSmall
+$lblPar = New-Label 'PARALLEL FILES' 916 13 $script:cMuted $script:fontSmall
 $lblPar.Anchor = 'Top,Right'
 $nudPar = New-Object Windows.Forms.NumericUpDown
 $nudPar.Minimum = 1; $nudPar.Maximum = 12; $nudPar.Value = 4
-$nudPar.Location = New-Object Drawing.Point(1040, 8); $nudPar.Size = New-Object Drawing.Size(90, 24)
+$nudPar.Location = New-Object Drawing.Point(1032, 8); $nudPar.Size = New-Object Drawing.Size(90, 24)
 $nudPar.Anchor = 'Top,Right'
 $nudPar.BackColor = $script:cPanel2; $nudPar.ForeColor = $script:cText; $nudPar.BorderStyle = 'FixedSingle'
 $btnWorkers = New-FlatButton 'Workers' 110 'secondary'
 $btnWorkers.Size = New-Object Drawing.Size(110, 24); $btnWorkers.Font = $script:fontSmall
-$btnWorkers.Location = New-Object Drawing.Point(1146, 8); $btnWorkers.Anchor = 'Top,Right'
+$btnWorkers.Location = New-Object Drawing.Point(1138, 8); $btnWorkers.Anchor = 'Top,Right'
 
 $chkRebuild = New-FlatCheckBox 'Rebuild local cache' 24 82
 $chkVideo   = New-FlatCheckBox 'Video' 190 82 $true
@@ -2976,6 +2990,26 @@ $btnEdit = New-FlatButton 'Edit info' 100 'secondary'
 $btnEdit.Location = New-Object Drawing.Point(946, 10); $btnEdit.Anchor = 'Top,Right'
 $toolbar.Controls.AddRange(@($btnViewGrid, $btnViewDetail, $btnViewDash, $lblFilter, $txtFilter, $lblCount, $btnEdit, $btnFetch, $btnCols))
 
+# collection bar: sits under the toolbar once a scan has results
+$collBar = New-Object Windows.Forms.Panel
+$collBar.Location = New-Object Drawing.Point(0, 54); $collBar.Size = New-Object Drawing.Size(1280, 78); $collBar.Anchor = 'Top,Left,Right'
+$collBar.BackColor = $script:cBg; $collBar.Visible = $false
+$lblColl = New-Label 'Collection:' 24 15 $script:cMuted $script:fontBase
+$cboColl = New-Object Windows.Forms.ComboBox
+$cboColl.DropDownStyle = 'DropDownList'; $cboColl.FlatStyle = 'Flat'
+$cboColl.Location = New-Object Drawing.Point(104, 11); $cboColl.Size = New-Object Drawing.Size(250, 28)
+$cboColl.BackColor = $script:cPanel2; $cboColl.ForeColor = $script:cText
+$btnCollNew  = New-FlatButton 'New...' 76 'secondary';           $btnCollNew.Location  = New-Object Drawing.Point(366, 8)
+$btnCollEdit = New-FlatButton 'Edit...' 76 'secondary';          $btnCollEdit.Location = New-Object Drawing.Point(448, 8)
+$btnCollDel  = New-FlatButton 'Delete' 76 'secondary';           $btnCollDel.Location  = New-Object Drawing.Point(530, 8)
+$btnCollAdd  = New-FlatButton 'Add selected...' 130 'secondary'; $btnCollAdd.Location  = New-Object Drawing.Point(612, 8)
+$lblCollInfo = New-Object Windows.Forms.Label
+$lblCollInfo.AutoSize = $false; $lblCollInfo.AutoEllipsis = $true; $lblCollInfo.TextAlign = 'MiddleLeft'
+$lblCollInfo.Location = New-Object Drawing.Point(24, 48); $lblCollInfo.Size = New-Object Drawing.Size(1232, 22); $lblCollInfo.Anchor = 'Top,Left,Right'
+$lblCollInfo.ForeColor = $script:cMuted; $lblCollInfo.BackColor = [Drawing.Color]::Transparent; $lblCollInfo.Font = $script:fontSmall
+$collBar.Controls.AddRange(@($lblColl, $cboColl, $btnCollNew, $btnCollEdit, $btnCollDel, $btnCollAdd, $lblCollInfo))
+$toolbar.Controls.Add($collBar)
+
 # empty-state message
 $lblEmpty = New-Object Windows.Forms.Label
 $lblEmpty.Dock = 'Fill'; $lblEmpty.TextAlign = 'MiddleCenter'; $lblEmpty.ForeColor = $script:cMuted
@@ -3066,9 +3100,13 @@ function Set-View {
     # filter + column picker only make sense for the table views
     $showFilter = $hasData -and ($View -ne 'dashboard')
     $lblFilter.Visible = $showFilter; $txtFilter.Visible = $showFilter; $lblCount.Visible = $showFilter
+    if (-not $showFilter) { Hide-FilterSuggest $txtFilter }
     $btnCols.Visible   = $hasData -and ($View -eq 'grid')
     $btnFetch.Visible  = $hasData -and ($View -eq 'grid')
     $btnEdit.Visible   = $hasData -and ($View -eq 'grid')
+    $collBar.Visible   = $hasData
+    $toolbar.Height    = $(if ($hasData) { 132 } else { 54 })          # the collection bar is the toolbar's second row
+    $btnCollAdd.Visible = $hasData -and ($View -eq 'grid')
     foreach ($pair in @(@($btnViewGrid, 'grid'), @($btnViewDetail, 'detail'), @($btnViewDash, 'dashboard'))) {
         $btn = $pair[0]
         if ($pair[1] -eq $View) {
@@ -3134,7 +3172,8 @@ function Update-DetailList {
     $listFiles.BeginUpdate()
     $listFiles.Items.Clear()
     $items = @()
-    foreach ($r in $script:ScanResults) {
+    foreach ($r in (Get-OrderedResults)) {
+        if ($null -ne $script:ScopeIds -and -not $script:ScopeIds.Contains((Get-RecordId $r))) { continue }
         if ($Filter) {
             $hay = ('{0} {1} {2} {3} {4}' -f $r.Title, $r.FileName, $r.Genre, $r.Studio, $r.Cast).ToLowerInvariant()
             if (-not $hay.Contains($Filter.ToLowerInvariant())) { continue }
@@ -3153,24 +3192,121 @@ function Get-LikeEscaped {
     $Text.Replace("'", "''").Replace('[', '[[]').Replace('%', '[%]').Replace('*', '[*]')
 }
 
+function Get-TermExpression {
+    # One  field:value  term as a DataView filter expression, or $null when it is not a usable term.
+    # Text columns match "contains"; number columns take  7.5   >=7.5   <2000   1980-1989.
+    param($Table, [string]$Name, [string]$Value)
+    $col = $Table.Columns[$Name]
+    if ($null -eq $col) { return $null }
+    $v = $Value.Trim()
+    $c = $col.ColumnName
+    if ($col.DataType -eq [string]) { return ("[{0}] LIKE '%{1}%'" -f $c, (Get-LikeEscaped $v)) }
+    if (-not ($col.DataType -eq [int] -or $col.DataType -eq [double] -or $col.DataType -eq [long])) { return $null }
+    $num = '(-?\d+(?:\.\d+)?)'
+    $ci  = [Globalization.CultureInfo]::InvariantCulture
+    if ($v -match ('^' + $num + '\s*-\s*' + $num + '$')) {
+        $a = [double]::Parse($Matches[1], $ci); $b = [double]::Parse($Matches[2], $ci)
+        if ($a -gt $b) { $t = $a; $a = $b; $b = $t }
+        return ('[{0}] >= {1} AND [{0}] <= {2}' -f $c, $a.ToString($ci), $b.ToString($ci))
+    }
+    if ($v -match ('^(>=|<=|>|<|=)?\s*' + $num + '$')) {
+        $op = if ($Matches[1]) { $Matches[1] } else { '=' }
+        $n  = [double]::Parse($Matches[2], $ci)
+        return ('[{0}] {1} {2}' -f $c, $op, $n.ToString($ci))
+    }
+    $null
+}
+
+function Get-FilterExpression {
+    # The filter box text as a DataView filter expression ('' = no filter).
+    # "genre:Horror year:1980-1989" = several field:value terms that must all match; anything else is a free-text search.
+    param($Table, [string]$Text)
+    $text = $Text.Trim()
+    if (-not $text) { return '' }
+    $exprs = @(); $ok = $true
+    foreach ($p in @([regex]::Split($text, '\s+(?=[A-Za-z]\w*\s*:)'))) {
+        if ($p -match '^(\w+)\s*:\s*(.+)$') {
+            $x = Get-TermExpression $Table $Matches[1] $Matches[2]
+            if ($x) { $exprs += $x } else { $ok = $false; break }
+        }
+        else { $ok = $false; break }
+    }
+    if ($ok -and $exprs.Count -gt 0) { return (($exprs | ForEach-Object { '(' + $_ + ')' }) -join ' AND ') }
+    $e = Get-LikeEscaped $text
+    "[Title] LIKE '%$e%' OR [FileName] LIKE '%$e%' OR [Genre] LIKE '%$e%' OR [Studio] LIKE '%$e%' OR [Cast] LIKE '%$e%' OR [Director] LIKE '%$e%'"
+}
+
+function Get-RecordId {
+    # One stable id per scanned item: the Plex key, else the file path.
+    param($Rec)
+    $pk = [string]$Rec.PlexKey
+    if ($pk) { 'p:' + $pk } else { 'f:' + [string]$Rec.FullPath }
+}
+
+function Get-RowId {
+    param($Row)
+    $pk = [string]$Row['PlexKey']
+    if ($pk) { 'p:' + $pk } else { 'f:' + [string]$Row['FullPath'] }
+}
+
+function Get-ScopeExpression {
+    # Restricts the grid to the active collection ('' = no collection active).
+    if ($null -eq $script:ScopeIds) { return '' }
+    $p = @(); $f = @()
+    foreach ($id in $script:ScopeIds) {
+        $q = "'" + $id.Substring(2).Replace("'", "''") + "'"
+        if ($id.StartsWith('p:')) { $p += $q } else { $f += $q }
+    }
+    $parts = @()
+    if ($p.Count -gt 0) { $parts += ('[PlexKey] IN (' + ($p -join ',') + ')') }
+    if ($f.Count -gt 0) { $parts += ('[FullPath] IN (' + ($f -join ',') + ')') }
+    if ($parts.Count -eq 0) { return '1 = 0' }
+    '(' + ($parts -join ' OR ') + ')'
+}
+
+function Test-ActiveByDate {
+    if (-not $script:ActiveCollection) { return $false }
+    $c = Get-CollectionByName $script:ActiveCollection
+    [bool]($null -ne $c -and $c.ByDate)
+}
+
+function Get-DateOrdered {
+    # Oldest first: by year, then by the exact release date where there is one, then by title. Unknown years go last.
+    param($Records)
+    @($Records | Sort-Object @{ Expression = { if ([int]$_.Year -gt 0) { [int]$_.Year } else { 9999 } } }, @{ Expression = { [string]$_.ReleaseDate } }, @{ Expression = { [string]$_.Title } })
+}
+
+function Get-OrderedResults {
+    if (Test-ActiveByDate) { return (Get-DateOrdered $script:ScanResults) }
+    @($script:ScanResults)
+}
+
+function Get-ScopedRecords {
+    $recs = @($script:ScanResults)
+    if ($null -ne $script:ScopeIds) { $recs = @($recs | Where-Object { $script:ScopeIds.Contains((Get-RecordId $_)) }) }
+    if (Test-ActiveByDate) { $recs = Get-DateOrdered $recs }
+    $recs
+}
+
+$script:OrderApplied = $false
+function Set-CollectionOrder {
+    # Puts the grid in release order while a "by release date" collection is active; leaves your own column sorting alone otherwise.
+    if ($grid.DataSource -isnot [System.Data.DataTable]) { return }
+    if (Test-ActiveByDate) { $grid.DataSource.DefaultView.Sort = '[Year] ASC, [ReleaseDate] ASC'; $script:OrderApplied = $true }
+    elseif ($script:OrderApplied) { $grid.DataSource.DefaultView.Sort = ''; $script:OrderApplied = $false }
+}
+
 function Update-Filter {
     $text = $txtFilter.Text.Trim()
     if ($grid.DataSource -is [System.Data.DataTable]) {
-        $fieldTerm = $null
-        # "field:value" filters one text column, e.g.  source:unknown   resolution:1080p   hdrtype:dolby
-        if ($text -match '^(\w+)\s*:\s*(.+)$') {
-            $col = $grid.DataSource.Columns[$Matches[1]]
-            if ($null -ne $col -and $col.DataType -eq [string]) { $fieldTerm = @{ Name = $col.ColumnName; Value = $Matches[2].Trim() } }
-        }
-        if ($fieldTerm) {
-            $grid.DataSource.DefaultView.RowFilter = "[$($fieldTerm.Name)] LIKE '%$(Get-LikeEscaped $fieldTerm.Value)%'"
-        }
-        elseif ($text) {
-            $e = Get-LikeEscaped $text
-            $grid.DataSource.DefaultView.RowFilter = "[Title] LIKE '%$e%' OR [FileName] LIKE '%$e%' OR [Genre] LIKE '%$e%' OR [Studio] LIKE '%$e%' OR [Cast] LIKE '%$e%' OR [Director] LIKE '%$e%'"
-        }
-        else { $grid.DataSource.DefaultView.RowFilter = '' }
-        $lblCount.Text = '{0} of {1} titles' -f $grid.DataSource.DefaultView.Count, $script:ScanResults.Count
+        $parts = @()
+        $fx = Get-FilterExpression $grid.DataSource $text
+        if ($fx) { $parts += ('(' + $fx + ')') }
+        $sx = Get-ScopeExpression
+        if ($sx) { $parts += $sx }
+        $grid.DataSource.DefaultView.RowFilter = ($parts -join ' AND ')
+        $total = if ($null -ne $script:ScopeIds) { $script:ScopeIds.Count } else { $script:ScanResults.Count }
+        $lblCount.Text = '{0} of {1} titles' -f $grid.DataSource.DefaultView.Count, $total
     }
     Update-DetailList -Filter $text
 }
@@ -3180,7 +3316,7 @@ function Update-Filter {
 $btnViewGrid.Add_Click({ Set-View 'grid' })
 $btnViewDetail.Add_Click({ Set-View 'detail' })
 $txtFilter.Add_TextChanged({ Update-Filter })
-$tip.SetToolTip($txtFilter, "Type to search title, file, genre, studio, cast or director.`nOr filter one column with  field:value  - for example  source:unknown  or  resolution:1080p.`nExport CSV then saves only the rows shown.")
+$tip.SetToolTip($txtFilter, "Type to search title, file, genre, studio, cast or director.`nSuggestions appear as you type (Down, then Enter, picks one).`nOr filter columns with  field:value  - for example  source:unknown  or  resolution:1080p.`nNumber columns take ranges and comparisons:  year:1980-1989   rating:>=7.5.  Combine several terms to narrow further.`nExport CSV then saves only the rows shown.")
 
 # Runtime is stored as minutes (so it sorts numerically) but always displayed as H:MM:SS
 $grid.Add_CellFormatting({
@@ -3674,14 +3810,700 @@ function Edit-SelectedMetadata {
 $btnEdit.Add_Click({ Edit-SelectedMetadata })
 $tip.SetToolTip($btnEdit, "Type in values the online sources do not have (Rotten Tomatoes audience, CinemaScore, opening weekend...)`nfor the selected title. Saved in this app's data file only - never in your media files or Plex.")
 
-# right-click a row for the same editor
+#region ---------------------------------------------------------------- Collections (custom title lists for the views and the dashboard)
+# A collection is a named list of titles. "Hand-picked" ones hold the titles you added; "rule" ones are a saved filter (+ sort + limit)
+# that is re-evaluated against every scan. They live ONLY in this app's own data file (collections.json); nothing is written to Plex or to media files.
+# Picking one in the Collection box scopes the grid, detail view, dashboard and exports to its titles.
+$script:Collections      = New-Object System.Collections.ArrayList
+$script:ActiveCollection = ''
+$script:ScopeIds         = $null
+$script:CollGuard        = $false
+
+function Import-Collections {
+    $script:Collections = New-Object System.Collections.ArrayList
+    if (-not (Test-Path -LiteralPath $script:CollectionsPath)) { return }
+    try {
+        $j = [IO.File]::ReadAllText($script:CollectionsPath, [Text.Encoding]::UTF8) | ConvertFrom-Json
+        foreach ($c in @($j.Collections)) {
+            if ($null -eq $c -or -not $c.Name) { continue }
+            $items = New-Object System.Collections.ArrayList
+            foreach ($it in @($c.Items)) {
+                if ($null -eq $it -or -not $it.Ids) { continue }
+                [void]$items.Add(@{ Ids = @($it.Ids | ForEach-Object { [string]$_ }); Title = [string]$it.Title; Year = [int]$it.Year })
+            }
+            $type = if ([string]$c.Type -eq 'rule') { 'rule' } else { 'manual' }
+            [void]$script:Collections.Add(@{
+                Name = [string]$c.Name; Type = $type; Items = $items; Query = [string]$c.Query; SortBy = [string]$c.SortBy
+                SortDesc = [bool]$c.SortDesc; ByDate = [bool]$c.ByDate; Limit = [int]$c.Limit; Created = [string]$c.Created; Modified = [string]$c.Modified })
+        }
+    }
+    catch { }
+}
+
+function Save-Collections {
+    try {
+        $dir = Split-Path -Parent $script:CollectionsPath
+        if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
+        $tmp = $script:CollectionsPath + '.tmp'
+        $doc = @{ Version = 1; Collections = @($script:Collections.ToArray()) }
+        [IO.File]::WriteAllText($tmp, (ConvertTo-Json -InputObject $doc -Depth 6), (New-Object Text.UTF8Encoding($false)))
+        Move-Item -LiteralPath $tmp -Destination $script:CollectionsPath -Force
+        return $true
+    }
+    catch {
+        [Windows.Forms.MessageBox]::Show("Could not save the collections:`n$_", 'Collections', 'OK', 'Error') | Out-Null
+        return $false
+    }
+}
+
+function Get-CollectionByName {
+    param([string]$Name)
+    foreach ($c in $script:Collections) { if ([string]$c.Name -ieq $Name) { return $c } }
+    $null
+}
+
+function Resolve-Collection {
+    # The ids of the records in this collection, against the scan that is on screen. Returns a HashSet.
+    param($Col)
+    $set = New-Object 'System.Collections.Generic.HashSet[string]'
+    if ($null -eq $Col -or $script:ScanResults.Count -eq 0) { return ,$set }
+    if ([string]$Col.Type -eq 'rule') {
+        $tbl = $grid.DataSource
+        if ($tbl -isnot [System.Data.DataTable]) { return ,$set }
+        try {
+            $expr = Get-FilterExpression $tbl ([string]$Col.Query)
+            $sort = ''
+            if ($Col.SortBy -and $null -ne $tbl.Columns[[string]$Col.SortBy]) { $sort = '[{0}] {1}' -f $Col.SortBy, $(if ($Col.SortDesc) { 'DESC' } else { 'ASC' }) }
+            $rows = @($tbl.Select($expr, $sort))
+            if ([int]$Col.Limit -gt 0) { $rows = @($rows | Select-Object -First ([int]$Col.Limit)) }
+            foreach ($r in $rows) { [void]$set.Add((Get-RowId $r)) }
+        }
+        catch { }
+        return ,$set
+    }
+    $want = @{}
+    foreach ($it in $Col.Items) { foreach ($k in $it.Ids) { $want[[string]$k] = $true } }
+    foreach ($r in $script:ScanResults) {
+        foreach ($k in (Get-MetaKeys $r)) { if ($want.ContainsKey($k)) { [void]$set.Add((Get-RecordId $r)); break } }
+    }
+    return ,$set
+}
+
+function Update-CollectionBar {
+    $script:CollGuard = $true
+    try {
+        $cboColl.BeginUpdate()
+        $cboColl.Items.Clear()
+        [void]$cboColl.Items.Add('All titles')
+        foreach ($c in @($script:Collections | Sort-Object { [string]$_.Name })) { [void]$cboColl.Items.Add([string]$c.Name) }
+        $i = 0
+        if ($script:ActiveCollection) { $j = $cboColl.Items.IndexOf($script:ActiveCollection); if ($j -ge 0) { $i = $j } }
+        $cboColl.SelectedIndex = $i
+        $cboColl.EndUpdate()
+    }
+    finally { $script:CollGuard = $false }
+    $col = $null
+    if ($script:ActiveCollection) { $col = Get-CollectionByName $script:ActiveCollection }
+    $btnCollEdit.Enabled = ($null -ne $col); $btnCollDel.Enabled = ($null -ne $col)
+    if ($null -eq $col) {
+        $lblCollInfo.Text = 'Create or Select a Collection'
+        return
+    }
+    $n = if ($null -ne $script:ScopeIds) { $script:ScopeIds.Count } else { 0 }
+    if ([string]$col.Type -eq 'rule') {
+        $bits = @()
+        if ($col.Query) { $bits += [string]$col.Query }
+        if ($col.SortBy) { $bits += ('sorted by {0}{1}' -f $col.SortBy, $(if ($col.SortDesc) { ' (highest first)' } else { '' })) }
+        if ([int]$col.Limit -gt 0) { $bits += ('top {0}' -f $col.Limit) }
+        if ($col.ByDate) { $bits += 'in release order' }
+        $lblCollInfo.Text = ('Rule: {0}   -   {1} title(s) in this scan' -f ($bits -join ', '), $n)
+    }
+    else { $lblCollInfo.Text = ('Hand-picked: {0} saved, {1} found in this scan{2}' -f $col.Items.Count, $n, $(if ($col.ByDate) { ', in release order' } else { '' })) }
+}
+
+function Update-CollectionScope {
+    # Re-resolves the active collection (after a scan, or after its contents changed). Does not repaint the views.
+    $script:ScopeIds = $null
+    if ($script:ActiveCollection) {
+        $col = Get-CollectionByName $script:ActiveCollection
+        if ($null -eq $col) { $script:ActiveCollection = '' }
+        else { $script:ScopeIds = Resolve-Collection $col }
+    }
+    $script:DashboardStale = $true
+    Update-CollectionBar
+}
+
+function Set-CollectionScope {
+    param([string]$Name)
+    $script:ActiveCollection = ''
+    if ($Name) { $col = Get-CollectionByName $Name; if ($null -ne $col) { $script:ActiveCollection = [string]$col.Name } }
+    Update-CollectionScope
+    Set-CollectionOrder
+    Update-Filter
+    if ($script:CurrentView -eq 'dashboard' -and $script:ScanResults.Count -gt 0) { Show-DashboardView }
+}
+
+function Get-SelectedRecords {
+    # The records behind the rows selected in the grid (nothing when no row is selected).
+    $out = New-Object System.Collections.Generic.List[object]
+    if ($grid.DataSource -isnot [System.Data.DataTable]) { return @() }
+    $byId = @{}
+    foreach ($r in $script:ScanResults) { $byId[(Get-RecordId $r)] = $r }
+    foreach ($row in @($grid.SelectedRows)) {
+        $d = $row.DataBoundItem
+        if ($null -eq $d) { continue }
+        $id = Get-RowId $d.Row
+        if ($byId.ContainsKey($id)) { $out.Add($byId[$id]) }
+    }
+    $out.ToArray()
+}
+
+function Add-RecordsToCollection {
+    # Adds titles to a hand-picked collection (skipping ones already in it). Returns how many were new.
+    param($Col, $Records)
+    $have = @{}
+    foreach ($it in $Col.Items) { foreach ($k in $it.Ids) { $have[[string]$k] = $true } }
+    $added = 0
+    foreach ($r in @($Records)) {
+        $ids = @(Get-MetaKeys $r)
+        $dup = $false
+        foreach ($k in $ids) { if ($have.ContainsKey($k)) { $dup = $true; break } }
+        if ($dup) { continue }
+        [void]$Col.Items.Add(@{ Ids = $ids; Title = [string]$r.Title; Year = [int]$r.Year })
+        foreach ($k in $ids) { $have[$k] = $true }
+        $added++
+    }
+    if ($added -gt 0) { $Col.Modified = (Get-Date).ToString('s') }
+    $added
+}
+
+function Show-AddToCollectionDialog {
+    # Returns the collection name to add to (an existing hand-picked one, or a new name), or $null.
+    param([int]$Count)
+    $dlg  = New-DialogForm 'Add to collection' 480 226
+    $head = New-Label ("Add {0} title(s) to:" -f $Count) 24 18 $script:cText $script:fontBold
+    $cbo  = New-Object Windows.Forms.ComboBox
+    $cbo.DropDownStyle = 'DropDown'; $cbo.FlatStyle = 'Flat'
+    $cbo.Location = New-Object Drawing.Point(24, 50); $cbo.Size = New-Object Drawing.Size(432, 26)
+    $cbo.BackColor = $script:cPanel2; $cbo.ForeColor = $script:cText
+    foreach ($c in @($script:Collections | Sort-Object { [string]$_.Name })) { if ([string]$c.Type -eq 'manual') { [void]$cbo.Items.Add([string]$c.Name) } }
+    if ($script:ActiveCollection) {
+        $a = Get-CollectionByName $script:ActiveCollection
+        if ($null -ne $a -and [string]$a.Type -eq 'manual') { $cbo.Text = [string]$a.Name }
+    }
+    $note = New-Object Windows.Forms.Label
+    $note.Location = New-Object Drawing.Point(24, 86); $note.Size = New-Object Drawing.Size(432, 36)
+    $note.ForeColor = $script:cMuted; $note.BackColor = [Drawing.Color]::Transparent; $note.Font = $script:fontSmall
+    $note.Text = 'Pick a hand-picked collection, or type a new name to create one. Rule collections fill themselves from their filter.'
+    $err = New-Object Windows.Forms.Label
+    $err.Location = New-Object Drawing.Point(24, 130); $err.Size = New-Object Drawing.Size(432, 20)
+    $err.ForeColor = (RGB 255 107 129); $err.BackColor = [Drawing.Color]::Transparent
+    $script:AcCbo = $cbo; $script:AcErr = $err; $script:AcDlg = $dlg; $script:AcResult = $null
+    $ok = New-FlatButton 'Add' 100 'primary'; $ok.Location = New-Object Drawing.Point(250, 172)
+    $cancel = New-FlatButton 'Cancel' 100 'secondary'; $cancel.Location = New-Object Drawing.Point(356, 172)
+    $cancel.DialogResult = [Windows.Forms.DialogResult]::Cancel
+    $dlg.AcceptButton = $ok; $dlg.CancelButton = $cancel
+    $ok.Add_Click({
+        $name = $script:AcCbo.Text.Trim()
+        if (-not $name) { $script:AcErr.Text = 'Pick a collection or type a name.'; return }
+        $ex = Get-CollectionByName $name
+        if ($null -ne $ex -and [string]$ex.Type -eq 'rule') { $script:AcErr.Text = 'That is a rule collection; it fills itself from its filter.'; return }
+        $script:AcResult = $name
+        $script:AcDlg.DialogResult = [Windows.Forms.DialogResult]::OK
+    })
+    $dlg.Controls.AddRange(@($head, $cbo, $note, $err, $ok, $cancel))
+    $res = $dlg.ShowDialog($form)
+    $dlg.Dispose()
+    if ($res -ne [Windows.Forms.DialogResult]::OK) { return $null }
+    $script:AcResult
+}
+
+function Show-CollectionEditor {
+    # New or edit. Returns @{ Name; Type; Query; SortBy; SortDesc; Limit; AddSelected } or $null.
+    param($Col = $null, [string]$DefaultQuery = '', [int]$SelectedCount = 0)
+    $isNew = ($null -eq $Col)
+    $ttl = if ($isNew) { 'New collection' } else { 'Edit collection' }
+    $dlg = New-DialogForm $ttl 540 516
+
+    $lblN = New-Label 'NAME' 24 18 $script:cMuted $script:fontSmall
+    $txtN = New-Object Windows.Forms.TextBox
+    $txtN.Location = New-Object Drawing.Point(24, 40); $txtN.Size = New-Object Drawing.Size(492, 26)
+    $txtN.BackColor = $script:cPanel2; $txtN.ForeColor = $script:cText; $txtN.BorderStyle = 'FixedSingle'; $txtN.MaxLength = 80
+
+    $lblK  = New-Label 'KIND' 24 82 $script:cMuted $script:fontSmall
+    $isRule = if ($isNew) { [bool]$DefaultQuery } else { [string]$Col.Type -eq 'rule' }
+    $rbMan  = New-FlatRadio 'Hand-picked: you add titles from the grid' 24 104 (-not $isRule)
+    $rbRule = New-FlatRadio 'Rule: a saved filter that stays up to date as the library changes' 24 130 $isRule
+
+    $lblQ = New-Label 'FILTER' 24 172 $script:cMuted $script:fontSmall
+    $txtQ = New-Object Windows.Forms.TextBox
+    $txtQ.Location = New-Object Drawing.Point(24, 194); $txtQ.Size = New-Object Drawing.Size(492, 26)
+    $txtQ.BackColor = $script:cPanel2; $txtQ.ForeColor = $script:cText; $txtQ.BorderStyle = 'FixedSingle'
+    $hq = New-Object Windows.Forms.Label
+    $hq.Location = New-Object Drawing.Point(24, 224); $hq.Size = New-Object Drawing.Size(492, 34)
+    $hq.ForeColor = $script:cMuted; $hq.BackColor = [Drawing.Color]::Transparent; $hq.Font = $script:fontSmall
+    $hq.Text = 'Same as the filter box. Examples:  genre:Horror year:1980-1989   studio:Pixar   rating:>=7.5   resolution:2160p. Leave it empty to use every title.'
+
+    $lblS = New-Label 'SORT BY' 24 268 $script:cMuted $script:fontSmall
+    $cboS = New-Object Windows.Forms.ComboBox
+    $cboS.DropDownStyle = 'DropDownList'; $cboS.FlatStyle = 'Flat'
+    $cboS.Location = New-Object Drawing.Point(24, 290); $cboS.Size = New-Object Drawing.Size(220, 26)
+    $cboS.BackColor = $script:cPanel2; $cboS.ForeColor = $script:cText
+    [void]$cboS.Items.Add('(none)')
+    [void]$cboS.Items.Add('Title')
+    foreach ($f in $script:Fields) { if ($f.Show -and ($f.Type -eq 'int' -or $f.Type -eq 'double' -or $f.Type -eq 'long') -and $cboS.Items.IndexOf($f.Name) -lt 0) { [void]$cboS.Items.Add($f.Name) } }
+    $chkDesc = New-FlatCheckBox 'Highest first' 262 292
+    $lblL = New-Label 'LIMIT (0 = ALL)' 400 268 $script:cMuted $script:fontSmall
+    $nudL = New-Object Windows.Forms.NumericUpDown
+    $nudL.Location = New-Object Drawing.Point(400, 290); $nudL.Size = New-Object Drawing.Size(116, 26)
+    $nudL.Minimum = 0; $nudL.Maximum = 5000; $nudL.Value = 0
+    $nudL.BackColor = $script:cPanel2; $nudL.ForeColor = $script:cText; $nudL.BorderStyle = 'FixedSingle'
+    $hs = New-Object Windows.Forms.Label
+    $hs.Location = New-Object Drawing.Point(24, 324); $hs.Size = New-Object Drawing.Size(492, 34)
+    $hs.ForeColor = $script:cMuted; $hs.BackColor = [Drawing.Color]::Transparent; $hs.Font = $script:fontSmall
+    $hs.Text = 'A top 10 is: sort by Rating, highest first, limit 10. A sort and limit with an empty filter ranks the whole library.'
+
+    $chkDate = New-FlatCheckBox 'By release date (oldest first)' 24 366
+    $chkAdd = New-FlatCheckBox ("Add the {0} selected title(s) now" -f $SelectedCount) 24 398 $true
+    $chkAdd.Visible = ($isNew -and $SelectedCount -gt 0)
+
+    if ($isNew) { $txtQ.Text = $DefaultQuery; $cboS.SelectedIndex = 0 }
+    else {
+        $txtN.Text = [string]$Col.Name; $txtQ.Text = [string]$Col.Query
+        $si = if ($Col.SortBy) { $cboS.Items.IndexOf([string]$Col.SortBy) } else { 0 }
+        $cboS.SelectedIndex = [math]::Max(0, $si)
+        $chkDesc.Checked = [bool]$Col.SortDesc
+        $chkDate.Checked = [bool]$Col.ByDate
+        $nudL.Value = [math]::Min(5000, [math]::Max(0, [int]$Col.Limit))
+        $rbMan.Enabled = $false; $rbRule.Enabled = $false          # the kind is fixed once it exists
+    }
+
+    Enable-FilterSuggest -TextBox $txtQ -Owner $dlg -GetTable { $grid.DataSource }
+    $script:CeRule = @($txtQ, $cboS, $chkDesc, $nudL); $script:CeRb = $rbRule; $script:CeAdd = $chkAdd
+    $apply = {
+        foreach ($c in $script:CeRule) { $c.Enabled = [bool]$script:CeRb.Checked }
+        $script:CeAdd.Enabled = -not [bool]$script:CeRb.Checked
+    }
+    $rbRule.Add_CheckedChanged($apply)
+    & $apply
+
+    $err = New-Object Windows.Forms.Label
+    $err.Location = New-Object Drawing.Point(24, 434); $err.Size = New-Object Drawing.Size(492, 20)
+    $err.ForeColor = (RGB 255 107 129); $err.BackColor = [Drawing.Color]::Transparent
+    $okText = if ($isNew) { 'Create' } else { 'Save' }
+    $ok = New-FlatButton $okText 100 'primary'; $ok.Location = New-Object Drawing.Point(310, 466)
+    $cancel = New-FlatButton 'Cancel' 100 'secondary'; $cancel.Location = New-Object Drawing.Point(416, 466)
+    $cancel.DialogResult = [Windows.Forms.DialogResult]::Cancel
+    $dlg.AcceptButton = $ok; $dlg.CancelButton = $cancel
+
+    $script:CeDlg = $dlg; $script:CeErr = $err; $script:CeName = $txtN; $script:CeQ = $txtQ; $script:CeSort = $cboS; $script:CeDesc = $chkDesc; $script:CeLimit = $nudL
+    $script:CeCol = $Col; $script:CeResult = $null; $script:CeDate = $chkDate
+    $ok.Add_Click({
+        $name = $script:CeName.Text.Trim()
+        if (-not $name) { $script:CeErr.Text = 'Give the collection a name.'; return }
+        $ex = Get-CollectionByName $name
+        if ($null -ne $ex -and -not [object]::ReferenceEquals($ex, $script:CeCol)) { $script:CeErr.Text = 'A collection with that name already exists.'; return }
+        $kind = if ($script:CeRb.Checked) { 'rule' } else { 'manual' }
+        $q = $script:CeQ.Text.Trim()
+        $s = if ($script:CeSort.SelectedIndex -gt 0) { [string]$script:CeSort.SelectedItem } else { '' }
+        $lim = [int]$script:CeLimit.Value
+        if ($kind -eq 'rule' -and -not $q -and -not $s -and $lim -le 0) { $script:CeErr.Text = 'A rule needs a filter, or a sort and a limit.'; return }
+        $script:CeResult = @{ Name = $name; Type = $kind; Query = $(if ($kind -eq 'rule') { $q } else { '' }); SortBy = $(if ($kind -eq 'rule') { $s } else { '' })
+                              SortDesc = [bool]($kind -eq 'rule' -and $script:CeDesc.Checked); ByDate = [bool]$script:CeDate.Checked; Limit = $(if ($kind -eq 'rule') { $lim } else { 0 }); AddSelected = [bool]$script:CeAdd.Checked }
+        $script:CeDlg.DialogResult = [Windows.Forms.DialogResult]::OK
+    })
+    $dlg.Controls.AddRange(@($lblN, $txtN, $lblK, $rbMan, $rbRule, $lblQ, $txtQ, $hq, $lblS, $cboS, $chkDesc, $lblL, $nudL, $hs, $chkDate, $chkAdd, $err, $ok, $cancel))
+    $res = $dlg.ShowDialog($form)
+    $dlg.Dispose()
+    if ($res -ne [Windows.Forms.DialogResult]::OK) { return $null }
+    $script:CeResult
+}
+
+function New-CollectionFromUi {
+    if ($script:ScanResults.Count -eq 0) { return }
+    $sel = @(Get-SelectedRecords)
+    $res = Show-CollectionEditor -Col $null -DefaultQuery $txtFilter.Text.Trim() -SelectedCount $sel.Count
+    if ($null -eq $res) { return }
+    $now = (Get-Date).ToString('s')
+    $col = @{ Name = $res.Name; Type = $res.Type; Items = (New-Object System.Collections.ArrayList); Query = $res.Query; SortBy = $res.SortBy
+              SortDesc = $res.SortDesc; ByDate = $res.ByDate; Limit = $res.Limit; Created = $now; Modified = $now }
+    $added = 0
+    if ($res.Type -eq 'manual' -and $res.AddSelected) { $added = Add-RecordsToCollection $col $sel }
+    [void]$script:Collections.Add($col)
+    [void](Save-Collections)
+    Set-CollectionScope $col.Name
+    $lblStatus.Text = if ($res.Type -eq 'manual') { 'Created "{0}" with {1} title(s). Select titles and use Add selected to fill it.' -f $col.Name, $added } else { 'Created the rule collection "{0}".' -f $col.Name }
+}
+
+function Edit-ActiveCollection {
+    $col = $null
+    if ($script:ActiveCollection) { $col = Get-CollectionByName $script:ActiveCollection }
+    if ($null -eq $col) { return }
+    $res = Show-CollectionEditor -Col $col
+    if ($null -eq $res) { return }
+    $col.Name = $res.Name
+    if ([string]$col.Type -eq 'rule') { $col.Query = $res.Query; $col.SortBy = $res.SortBy; $col.SortDesc = $res.SortDesc; $col.Limit = $res.Limit }
+    $col.ByDate = $res.ByDate
+    $col.Modified = (Get-Date).ToString('s')
+    [void](Save-Collections)
+    Set-CollectionScope $col.Name
+    $lblStatus.Text = 'Saved "{0}".' -f $col.Name
+}
+
+function Remove-ActiveCollection {
+    $col = $null
+    if ($script:ActiveCollection) { $col = Get-CollectionByName $script:ActiveCollection }
+    if ($null -eq $col) { return }
+    $ans = [Windows.Forms.MessageBox]::Show(('Delete the collection "{0}"?' -f $col.Name) + "`n`nYour titles and files are not affected; only this saved list is removed.", 'Delete collection', 'YesNo', 'Question')
+    if ($ans -ne [Windows.Forms.DialogResult]::Yes) { return }
+    $name = [string]$col.Name
+    $script:Collections.Remove($col)
+    [void](Save-Collections)
+    Set-CollectionScope ''
+    $lblStatus.Text = 'Deleted "{0}".' -f $name
+}
+
+function Add-SelectedToCollection {
+    if ($script:ScanResults.Count -eq 0) { return }
+    $recs = @(Get-SelectedRecords)
+    if ($recs.Count -eq 0) {
+        [Windows.Forms.MessageBox]::Show('Select one or more titles in the grid first (Ctrl-click or Shift-click to pick several), then click Add selected.', 'Add to collection', 'OK', 'Information') | Out-Null; return
+    }
+    $name = Show-AddToCollectionDialog -Count $recs.Count
+    if (-not $name) { return }
+    $col = Get-CollectionByName $name
+    if ($null -eq $col) {
+        $now = (Get-Date).ToString('s')
+        $col = @{ Name = $name; Type = 'manual'; Items = (New-Object System.Collections.ArrayList); Query = ''; SortBy = ''; SortDesc = $false; ByDate = $false; Limit = 0; Created = $now; Modified = $now }
+        [void]$script:Collections.Add($col)
+    }
+    $added = Add-RecordsToCollection $col $recs
+    [void](Save-Collections)
+    if ($script:ActiveCollection -ieq [string]$col.Name) { Set-CollectionScope $col.Name } else { Update-CollectionBar }
+    $lblStatus.Text = 'Added {0} title(s) to "{1}"{2}.' -f $added, $col.Name, $(if ($added -lt $recs.Count) { " ($($recs.Count - $added) already in it)" } else { '' })
+}
+
+function Remove-SelectedFromCollection {
+    $col = $null
+    if ($script:ActiveCollection) { $col = Get-CollectionByName $script:ActiveCollection }
+    if ($null -eq $col -or [string]$col.Type -ne 'manual') { return }
+    $recs = @(Get-SelectedRecords)
+    if ($recs.Count -eq 0) { return }
+    $drop = @{}
+    foreach ($r in $recs) { foreach ($k in (Get-MetaKeys $r)) { $drop[$k] = $true } }
+    $removed = 0
+    for ($i = $col.Items.Count - 1; $i -ge 0; $i--) {
+        $hit = $false
+        foreach ($k in $col.Items[$i].Ids) { if ($drop.ContainsKey([string]$k)) { $hit = $true; break } }
+        if ($hit) { $col.Items.RemoveAt($i); $removed++ }
+    }
+    if ($removed -gt 0) { $col.Modified = (Get-Date).ToString('s'); [void](Save-Collections) }
+    Set-CollectionScope $col.Name
+    $lblStatus.Text = 'Removed {0} title(s) from "{1}".' -f $removed, $col.Name
+}
+
+$cboColl.Add_SelectedIndexChanged({
+    if ($script:CollGuard) { return }
+    if ($cboColl.SelectedIndex -le 0) { Set-CollectionScope '' } else { Set-CollectionScope ([string]$cboColl.SelectedItem) }
+})
+$btnCollNew.Add_Click({ New-CollectionFromUi })
+$btnCollEdit.Add_Click({ Edit-ActiveCollection })
+$btnCollDel.Add_Click({ Remove-ActiveCollection })
+$btnCollAdd.Add_Click({ Add-SelectedToCollection })
+$tip.SetToolTip($btnCollNew, "Make a collection: a hand-picked list, or a rule such as  genre:Horror year:1980-1989.`nIf the filter box has text, it is offered as the rule.")
+$tip.SetToolTip($btnCollAdd, "Add the titles selected in the grid to a hand-picked collection (or start a new one).")
+$tip.SetToolTip($cboColl, "Show only the titles in a collection - in the grid, detail view, dashboard and exports.")
+
+Import-Collections
+Update-CollectionBar
+#endregion
+
+#region ---------------------------------------------------------------- Filter suggestions (drop-down while typing field:value terms)
+# Works for the main filter box and the collection editor. Suggests field names, then the values that really exist in the library
+# (with counts), and for number fields ranges and comparisons. Keys: Down / Up pick, Enter or Tab accept, Esc closes; or click.
+$script:SugCache      = @{ Table = $null; Cols = @{} }
+$script:SugSkipValues = @('Title', 'Plot', 'Tagline', 'FileName', 'FullPath', 'Directory', 'MetaSources', 'SourceWhy', 'PosterPath', 'InformFile')
+
+function Get-FilterFieldNames {
+    # The columns the filter box understands: text and number columns (not the technical "clue" columns).
+    param($Table)
+    foreach ($f in $script:Fields) {
+        if ($f.Group -eq 'Clues') { continue }
+        $col = $Table.Columns[$f.Name]
+        if ($null -eq $col) { continue }
+        if ($col.DataType -eq [string]) { [pscustomobject]@{ Name = $f.Name; Kind = 'text' } }
+        elseif ($col.DataType -eq [int] -or $col.DataType -eq [double] -or $col.DataType -eq [long]) { [pscustomobject]@{ Name = $f.Name; Kind = 'number' } }
+    }
+}
+
+function Get-ColumnStats {
+    # Distinct values with counts (text; lists such as genres are split on ';') or the sorted non-zero numbers. Cached per table.
+    param($Table, [string]$Name)
+    if (-not [object]::ReferenceEquals($script:SugCache.Table, $Table)) { $script:SugCache = @{ Table = $Table; Cols = @{} } }
+    if ($script:SugCache.Cols.ContainsKey($Name)) { return $script:SugCache.Cols[$Name] }
+    $col = $Table.Columns[$Name]
+    $st = @{ Kind = ''; Counts = $null; Nums = $null }
+    if ($null -ne $col) {
+        if ($col.DataType -eq [string]) {
+            $st.Kind = 'text'
+            $d = New-Object 'System.Collections.Generic.Dictionary[string,int]' ([StringComparer]::OrdinalIgnoreCase)
+            if ($script:SugSkipValues -notcontains $Name) {
+                foreach ($row in $Table.Rows) {
+                    $raw = $row[$Name]
+                    if ($raw -is [DBNull] -or $null -eq $raw) { continue }
+                    foreach ($p in ([string]$raw -split ';')) {
+                        $t = $p.Trim()
+                        if ($t) { if ($d.ContainsKey($t)) { $d[$t] = $d[$t] + 1 } else { $d[$t] = 1 } }
+                    }
+                }
+            }
+            $st.Counts = $d
+        }
+        else {
+            $st.Kind = 'number'
+            $l = New-Object 'System.Collections.Generic.List[double]'
+            foreach ($row in $Table.Rows) {
+                $raw = $row[$Name]
+                if ($raw -is [DBNull] -or $null -eq $raw) { continue }
+                $x = [double]$raw
+                if ($x -gt 0) { $l.Add($x) }
+            }
+            $l.Sort()
+            $st.Nums = $l
+        }
+    }
+    $script:SugCache.Cols[$Name] = $st
+    $st
+}
+
+function Get-NumberSuggestions {
+    param([string]$Name, $Nums, [string]$Typed)
+    $out = New-Object System.Collections.Generic.List[object]
+    if ($null -eq $Nums -or $Nums.Count -eq 0) { return @() }
+    $ci  = [Globalization.CultureInfo]::InvariantCulture
+    $fmt = { param($x) ([double]$x).ToString('0.##', $ci) }
+    $min = $Nums[0]; $max = $Nums[$Nums.Count - 1]
+    if ($Name -eq 'Year') {
+        $dec = @{}
+        foreach ($y in $Nums) { $dd = [int]([math]::Floor($y / 10) * 10); $dec[$dd] = 1 + [int]$dec[$dd] }
+        foreach ($dd in @($dec.Keys | Sort-Object)) {
+            $out.Add(@{ Label = ('{0}-{1}   ({2})' -f $dd, ($dd + 9), $dec[$dd]); Text = ('{0}-{1}' -f $dd, ($dd + 9)) })
+        }
+    }
+    else {
+        $q1 = $Nums[[int][math]::Floor(($Nums.Count - 1) * 0.25)]
+        $q3 = $Nums[[int][math]::Floor(($Nums.Count - 1) * 0.75)]
+        $out.Add(@{ Label = ('>={0}   (top quarter)' -f (& $fmt $q3)); Text = ('>=' + (& $fmt $q3)) })
+        $out.Add(@{ Label = ('<={0}   (bottom quarter)' -f (& $fmt $q1)); Text = ('<=' + (& $fmt $q1)) })
+        $out.Add(@{ Label = ('{0}-{1}   (whole range)' -f (& $fmt $min), (& $fmt $max)); Text = ('{0}-{1}' -f (& $fmt $min), (& $fmt $max)) })
+    }
+    if ($Typed) { return @($out | Where-Object { ([string]$_.Text).StartsWith($Typed, [StringComparison]::OrdinalIgnoreCase) }) }
+    @($out.ToArray())
+}
+
+function Get-FilterSuggestions {
+    # -> @{ Start = index in $Text that an accepted item replaces from; Items = @(@{ Label; Text }) }, or $null for no suggestions.
+    param($Table, [string]$Text)
+    if ($Table -isnot [System.Data.DataTable]) { return $null }
+    $fields = @(Get-FilterFieldNames $Table)
+    if ($fields.Count -eq 0) { return $null }
+
+    $fieldItems = {
+        param([string]$Word)
+        $r = New-Object System.Collections.Generic.List[object]
+        foreach ($f in $fields) {
+            if ($Word -eq '' -or $f.Name.StartsWith($Word, [StringComparison]::OrdinalIgnoreCase)) {
+                $r.Add(@{ Label = ('{0}:   {1}' -f $f.Name, $f.Kind); Text = ($f.Name + ':') })
+            }
+        }
+        , $r
+    }
+
+    $lw   = $Text.LastIndexOfAny([char[]]@(' ', "`t")) + 1
+    $word = $Text.Substring($lw)
+    $ms   = [regex]::Matches($Text, '(?:^|\s)([A-Za-z]\w*)\s*:')
+
+    if ($ms.Count -eq 0) {
+        if ($word -notmatch '^\w+$') { return $null }
+        $items = & $fieldItems $word
+        if ($items.Count -eq 0) { return $null }
+        return @{ Start = $lw; Items = @($items.ToArray()) }
+    }
+
+    $m     = $ms[$ms.Count - 1]
+    $field = $m.Groups[1].Value
+    $stat  = Get-ColumnStats $Table $field
+    if ($stat.Kind -eq '') { return $null }
+    $vs = $m.Index + $m.Length
+    while ($vs -lt $Text.Length -and [char]::IsWhiteSpace($Text[$vs])) { $vs++ }
+    $typed = $Text.Substring($vs)
+
+    # "genre:Horror " (a space after a finished value): offer the next field
+    if ($typed.Trim() -ne '' -and [char]::IsWhiteSpace($typed[$typed.Length - 1])) {
+        $items = & $fieldItems ''
+        return @{ Start = $Text.Length; Items = @($items.ToArray()) }
+    }
+
+    $items = New-Object System.Collections.Generic.List[object]
+    if ($stat.Kind -eq 'text') {
+        $rows = foreach ($kv in $stat.Counts.GetEnumerator()) {
+            if ($typed -eq '' -or $kv.Key.IndexOf($typed, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                $sw = 1; if ($typed -ne '' -and $kv.Key.StartsWith($typed, [StringComparison]::OrdinalIgnoreCase)) { $sw = 0 }
+                [pscustomobject]@{ Key = [string]$kv.Key; N = [int]$kv.Value; S = $sw }
+            }
+        }
+        $rows = @($rows | Sort-Object @{ Expression = 'S'; Descending = $false }, @{ Expression = 'N'; Descending = $true }, @{ Expression = 'Key'; Descending = $false } | Select-Object -First 12)
+        foreach ($r in $rows) { $items.Add(@{ Label = ('{0}   ({1})' -f $r.Key, $r.N); Text = $r.Key }) }
+    }
+    else {
+        foreach ($x in @(Get-NumberSuggestions $field $stat.Nums $typed)) { $items.Add($x) }
+    }
+
+    # nothing fits the value, but the last word may be the start of another field ("genre:Horror ye" -> year:)
+    if ($items.Count -eq 0 -and $lw -gt $vs -and $word -match '^\w+$') {
+        $fi = & $fieldItems $word
+        if ($fi.Count -gt 0) { return @{ Start = $lw; Items = @($fi.ToArray()) } }
+    }
+    if ($items.Count -eq 0) { return $null }
+    if ($items.Count -eq 1 -and ([string]$items[0].Text) -ieq $typed.Trim()) { return $null }       # already typed in full
+    @{ Start = $vs; Items = @($items.ToArray()) }
+}
+
+function Hide-FilterSuggest {
+    param($Tb)
+    $st = $Tb.Tag
+    if ($null -eq $st -or $null -eq $st.LB) { return }
+    $st.LB.Visible = $false
+    $f = $Tb.FindForm()
+    if ($null -ne $f -and $st.Locked) { $f.AcceptButton = $st.SavedAccept; $f.CancelButton = $st.SavedCancel }
+    $st.Locked = $false; $st.SavedAccept = $null; $st.SavedCancel = $null
+}
+
+function Show-FilterSuggest {
+    param($Tb, $Sug)
+    $st = $Tb.Tag; $lb = $st.LB
+    $st.Items = @($Sug.Items); $st.Start = [int]$Sug.Start
+    $lb.BeginUpdate()
+    $lb.Items.Clear()
+    foreach ($it in $st.Items) { [void]$lb.Items.Add([string]$it.Label) }
+    $lb.EndUpdate()
+    $lb.Width  = [math]::Max($Tb.Width, 300)
+    $lb.Height = ([math]::Min(10, $lb.Items.Count) * $lb.ItemHeight) + 6
+    $lb.Location = $st.Owner.PointToClient($Tb.Parent.PointToScreen((New-Object Drawing.Point($Tb.Left, ($Tb.Bottom + 1)))))
+    $lb.SelectedIndex = -1
+    if (-not $lb.Visible) {
+        # while the list is open, Enter and Esc belong to the list rather than to the dialog's default buttons
+        $f = $Tb.FindForm()
+        if ($null -ne $f -and -not $st.Locked) { $st.SavedAccept = $f.AcceptButton; $st.SavedCancel = $f.CancelButton; $f.AcceptButton = $null; $f.CancelButton = $null; $st.Locked = $true }
+        $lb.Visible = $true
+    }
+    $lb.BringToFront()
+}
+
+function Update-FilterSuggest {
+    param($Tb)
+    $st = $Tb.Tag
+    if ($null -eq $st -or $st.Busy) { return }
+    if (-not $Tb.Focused -or $Tb.Text.Trim().Length -eq 0) { Hide-FilterSuggest $Tb; return }
+    $sug = $null
+    try { $sug = Get-FilterSuggestions (& $st.GetTable) $Tb.Text } catch { $sug = $null }
+    if ($null -eq $sug -or @($sug.Items).Count -eq 0) { Hide-FilterSuggest $Tb; return }
+    Show-FilterSuggest $Tb $sug
+}
+
+function Complete-FilterSuggest {
+    param($Tb, [int]$Index)
+    $st = $Tb.Tag
+    if ($Index -lt 0 -or $Index -ge @($st.Items).Count) { return }
+    $it = $st.Items[$Index]
+    $st.Busy = $true
+    try {
+        $keep = $Tb.Text.Substring(0, [math]::Min([int]$st.Start, $Tb.Text.Length))
+        $Tb.Text = $keep + [string]$it.Text
+        $Tb.SelectionStart = $Tb.Text.Length; $Tb.SelectionLength = 0
+    }
+    finally { $st.Busy = $false }
+    Hide-FilterSuggest $Tb
+    $Tb.Focus()
+    if (([string]$it.Text).EndsWith(':')) { Update-FilterSuggest $Tb }           # picked a field: go straight on to its values
+}
+
+function Enable-FilterSuggest {
+    # Adds the drop-down to a text box. $Owner is the form or dialog that hosts the list; $GetTable returns the DataTable to learn values from.
+    param($TextBox, $Owner, [scriptblock]$GetTable)
+    $lb = New-Object Windows.Forms.ListBox
+    $lb.BorderStyle = 'FixedSingle'; $lb.IntegralHeight = $false; $lb.TabStop = $false; $lb.Visible = $false
+    $lb.BackColor = $script:cPanel2; $lb.ForeColor = $script:cText; $lb.Font = $script:fontBase
+    $lb.Tag = $TextBox
+    $TextBox.Tag = @{ LB = $lb; Items = @(); Start = 0; GetTable = $GetTable; Owner = $Owner; Busy = $false; Locked = $false; SavedAccept = $null; SavedCancel = $null }
+    $Owner.Controls.Add($lb)
+
+    $TextBox.Add_TextChanged({ param($s, $e) Update-FilterSuggest $s })
+    $TextBox.Add_PreviewKeyDown({
+        param($s, $e)
+        if ($e.KeyCode -eq [Windows.Forms.Keys]::Tab -and $s.Tag.LB.Visible) { $e.IsInputKey = $true }
+    })
+    $TextBox.Add_KeyDown({
+        param($s, $e)
+        $st = $s.Tag; $lb2 = $st.LB
+        if (-not $lb2.Visible) {
+            if ($e.KeyCode -eq [Windows.Forms.Keys]::Down -and $s.Text.Trim().Length -gt 0) {
+                Update-FilterSuggest $s
+                if ($lb2.Visible) { $lb2.SelectedIndex = 0; $e.Handled = $true; $e.SuppressKeyPress = $true }
+            }
+            return
+        }
+        switch ($e.KeyCode) {
+            'Down'   { if ($lb2.SelectedIndex -lt ($lb2.Items.Count - 1)) { $lb2.SelectedIndex = $lb2.SelectedIndex + 1 }; $e.Handled = $true; $e.SuppressKeyPress = $true }
+            'Up'     { if ($lb2.SelectedIndex -gt 0) { $lb2.SelectedIndex = $lb2.SelectedIndex - 1 } else { $lb2.SelectedIndex = -1 }; $e.Handled = $true; $e.SuppressKeyPress = $true }
+            'Tab'    { $i = $lb2.SelectedIndex; if ($i -lt 0) { $i = 0 }; Complete-FilterSuggest $s $i; $e.Handled = $true; $e.SuppressKeyPress = $true }
+            'Return' {
+                if ($lb2.SelectedIndex -ge 0) { Complete-FilterSuggest $s $lb2.SelectedIndex; $e.Handled = $true; $e.SuppressKeyPress = $true }
+                else { Hide-FilterSuggest $s }
+            }
+            'Escape' { Hide-FilterSuggest $s; $e.Handled = $true; $e.SuppressKeyPress = $true }
+        }
+    })
+    $TextBox.Add_Leave({
+        param($s, $e)
+        $st = $s.Tag
+        if ($null -eq $st -or -not $st.LB.Visible) { return }
+        $r = $st.LB.RectangleToScreen($st.LB.ClientRectangle)
+        if (-not $r.Contains([Windows.Forms.Cursor]::Position)) { Hide-FilterSuggest $s }          # a click on the list itself keeps it open
+    })
+    $lb.Add_MouseClick({
+        param($s, $e)
+        $i = $s.IndexFromPoint($e.Location)
+        if ($i -ge 0) { Complete-FilterSuggest $s.Tag $i }
+    })
+    $lb.Add_Leave({
+        param($s, $e)
+        if (-not $s.Tag.Focused) { Hide-FilterSuggest $s.Tag }
+    })
+}
+#endregion
+
+Enable-FilterSuggest -TextBox $txtFilter -Owner $form -GetTable { $grid.DataSource }
+
+# right-click a row for the same editor (and to add titles to a collection)
 $gridMenu = New-Object Windows.Forms.ContextMenuStrip
 $miEdit = $gridMenu.Items.Add('Edit info...')
 $miEdit.Add_Click({ Edit-SelectedMetadata })
+$miAddColl = $gridMenu.Items.Add('Add to collection...')
+$miAddColl.Add_Click({ Add-SelectedToCollection })
+$miRemColl = $gridMenu.Items.Add('Remove from this collection')
+$miRemColl.Add_Click({ Remove-SelectedFromCollection })
+$gridMenu.Add_Opening({
+    $c = $null
+    if ($script:ActiveCollection) { $c = Get-CollectionByName $script:ActiveCollection }
+    $miRemColl.Visible = ($null -ne $c -and [string]$c.Type -eq 'manual')
+})
 $grid.Add_CellMouseDown({
     param($s, $e)
     if ($e.Button -eq [Windows.Forms.MouseButtons]::Right -and $e.RowIndex -ge 0) {
-        $grid.ClearSelection(); $grid.Rows[$e.RowIndex].Selected = $true; $grid.CurrentCell = $grid.Rows[$e.RowIndex].Cells[$e.ColumnIndex]
+        if (-not $grid.Rows[$e.RowIndex].Selected) {      # keep a multi-row selection when right-clicking inside it
+            $grid.ClearSelection(); $grid.Rows[$e.RowIndex].Selected = $true; $grid.CurrentCell = $grid.Rows[$e.RowIndex].Cells[$e.ColumnIndex]
+        }
         $gridMenu.Show($grid, $grid.PointToClient([Windows.Forms.Cursor]::Position))
     }
 })
@@ -3706,7 +4528,7 @@ $btnExport.Add_Click({
     if ($dlg.ShowDialog($form) -ne [Windows.Forms.DialogResult]::OK) { return }
     try {
         $view = if ($grid.DataSource -is [System.Data.DataTable]) { $grid.DataSource.DefaultView } else { $null }
-        if ($view -and $txtFilter.Text.Trim() -and $view.Count -ne $script:ScanResults.Count) {
+        if ($view -and ($txtFilter.Text.Trim() -or $null -ne $script:ScopeIds) -and $view.Count -ne $script:ScanResults.Count) {
             # a filter is active: export exactly the rows currently shown
             $names = @($grid.DataSource.Columns | ForEach-Object { $_.ColumnName })
             $out = foreach ($drv in $view) {
@@ -3735,6 +4557,7 @@ $btnExport.Add_Click({
 })
 
 function Get-LibraryName {
+    if ($script:ActiveCollection) { return $script:ActiveCollection }
     if ($radPlex.Checked) { return 'Plex Library' }
     $n = Split-Path -Leaf ($txtFolder.Text.Trim().TrimEnd('\'))
     if ($n) { $n } else { 'Media Library' }
@@ -3743,6 +4566,10 @@ function Get-LibraryName {
 function Test-DashboardReady {
     if ($script:ScanResults.Count -eq 0) {
         [Windows.Forms.MessageBox]::Show('Run a scan first - the dashboard is built from the scan results.', 'Dashboard', 'OK', 'Information') | Out-Null
+        return $false
+    }
+    if ($null -ne $script:ScopeIds -and $script:ScopeIds.Count -eq 0) {
+        [Windows.Forms.MessageBox]::Show("The collection '$($script:ActiveCollection)' has no titles in this scan yet.`n`nAdd titles to it, change its rule, or pick 'All titles'.", 'Dashboard', 'OK', 'Information') | Out-Null
         return $false
     }
     if (-not (Test-Path -LiteralPath $script:TemplatePath)) {
@@ -3760,7 +4587,7 @@ function Show-DashboardView {
     $btnDash.Enabled = $false; $btnScan.Enabled = $false; $btnSaveHtml.Enabled = $false
     try {
         if ($script:DashboardStale -or -not (Test-Path -LiteralPath $script:LiveDashboard)) {
-            New-MediaDashboard -Records $script:ScanResults -OutFile $script:LiveDashboard -LibraryName (Get-LibraryName)
+            New-MediaDashboard -Records @(Get-ScopedRecords) -OutFile $script:LiveDashboard -LibraryName (Get-LibraryName) -CollectionName ([string]$script:ActiveCollection) -DateOrder:(Test-ActiveByDate)
             $script:DashboardStale = $false
         }
         $url = ([Uri]$script:LiveDashboard).AbsoluteUri + '?t=' + [DateTime]::Now.Ticks
@@ -3792,12 +4619,13 @@ $btnSaveHtml.Add_Click({
     if (-not (Test-DashboardReady)) { return }
     $dlg = New-Object Windows.Forms.SaveFileDialog
     $dlg.Filter = 'HTML dashboard (*.html)|*.html'; $dlg.FileName = 'MediaDashboard.html'
+    if ($script:ActiveCollection) { $dlg.FileName = (([string]$script:ActiveCollection) -replace '[\\/:*?"<>|]', '_') + '.html' }
     $dlg.InitialDirectory = [Environment]::GetFolderPath('MyDocuments')
     if ($dlg.ShowDialog($form) -ne [Windows.Forms.DialogResult]::OK) { return }
 
     $btnDash.Enabled = $false; $btnScan.Enabled = $false; $btnSaveHtml.Enabled = $false
     try {
-        New-MediaDashboard -Records $script:ScanResults -OutFile $dlg.FileName -LibraryName (Get-LibraryName) -EmbedPosters:$chkEmbed.Checked
+        New-MediaDashboard -Records @(Get-ScopedRecords) -OutFile $dlg.FileName -LibraryName (Get-LibraryName) -CollectionName ([string]$script:ActiveCollection) -DateOrder:(Test-ActiveByDate) -EmbedPosters:$chkEmbed.Checked
         Set-UiProgress -Text "Dashboard saved: $($dlg.FileName)" -Value 1 -Max 1
         Start-Process $dlg.FileName
     }
@@ -3920,6 +4748,7 @@ function Complete-Scan {
             $table = ConvertTo-DataTable -Records $results
             $grid.DataSource = $table
             Set-GridColumnLayout     # remembered visibility/widths; brand-new fields fall back to their default
+            try { Update-CollectionScope; $script:OrderApplied = $false; Set-CollectionOrder } catch { }          # the active collection is re-evaluated against this scan
             $grid.ClearSelection()
             Update-Filter
         }
@@ -3978,11 +4807,11 @@ $form.Add_Shown({
     # (Form.CenterToScreen is a protected method and cannot be called from PowerShell - centre by hand.)
     $wa = [Windows.Forms.Screen]::PrimaryScreen.WorkingArea
     $sw = [int]$script:Settings['ClientWidth']; $sh = [int]$script:Settings['ClientHeight']
-    if ($sw -ge 1100 -and $sh -ge 600) {
-        $form.ClientSize = New-Object Drawing.Size($sw, $sh)
-        if ($form.Width -gt $wa.Width -or $form.Height -gt $wa.Height) {
-            $form.ClientSize = New-Object Drawing.Size(1280, 780)       # saved size no longer fits this screen
-        }
+    if ($sw -lt 1100 -or $sh -lt 600) { $sw = 1600; $sh = 975 }           # first start: 25 % larger than the original 1280 x 780
+    $form.ClientSize = New-Object Drawing.Size($sw, $sh)
+    if ($form.Width -gt $wa.Width -or $form.Height -gt $wa.Height) {          # does not fit this screen: shrink to what does
+        $padW = $form.Width - $form.ClientSize.Width; $padH = $form.Height - $form.ClientSize.Height
+        $form.ClientSize = New-Object Drawing.Size([math]::Max(1200 - $padW, [math]::Min($sw, $wa.Width - $padW)), [math]::Max(680 - $padH, [math]::Min($sh, $wa.Height - $padH)))
     }
     $x = $wa.X + [int](($wa.Width  - $form.Width)  / 2)
     $y = $wa.Y + [int](($wa.Height - $form.Height) / 2)

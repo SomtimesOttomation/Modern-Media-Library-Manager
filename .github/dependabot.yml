@@ -1,7 +1,11 @@
-# Keeps the commit-SHA pins in the workflows current: opens a pull request when a newer version of an action is released.
+# Keeps the commit-SHA pins in the workflows current: opens a pull request when a newer minor or patch version of an action is released.
+# Big (major) version jumps are skipped on purpose; they can change how an action behaves, so they are updated by hand after a test release.
 version: 2
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "monthly"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]

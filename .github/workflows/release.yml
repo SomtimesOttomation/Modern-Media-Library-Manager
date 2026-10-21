@@ -79,8 +79,14 @@ jobs:
         run: |
           set -euo pipefail
           SHA="$(sha256sum "$ZIP" | cut -d' ' -f1)"
+          # If you already created the release in the GitHub web page, keep what you wrote there; otherwise use the tag message.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            EXISTING="$(gh release view "$GITHUB_REF_NAME" --json body --jq .body)"
+          else
+            EXISTING="$(git for-each-ref --format='%(contents)' "refs/tags/${GITHUB_REF_NAME}")"
+          fi
           {
-            git for-each-ref --format='%(contents)' "refs/tags/${GITHUB_REF_NAME}"
+            printf '%s\n' "$EXISTING"
             echo
             echo "## Verify this download"
             echo
@@ -97,4 +103,9 @@ jobs:
             echo
             echo "The script is not code-signed. See the README sections \"Verify your download\" and \"Network activity\"."
           } > dist/notes.md
-          gh release create "$GITHUB_REF_NAME" "$ZIP" dist/SHA256SUMS.txt --title "$GITHUB_REF_NAME" --notes-file dist/notes.md
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$ZIP" dist/SHA256SUMS.txt --clobber
+            gh release edit "$GITHUB_REF_NAME" --notes-file dist/notes.md
+          else
+            gh release create "$GITHUB_REF_NAME" "$ZIP" dist/SHA256SUMS.txt --title "$GITHUB_REF_NAME" --notes-file dist/notes.md
+          fi

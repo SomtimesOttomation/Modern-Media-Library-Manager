@@ -1628,6 +1628,65 @@ function Get-ImdbRatingMap {
     $map
 }
 
+function Add-FetchDetail {
+    # Remembers why one title did not get fetched, for the "Details" link in the status bar.
+    param($Rec, [string]$Kind, [string]$Reason)
+    if ($null -eq $script:Sync.Details) { return }
+    $yr = if ([int]$Rec.Year -gt 0) { ' (' + [int]$Rec.Year + ')' } else { '' }
+    [void]$script:Sync.Details.Add(('{0}{1}  [{2}]{3}    {4}' -f [string]$Rec.Title, $yr, $Kind, "`
+`
+", $Reason))
+}
+
+function Get-TitleKey {
+    # Normalises a title for comparing: lower case, accents and punctuation gone, "&" = "and", leading "the" and a trailing "(year)" dropped.
+    param([string]$Title)
+    $t = ([string]$Title).Normalize([Text.NormalizationForm]::FormD)
+    $t = [regex]::Replace($t, '\p{Mn}', '')
+    $t = $t.ToLowerInvariant() -replace '\s*\(\d{4}\)\s*$', '' -replace '&', ' and '
+    $t = ($t -replace "[^a-z0-9 ]", ' ') -replace '\s+', ' '
+    $t = $t.Trim() -replace '^(the|a|an) ', ''
+    return $t
+}
+
+function Find-TmdbMovieId {
+    # Looks a movie up by title (and year) when no ID is known. Tries the exact year, then a looser search, and scores the candidates
+    # so a well-known title is not lost to a year that is off by one or a title with different punctuation.
+    param([string]$Title, [int]$Year, [string]$KeyQuery, [hashtable]$Headers)
+    $want = Get-TitleKey $Title
+    if (-not $want) { return '' }
+    $plain = ([string]$Title) -replace '\s*\(\d{4}\)\s*$', ''
+    $queries = New-Object System.Collections.Generic.List[string]
+    $base = 'https://api.themoviedb.org/3/search/movie?query=' + [Uri]::EscapeDataString($plain) + '&include_adult=false'
+    if ($Year -gt 0) { $queries.Add($base + '&year=' + $Year) }
+    $queries.Add($base)
+    if ($plain -match '^(.+?)\s*[:\-]\s+.+$') { $queries.Add('https://api.themoviedb.org/3/search/movie?query=' + [Uri]::EscapeDataString($Matches[1]) + '&include_adult=false') }
+    $best = $null; $bestScore = 0
+    foreach ($qq in $queries) {
+        $f = Invoke-JsonGet -Url ($qq + $KeyQuery) -Headers $Headers
+        Start-Sleep -Milliseconds 250
+        if (-not $f) { continue }
+        foreach ($h in @($f.results)) {
+            $score = 0
+            $names = @((Get-TitleKey ([string]$h.title)), (Get-TitleKey ([string]$h.original_title)))
+            if ($names -contains $want) { $score += 100 }
+            elseif ($names | Where-Object { $_ -and ($_.StartsWith($want) -or $want.StartsWith($_)) }) { $score += 40 }
+            else { continue }
+            $hy = 0
+            if ($h.release_date -and ([string]$h.release_date).Length -ge 4) { $hy = [int]([string]$h.release_date).Substring(0, 4) }
+            if ($Year -gt 0 -and $hy -gt 0) {
+                $d = [Math]::Abs($hy - $Year)
+                if ($d -eq 0) { $score += 50 } elseif ($d -eq 1) { $score += 35 } elseif ($d -le 3) { $score += 10 } else { $score -= 40 }
+            }
+            $score += [Math]::Min(10, [Math]::Log10(1 + [double]$h.vote_count) * 2.5)
+            if ($score -gt $bestScore) { $bestScore = $score; $best = $h }
+        }
+        if ($bestScore -ge 150) { break }                  # exact title and year: no need to widen the search
+    }
+    if ($best -and $bestScore -ge 60) { return [string]$best.id }
+    return ''
+}
+
 function Invoke-MetadataScrape {
     # Fills Year, Genre, certification, rating, studio, director, Rotten Tomatoes critic score and box office for the given titles.
     param([object[]]$Records, [int[]]$Indexes, [string]$TmdbKey, [string]$OmdbKey, [bool]$Overwrite, [string]$DataFolder, [string]$StorePath)
@@ -1669,23 +1728,7 @@ function Invoke-MetadataScrape {
                     Start-Sleep -Milliseconds 250
                     if ($f -and @($f.movie_results).Count -gt 0) { $tid = [string]@($f.movie_results)[0].id }
                 }
-                if (-not $tid) {
-                    $q = 'https://api.themoviedb.org/3/search/movie?query=' + [Uri]::EscapeDataString([string]$rec.Title) + $keyQ
-                    if ([int]$rec.Year -gt 0) { $q += '&year=' + [int]$rec.Year }
-                    $f = Invoke-JsonGet -Url $q -Headers $headers
-                    Start-Sleep -Milliseconds 250
-                    if ($f) {
-                        $hits = @($f.results)
-                        if ([int]$rec.Year -gt 0) {
-                            $hit = $hits | Where-Object { $_.release_date -and [Math]::Abs([int]([string]$_.release_date).Substring(0, 4) - [int]$rec.Year) -le 1 } | Select-Object -First 1
-                        }
-                        else {
-                            $same = @($hits | Where-Object { ([string]$_.title).ToLowerInvariant() -eq ([string]$rec.Title).ToLowerInvariant() })
-                            $hit = if ($same.Count -eq 1) { $same[0] } else { $null }
-                        }
-                        if ($hit) { $tid = [string]$hit.id }
-                    }
-                }
+                if (-not $tid) { $tid = Find-TmdbMovieId -Title ([string]$rec.Title) -Year ([int]$rec.Year) -KeyQuery $keyQ -Headers $headers }
                 if ($tid) {
                     $d = Invoke-JsonGet -Url ('https://api.themoviedb.org/3/movie/' + $tid + '?append_to_response=credits,release_dates' + $keyQ) -Headers $headers
                     Start-Sleep -Milliseconds 250
@@ -1732,7 +1775,11 @@ function Invoke-MetadataScrape {
             }
         }
         catch {
-            if ($_.Exception.Message -eq 'KEYREJECT') { $keyBad = 'An API key was rejected - check the keys under the gear button.'; break }
+            if ($_.Exception.Message -eq 'KEYREJECT') { $keyBad = 'An API key was rejected - check the keys under the gear button.'; Add-FetchDetail $rec 'Failed' 'A service rejected the API key (HTTP 401/403). Check the TMDB and OMDb keys under the gear button.'; break }
+            $why = [string]$_.Exception.Message
+            $inner = $_.Exception.InnerException
+            if ($null -ne $inner -and $inner.Message -and $why -notmatch [regex]::Escape($inner.Message)) { $why += ' / ' + $inner.Message }
+            Add-FetchDetail $rec 'Failed' ('Error while looking it up: ' + $why)
             $stats.Failed++; continue
         }
 
@@ -1757,7 +1804,14 @@ function Invoke-MetadataScrape {
             foreach ($k in (Get-MetaKeys $rec)) { $store[$k] = $entry }
             $stats.Found++
         }
-        else { $stats.Missing++ }
+        else {
+            $stats.Missing++
+            $why = if ($tmdbOff) { 'No TMDB key is set, so nothing could be looked up (add one under the gear button).' }
+                   elseif ($tid) { 'TMDB found the movie (id ' + $tid + ') but returned no usable fields.' }
+                   elseif ($imdbId) { 'TMDB has no movie for IMDb id ' + $imdbId + ', and a search by title found no close match.' }
+                   else { 'No IMDb/TMDB id on this title, and a TMDB search for "' + [string]$rec.Title + '"' + $(if ([int]$rec.Year -gt 0) { ' (' + [int]$rec.Year + ')' } else { '' }) + ' found no close match.' }
+            Add-FetchDetail $rec 'Not found' $why
+        }
         if ($changed) { $notes = @($entry.Sources.Keys | Sort-Object | ForEach-Object { '{0}: {1}' -f $_, $entry.Sources[$_] }); Set-RecField $rec 'MetaSources' ($notes -join '; ') }
         $stats.Done++
         if (($i % 25) -eq 0) { try { Write-MetaStore -Path $StorePath -Store $store } catch { } }
@@ -1967,7 +2021,7 @@ $script:WorkerFunctions = @(
     'New-PlexRequest', 'Get-PlexXml', 'Get-PlexSections', 'Get-PlexStubs', 'Get-PlexMetadataMap', 'Get-PlexShowNode',
     'Save-PlexPoster', 'Convert-PlexEpoch', 'Get-PlexTags', 'Get-PlexRatings', 'Get-PlexRating', 'Get-PlexAudioFormat', 'ConvertFrom-PlexVideo',
     'Invoke-PlexScan', 'Invoke-FolderScan',
-    'Set-RecField', 'Test-ValueEmpty', 'Get-MetaKeys', 'Read-MetaStore', 'Write-MetaStore', 'Invoke-JsonGet', 'Get-ImdbRatingMap', 'Invoke-MetadataScrape'
+    'Set-RecField', 'Test-ValueEmpty', 'Get-MetaKeys', 'Read-MetaStore', 'Write-MetaStore', 'Invoke-JsonGet', 'Get-ImdbRatingMap', 'Get-TitleKey', 'Find-TmdbMovieId', 'Add-FetchDetail', 'Invoke-MetadataScrape'
 )
 
 function Start-ScanWorker {
@@ -2869,6 +2923,29 @@ function Show-FetchDialog {
     $res
 }
 
+function Show-FetchDetails {
+    $dlg = New-DialogForm 'Fetch info - what happened' 760 440
+    $head = New-Label ('{0} title(s) were not fetched. The reason for each is below.' -f @($script:FetchDetails).Count) 24 16 $script:cText $script:fontBold
+    $box = New-Object Windows.Forms.TextBox
+    $box.Multiline = $true; $box.ReadOnly = $true; $box.ScrollBars = 'Vertical'; $box.WordWrap = $true
+    $box.Location = New-Object Drawing.Point(24, 48); $box.Size = New-Object Drawing.Size(712, 290)
+    $box.BackColor = $script:cPanel2; $box.ForeColor = $script:cText; $box.BorderStyle = 'FixedSingle'; $box.Font = $script:fontBase
+    $box.Text = (@($script:FetchDetails) -join ("`
+`
+`
+`
+"))
+    $copy  = New-FlatButton 'Copy' 100 'secondary'
+    $close = New-FlatButton 'Close' 100 'primary'
+    $copy.Location  = New-Object Drawing.Point(526, 356); $close.Location = New-Object Drawing.Point(636, 356)
+    $close.DialogResult = [Windows.Forms.DialogResult]::OK
+    $copy.Add_Click({ try { [Windows.Forms.Clipboard]::SetText($box.Text) } catch { } }.GetNewClosure())
+    $dlg.Controls.AddRange(@($head, $box, $copy, $close))
+    $dlg.AcceptButton = $close; $dlg.CancelButton = $close
+    [void]$dlg.ShowDialog($form)
+    $dlg.Dispose()
+}
+
 $script:RebuildGuard = $false
 $chkRebuild.Add_CheckedChanged({
     if ($script:RebuildGuard -or -not $chkRebuild.Checked) { return }
@@ -2963,7 +3040,13 @@ $lblProg = New-Object Windows.Forms.Label
 $lblProg.AutoSize = $false; $lblProg.Size = New-Object Drawing.Size(220, 22); $lblProg.Location = New-Object Drawing.Point(1036, 25)
 $lblProg.Anchor = 'Top,Right'; $lblProg.TextAlign = 'MiddleRight'; $lblProg.BackColor = [Drawing.Color]::Transparent
 $lblProg.ForeColor = $script:cText; $lblProg.Font = $script:fontBold; $lblProg.Text = '0%'
-$statusBar.Controls.AddRange(@($lblStatus, $progTrack, $lblProg, $ovTrack, $lblOv))
+$lnkDetails = New-Object Windows.Forms.LinkLabel
+$lnkDetails.Text = 'See details'; $lnkDetails.AutoSize = $true; $lnkDetails.Location = New-Object Drawing.Point(24, 7)
+$lnkDetails.LinkColor = $script:cAccent; $lnkDetails.ActiveLinkColor = $script:cAccent2; $lnkDetails.BackColor = [Drawing.Color]::Transparent
+$lnkDetails.Font = $script:fontBase; $lnkDetails.Visible = $false
+$script:FetchDetails = @()
+$lnkDetails.Add_LinkClicked({ Show-FetchDetails })
+$statusBar.Controls.AddRange(@($lblStatus, $lnkDetails, $progTrack, $lblProg, $ovTrack, $lblOv))
 
 # ---- content: toolbar + grid / detail views -------------------------------
 $content = New-Object Windows.Forms.Panel
@@ -3578,6 +3661,7 @@ $btnFetch.Add_Click({
     $script:Sync = [hashtable]::Synchronized(@{
         Text = 'Starting...'; Value = 0; Max = 0; Total = 0; Cancel = $false; Done = $false; Error = $null; Results = $null; Summary = ''
         PhaseLo = 0.0; PhaseHi = 1.0; Workers = 1
+        Details = [Collections.ArrayList]::Synchronized((New-Object Collections.ArrayList))
         Partial = [Collections.ArrayList]::Synchronized((New-Object Collections.ArrayList))
     })
     $script:ScanUsePlex = $false
@@ -3590,6 +3674,7 @@ $btnFetch.Add_Click({
     Set-OverallProgress -Fraction 0.0
     $script:DashboardStale = $true
     $lblStatus.Text = 'Starting...'
+    $lnkDetails.Visible = $false; $script:FetchDetails = @()
     try {
         Start-ScanWorker -Mode 'Scrape' -ScanArgs @{
             Records = @($script:ScanResults); Indexes = [int[]]$idx.ToArray(); TmdbKey = [string]$script:TmdbKey; OmdbKey = [string]$script:OmdbKey
@@ -4078,7 +4163,7 @@ function Show-CollectionEditor {
         $rbMan.Enabled = $false; $rbRule.Enabled = $false          # the kind is fixed once it exists
     }
 
-    Enable-FilterSuggest -TextBox $txtQ -Owner $dlg -GetTable { $grid.DataSource }
+    Enable-FilterSuggest -TextBox $txtQ -Owner $dlg -GetTable { , $grid.DataSource }
     $script:CeRule = @($txtQ, $cboS, $chkDesc, $nudL); $script:CeRb = $rbRule; $script:CeAdd = $chkAdd
     $apply = {
         foreach ($c in $script:CeRule) { $c.Enabled = [bool]$script:CeRb.Checked }
@@ -4418,7 +4503,12 @@ function Update-FilterSuggest {
     if ($null -eq $st -or $st.Busy) { return }
     if (-not $Tb.Focused -or $Tb.Text.Trim().Length -eq 0) { Hide-FilterSuggest $Tb; return }
     $sug = $null
-    try { $sug = Get-FilterSuggestions (& $st.GetTable) $Tb.Text } catch { $sug = $null }
+    try {
+        $tbl = & $st.GetTable
+        if ($tbl -is [object[]] -and $tbl.Count -gt 0 -and $tbl[0] -is [System.Data.DataRow]) { $tbl = $tbl[0].Table }       # belt and braces: rows came back instead of the table
+        $sug = Get-FilterSuggestions $tbl $Tb.Text
+    }
+    catch { $sug = $null }
     if ($null -eq $sug -or @($sug.Items).Count -eq 0) { Hide-FilterSuggest $Tb; return }
     Show-FilterSuggest $Tb $sug
 }
@@ -4495,7 +4585,7 @@ function Enable-FilterSuggest {
 }
 #endregion
 
-Enable-FilterSuggest -TextBox $txtFilter -Owner $form -GetTable { $grid.DataSource }
+Enable-FilterSuggest -TextBox $txtFilter -Owner $form -GetTable { , $grid.DataSource }
 
 # right-click a row for the same editor (and to add titles to a collection)
 $gridMenu = New-Object Windows.Forms.ContextMenuStrip
@@ -4768,7 +4858,14 @@ function Complete-Scan {
         $total = [int]$s.Total
         $took  = ' in {0:N0}s' -f $script:ScanWatch.Elapsed.TotalSeconds
         $lblStatus.Text = "$state. $($results.Count) of $total item(s) processed$took."
-        if ($script:ScanMode -eq 'Scrape') { $lblStatus.Text = "$state. $([string]$s.Summary)" }
+        if ($script:ScanMode -eq 'Scrape') {
+            $lblStatus.Text = "$state. $([string]$s.Summary)"
+            $script:FetchDetails = @($s.Details)
+            if ($script:FetchDetails.Count -gt 0) {
+                $lnkDetails.Location = New-Object Drawing.Point(($lblStatus.Right + 10), 7)
+                $lnkDetails.Visible = $true
+            }
+        }
         if (-not $cancelled) { Set-OverallProgress -Fraction 1.0 }
     }
     finally {

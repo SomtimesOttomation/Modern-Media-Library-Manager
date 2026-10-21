@@ -4,6 +4,10 @@ A Windows desktop app that scans a movie library and turns it into something you
 
 It reads a local or network folder with MediaInfo, or talks to a Plex server, and remembers what it has already read so rescans are fast. **Your media is only ever read, never changed.**
 
+<img width="2085" height="1267" alt="image" src="https://github.com/user-attachments/assets/06b78aec-dea8-4dec-b38a-d66b23c143ce" /> <img width="2083" height="1274" alt="image" src="https://github.com/user-attachments/assets/ea0f6271-9d10-4049-a777-2ddd7e1c796c" /> 
+
+
+
 ## Verify your download
 
 The script is not code-signed, so Windows will treat it as an unknown download. Please check what you have before running it:

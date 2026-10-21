@@ -4222,7 +4222,7 @@ Update-CollectionBar
 # Works for the main filter box and the collection editor. Suggests field names, then the values that really exist in the library
 # (with counts), and for number fields ranges and comparisons. Keys: Down / Up pick, Enter or Tab accept, Esc closes; or click.
 $script:SugCache      = @{ Table = $null; Cols = @{} }
-$script:SugSkipValues = @('Title', 'Plot', 'Tagline', 'FileName', 'FullPath', 'Directory', 'MetaSources', 'SourceWhy', 'PosterPath', 'InformFile')
+$script:SugSkipValues = @('Plot', 'Tagline', 'FileName', 'FullPath', 'Directory', 'MetaSources', 'SourceWhy', 'PosterPath', 'InformFile')
 
 function Get-FilterFieldNames {
     # The columns the filter box understands: text and number columns (not the technical "clue" columns).
@@ -4353,7 +4353,19 @@ function Get-FilterSuggestions {
             }
         }
         $rows = @($rows | Sort-Object @{ Expression = 'S'; Descending = $false }, @{ Expression = 'N'; Descending = $true }, @{ Expression = 'Key'; Descending = $false } | Select-Object -First 12)
-        foreach ($r in $rows) { $items.Add(@{ Label = ('{0}   ({1})' -f $r.Key, $r.N); Text = $r.Key }) }
+        foreach ($r in $rows) {
+            $lab = if ($field -eq 'Title') { $r.Key } else { '{0}   ({1})' -f $r.Key, $r.N }       # every title is unique: a count of 1 is just noise
+            $items.Add(@{ Label = $lab; Text = $r.Key })
+        }
+        # first row: what the text typed so far matches, so a rule such as  title:Star  shows how many titles it will pick up
+        if ($typed.Length -ge 2 -and @($rows).Count -gt 1 -and -not ($rows | Where-Object { $_.Key -ieq $typed })) {
+            $hits = 0
+            foreach ($row in $Table.Rows) {
+                $raw = $row[$field]
+                if ($raw -isnot [DBNull] -and $null -ne $raw -and ([string]$raw).IndexOf($typed, [StringComparison]::OrdinalIgnoreCase) -ge 0) { $hits++ }
+            }
+            if ($hits -gt 0) { $items.Insert(0, @{ Label = ('"{0}"   (matches {1} title{2})' -f $typed, $hits, $(if ($hits -eq 1) { '' } else { 's' })); Text = $typed }) }
+        }
     }
     else {
         foreach ($x in @(Get-NumberSuggestions $field $stat.Nums $typed)) { $items.Add($x) }

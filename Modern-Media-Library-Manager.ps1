@@ -41,7 +41,7 @@ Add-Type -AssemblyName System.Data
 #region ---------------------------------------------------------------- Configuration
 $script:AppRoot         = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $script:TemplatePath    = Join-Path $script:AppRoot 'dashboard-template.html'
-$script:AppVersion      = '0.1.4'    # must match the release tag (vX.Y.Z); the release workflow checks it
+$script:AppVersion      = '0.1.5'    # must match the release tag (vX.Y.Z); the release workflow checks it
 $script:CacheVersion    = 4          # bump when the record schema changes
 $script:AppData         = Join-Path $env:LOCALAPPDATA 'Modern-Media-Library-Manager'
 $script:CacheFolder     = Join-Path $script:AppData 'Cache'
@@ -3409,6 +3409,16 @@ function Get-FilterExpression {
     "[Title] LIKE '%$e%' OR [FileName] LIKE '%$e%' OR [Genre] LIKE '%$e%' OR [Studio] LIKE '%$e%' OR [Cast] LIKE '%$e%' OR [Director] LIKE '%$e%'"
 }
 
+function Get-UnionExpression {
+    # Dynamic collections: several filters separated by commas. A title is included when it matches ANY of them;
+    # inside one part, field:value terms still all have to match ("genre:Horror year:1980-1989, title:Alien").
+    param($Table, [string]$Text)
+    $parts = @(([string]$Text) -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    if ($parts.Count -eq 0) { return '' }
+    if ($parts.Count -eq 1) { return (Get-FilterExpression $Table $parts[0]) }
+    ($parts | ForEach-Object { '(' + (Get-FilterExpression $Table $_) + ')' }) -join ' OR '
+}
+
 function Get-RecordId {
     # One stable id per scanned item: the Plex key, else the file path.
     param($Rec)
@@ -4046,7 +4056,7 @@ function Resolve-Collection {
         $tbl = $grid.DataSource
         if ($tbl -isnot [System.Data.DataTable]) { return ,$set }
         try {
-            $expr = Get-FilterExpression $tbl ([string]$Col.Query)
+            $expr = Get-UnionExpression $tbl ([string]$Col.Query)
             $sort = ''
             if ($Col.SortBy -and $null -ne $tbl.Columns[[string]$Col.SortBy]) { $sort = '[{0}] {1}' -f $Col.SortBy, $(if ($Col.SortDesc) { 'DESC' } else { 'ASC' }) }
             $rows = @($tbl.Select($expr, $sort))
@@ -4274,7 +4284,7 @@ function Show-CollectionEditor {
     }
 
     Enable-FilterSuggest -TextBox $txtQ -Owner $dlg -GetTable { , $grid.DataSource }
-    $script:CeKindHelp = $lblKindHelp
+    $script:CeKindHelp = $lblKindHelp; $script:CeQBox = $txtQ
     $script:CeRb = $rbRule; $script:CeAdd = $chkAdd; $script:CeAddQ = $btnAddQ; $script:CeHq = $hq; $script:CeHs = $hs
     $script:CePicked = New-Object 'System.Collections.Generic.List[string]'
     $script:CeHave = New-Object 'System.Collections.Generic.HashSet[string]'          # titles already in the collection (editing)
@@ -4285,8 +4295,9 @@ function Show-CollectionEditor {
         $script:CeKindHelp.Text = if ($rule) { 'Dynamic: a saved filter that is re-checked on every scan. New matches join by themselves and titles that stop matching drop out. Only the filter is stored.' } else { 'Static: a fixed list. Titles stay in it until you remove them. Fill it with the Add button (every title a filter finds) or by selecting titles in the grid.' }
         $script:CeAdd.Enabled = -not $rule
         $script:CeAddQ.Enabled = -not $rule
+        $script:CeQBox.Tag.Commas = $rule
         if ($rule) {
-            $script:CeHq.Text = 'The filter is the collection, so Add is off. Examples:  genre:Horror year:1980-1989   studio:Pixar   rating:>=7.5'
+            $script:CeHq.Text = 'Combine filters with commas, e.g.  title:harry potter, title:fantastic beasts  (a title matching any part is included). One filter:  genre:Horror year:1980-1989'
             $script:CeHs.Text = 'A top 10 is: sort by Rating, highest first, limit 10. A sort and limit with an empty filter ranks the whole library.'
         }
         else {
@@ -4317,7 +4328,7 @@ function Show-CollectionEditor {
         $q = $script:CeQ.Text.Trim()
         $s = if ($script:CeSort.SelectedIndex -gt 0) { [string]$script:CeSort.SelectedItem } else { '' }
         $lim = [int]$script:CeLimit.Value
-        if ($kind -eq 'rule' -and -not $q -and -not $s -and $lim -le 0) { $script:CeErr.Text = 'A Dynamic collection needs a filter, or a sort and a limit.'; return }
+        if ($kind -eq 'rule' -and -not ($q -replace '[,\s]', '') -and -not $s -and $lim -le 0) { $script:CeErr.Text = 'A Dynamic collection needs a filter, or a sort and a limit.'; return }
         $script:CeResult = @{ Name = $name; Type = $kind; Query = $(if ($kind -eq 'rule') { $q } else { '' }); SortBy = $(if ($kind -eq 'rule') { $s } else { '' })
                               SortDesc = [bool]($kind -eq 'rule' -and $script:CeDesc.Checked); ByDate = [bool]$script:CeDate.Checked; Limit = $(if ($kind -eq 'rule') { $lim } else { 0 }); AddSelected = [bool]$script:CeAdd.Checked; Picked = @($script:CePicked.ToArray()) }
         $script:CeDlg.DialogResult = [Windows.Forms.DialogResult]::OK
@@ -4678,7 +4689,17 @@ function Update-FilterSuggest {
     try {
         $tbl = & $st.GetTable
         if ($tbl -is [object[]] -and $tbl.Count -gt 0 -and $tbl[0] -is [System.Data.DataRow]) { $tbl = $tbl[0].Table }       # belt and braces: rows came back instead of the table
-        $sug = Get-FilterSuggestions $tbl $Tb.Text
+        if ($st.Commas) {            # several filters separated by commas: suggest for the part being typed
+            $txt = [string]$Tb.Text
+            $ci = $txt.LastIndexOf(',') + 1
+            $seg = $txt.Substring($ci)
+            $lead = $seg.Length - $seg.TrimStart().Length
+            if ($seg.Trim().Length -gt 0) {
+                $sug = Get-FilterSuggestions $tbl $seg.TrimStart()
+                if ($null -ne $sug) { $sug.Start = [int]$sug.Start + $ci + $lead }
+            }
+        }
+        else { $sug = Get-FilterSuggestions $tbl $Tb.Text }
     }
     catch { $sug = $null }
     if ($null -eq $sug -or @($sug.Items).Count -eq 0) { Hide-FilterSuggest $Tb; return }
@@ -4709,7 +4730,7 @@ function Enable-FilterSuggest {
     $lb.BorderStyle = 'FixedSingle'; $lb.IntegralHeight = $false; $lb.TabStop = $false; $lb.Visible = $false
     $lb.BackColor = $script:cPanel2; $lb.ForeColor = $script:cText; $lb.Font = $script:fontBase
     $lb.Tag = $TextBox
-    $TextBox.Tag = @{ LB = $lb; Items = @(); Start = 0; GetTable = $GetTable; Owner = $Owner; Busy = $false; Locked = $false; SavedAccept = $null; SavedCancel = $null }
+    $TextBox.Tag = @{ LB = $lb; Items = @(); Start = 0; GetTable = $GetTable; Owner = $Owner; Busy = $false; Locked = $false; SavedAccept = $null; SavedCancel = $null; Commas = $false }
     $Owner.Controls.Add($lb)
 
     $TextBox.Add_TextChanged({ param($s, $e) Update-FilterSuggest $s })

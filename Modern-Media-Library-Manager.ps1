@@ -41,7 +41,7 @@ Add-Type -AssemblyName System.Data
 #region ---------------------------------------------------------------- Configuration
 $script:AppRoot         = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $script:TemplatePath    = Join-Path $script:AppRoot 'dashboard-template.html'
-$script:AppVersion      = '0.1.1'    # must match the release tag (vX.Y.Z); the release workflow checks it
+$script:AppVersion      = '0.1.2'    # must match the release tag (vX.Y.Z); the release workflow checks it
 $script:CacheVersion    = 4          # bump when the record schema changes
 $script:AppData         = Join-Path $env:LOCALAPPDATA 'Modern-Media-Library-Manager'
 $script:CacheFolder     = Join-Path $script:AppData 'Cache'
@@ -4132,6 +4132,16 @@ function Get-SelectedRecords {
     $out.ToArray()
 }
 
+function Get-RecordsById {
+    # The scanned records behind a list of record ids (the Add button in the collection editor collects ids).
+    param([string[]]$Ids)
+    $want = @{}
+    foreach ($i in @($Ids)) { $want[[string]$i] = $true }
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($r in $script:ScanResults) { if ($want.ContainsKey((Get-RecordId $r))) { $out.Add($r) } }
+    $out.ToArray()
+}
+
 function Add-RecordsToCollection {
     # Adds titles to a hand-picked collection (skipping ones already in it). Returns how many were new.
     param($Col, $Records)
@@ -4193,11 +4203,11 @@ function Show-AddToCollectionDialog {
 }
 
 function Show-CollectionEditor {
-    # New or edit. Returns @{ Name; Type; Query; SortBy; SortDesc; Limit; AddSelected } or $null.
+    # New or edit. Returns @{ Name; Type; Query; SortBy; SortDesc; Limit; AddSelected; Picked } or $null (Picked = ids gathered with the Add button).
     param($Col = $null, [string]$DefaultQuery = '', [int]$SelectedCount = 0)
     $isNew = ($null -eq $Col)
     $ttl = if ($isNew) { 'New collection' } else { 'Edit collection' }
-    $dlg = New-DialogForm $ttl 540 516
+    $dlg = New-DialogForm $ttl 540 548
 
     $lblN = New-Label 'NAME' 24 18 $script:cMuted $script:fontSmall
     $txtN = New-Object Windows.Forms.TextBox
@@ -4211,12 +4221,13 @@ function Show-CollectionEditor {
 
     $lblQ = New-Label 'FILTER' 24 172 $script:cMuted $script:fontSmall
     $txtQ = New-Object Windows.Forms.TextBox
-    $txtQ.Location = New-Object Drawing.Point(24, 194); $txtQ.Size = New-Object Drawing.Size(492, 26)
+    $txtQ.Location = New-Object Drawing.Point(24, 194); $txtQ.Size = New-Object Drawing.Size(398, 26)
+    $btnAddQ = New-FlatButton 'Add' 84 'secondary'; $btnAddQ.Location = New-Object Drawing.Point(432, 190); $btnAddQ.Height = 32
     $txtQ.BackColor = $script:cPanel2; $txtQ.ForeColor = $script:cText; $txtQ.BorderStyle = 'FixedSingle'
     $hq = New-Object Windows.Forms.Label
     $hq.Location = New-Object Drawing.Point(24, 224); $hq.Size = New-Object Drawing.Size(492, 34)
     $hq.ForeColor = $script:cMuted; $hq.BackColor = [Drawing.Color]::Transparent; $hq.Font = $script:fontSmall
-    $hq.Text = 'Same as the filter box. Examples:  genre:Horror year:1980-1989   studio:Pixar   rating:>=7.5   resolution:2160p. Leave it empty to use every title.'
+    $hq.Text = ''
 
     $lblS = New-Label 'SORT BY' 24 268 $script:cMuted $script:fontSmall
     $cboS = New-Object Windows.Forms.ComboBox
@@ -4235,11 +4246,17 @@ function Show-CollectionEditor {
     $hs = New-Object Windows.Forms.Label
     $hs.Location = New-Object Drawing.Point(24, 324); $hs.Size = New-Object Drawing.Size(492, 34)
     $hs.ForeColor = $script:cMuted; $hs.BackColor = [Drawing.Color]::Transparent; $hs.Font = $script:fontSmall
-    $hs.Text = 'A top 10 is: sort by Rating, highest first, limit 10. A sort and limit with an empty filter ranks the whole library.'
+    $hs.Text = ''
 
     $chkDate = New-FlatCheckBox 'By release date (oldest first)' 24 366
     $chkAdd = New-FlatCheckBox ("Add the {0} selected title(s) now" -f $SelectedCount) 24 398 $true
     $chkAdd.Visible = ($isNew -and $SelectedCount -gt 0)
+    $lblPicked = New-Object Windows.Forms.Label
+    $lblPicked.Location = New-Object Drawing.Point(24, 432); $lblPicked.Size = New-Object Drawing.Size(420, 20)
+    $lblPicked.ForeColor = $script:cText; $lblPicked.BackColor = [Drawing.Color]::Transparent; $lblPicked.Font = $script:fontBase
+    $lnkClear = New-Object Windows.Forms.LinkLabel
+    $lnkClear.Text = 'Clear'; $lnkClear.AutoSize = $true; $lnkClear.Location = New-Object Drawing.Point(452, 433); $lnkClear.Visible = $false
+    $lnkClear.LinkColor = $script:cAccent; $lnkClear.ActiveLinkColor = $script:cAccent2; $lnkClear.BackColor = [Drawing.Color]::Transparent
 
     if ($isNew) { $txtQ.Text = $DefaultQuery; $cboS.SelectedIndex = 0 }
     else {
@@ -4253,20 +4270,33 @@ function Show-CollectionEditor {
     }
 
     Enable-FilterSuggest -TextBox $txtQ -Owner $dlg -GetTable { , $grid.DataSource }
-    $script:CeRule = @($txtQ, $cboS, $chkDesc, $nudL); $script:CeRb = $rbRule; $script:CeAdd = $chkAdd
+    $script:CeRb = $rbRule; $script:CeAdd = $chkAdd; $script:CeAddQ = $btnAddQ; $script:CeHq = $hq; $script:CeHs = $hs
+    $script:CePicked = New-Object 'System.Collections.Generic.List[string]'
+    $script:CeHave = New-Object 'System.Collections.Generic.HashSet[string]'          # titles already in the collection (editing)
+    if (-not $isNew) { $have = Resolve-Collection $Col; if ($null -ne $have) { $script:CeHave = $have } }
+    $script:CePickLbl = $lblPicked; $script:CeClear = $lnkClear
     $apply = {
-        foreach ($c in $script:CeRule) { $c.Enabled = [bool]$script:CeRb.Checked }
-        $script:CeAdd.Enabled = -not [bool]$script:CeRb.Checked
+        $rule = [bool]$script:CeRb.Checked
+        $script:CeAdd.Enabled = -not $rule
+        $script:CeAddQ.Enabled = -not $rule
+        if ($rule) {
+            $script:CeHq.Text = 'Same as the filter box. Examples:  genre:Horror year:1980-1989   studio:Pixar   rating:>=7.5   resolution:2160p.'
+            $script:CeHs.Text = 'A top 10 is: sort by Rating, highest first, limit 10. A sort and limit with an empty filter ranks the whole library.'
+        }
+        else {
+            $script:CeHq.Text = 'Type a filter, then click Add to put every matching title in the collection. Change the filter and click Add again to build it up.'
+            $script:CeHs.Text = 'Sort and limit choose which titles Add takes: for a top 10, sort by Rating (highest first) with a limit of 10, then click Add.'
+        }
     }
     $rbRule.Add_CheckedChanged($apply)
     & $apply
 
     $err = New-Object Windows.Forms.Label
-    $err.Location = New-Object Drawing.Point(24, 434); $err.Size = New-Object Drawing.Size(492, 20)
+    $err.Location = New-Object Drawing.Point(24, 462); $err.Size = New-Object Drawing.Size(492, 20)
     $err.ForeColor = (RGB 255 107 129); $err.BackColor = [Drawing.Color]::Transparent
     $okText = if ($isNew) { 'Create' } else { 'Save' }
-    $ok = New-FlatButton $okText 100 'primary'; $ok.Location = New-Object Drawing.Point(310, 466)
-    $cancel = New-FlatButton 'Cancel' 100 'secondary'; $cancel.Location = New-Object Drawing.Point(416, 466)
+    $ok = New-FlatButton $okText 100 'primary'; $ok.Location = New-Object Drawing.Point(310, 496)
+    $cancel = New-FlatButton 'Cancel' 100 'secondary'; $cancel.Location = New-Object Drawing.Point(416, 496)
     $cancel.DialogResult = [Windows.Forms.DialogResult]::Cancel
     $dlg.AcceptButton = $ok; $dlg.CancelButton = $cancel
 
@@ -4283,10 +4313,52 @@ function Show-CollectionEditor {
         $lim = [int]$script:CeLimit.Value
         if ($kind -eq 'rule' -and -not $q -and -not $s -and $lim -le 0) { $script:CeErr.Text = 'A rule needs a filter, or a sort and a limit.'; return }
         $script:CeResult = @{ Name = $name; Type = $kind; Query = $(if ($kind -eq 'rule') { $q } else { '' }); SortBy = $(if ($kind -eq 'rule') { $s } else { '' })
-                              SortDesc = [bool]($kind -eq 'rule' -and $script:CeDesc.Checked); ByDate = [bool]$script:CeDate.Checked; Limit = $(if ($kind -eq 'rule') { $lim } else { 0 }); AddSelected = [bool]$script:CeAdd.Checked }
+                              SortDesc = [bool]($kind -eq 'rule' -and $script:CeDesc.Checked); ByDate = [bool]$script:CeDate.Checked; Limit = $(if ($kind -eq 'rule') { $lim } else { 0 }); AddSelected = [bool]$script:CeAdd.Checked; Picked = @($script:CePicked.ToArray()) }
         $script:CeDlg.DialogResult = [Windows.Forms.DialogResult]::OK
     })
-    $dlg.Controls.AddRange(@($lblN, $txtN, $lblK, $rbMan, $rbRule, $lblQ, $txtQ, $hq, $lblS, $cboS, $chkDesc, $lblL, $nudL, $hs, $chkDate, $chkAdd, $err, $ok, $cancel))
+    $script:CeOk = $ok; $script:CeTitle = $isNew
+    # Add: everything the filter (with its sort and limit) finds goes into the pending list; a later Create / Save puts the list in the collection.
+    $btnAddQ.Add_Click({
+        $script:CeErr.Text = ''
+        $tbl = $grid.DataSource
+        if ($tbl -isnot [System.Data.DataTable]) { $script:CeErr.Text = 'Scan a library first.'; return }
+        $q = $script:CeQ.Text.Trim()
+        $lim = [int]$script:CeLimit.Value
+        $sortBy = if ($script:CeSort.SelectedIndex -gt 0) { [string]$script:CeSort.SelectedItem } else { '' }
+        try {
+            $expr = Get-FilterExpression $tbl $q
+            $sort = ''
+            if ($sortBy -and $null -ne $tbl.Columns[$sortBy]) { $sort = '[{0}] {1}' -f $sortBy, $(if ($script:CeDesc.Checked) { 'DESC' } else { 'ASC' }) }
+            $rows = @($tbl.Select($expr, $sort))
+        }
+        catch { $script:CeErr.Text = 'That filter could not be read. Check it and try again.'; return }
+        if ($lim -gt 0) { $rows = @($rows | Select-Object -First $lim) }
+        if ($rows.Count -eq 0) { $script:CeErr.Text = 'No titles match that filter.'; return }
+        if (-not $q -and $lim -le 0) {
+            $ask = [Windows.Forms.MessageBox]::Show(('The filter is empty, so this adds all {0} titles in the library. Add them all?' -f $rows.Count), 'Add', 'YesNo', 'Question')
+            if ($ask -ne [Windows.Forms.DialogResult]::Yes) { return }
+        }
+        $new = 0; $already = 0
+        $inList = New-Object 'System.Collections.Generic.HashSet[string]'
+        foreach ($x in $script:CePicked) { [void]$inList.Add($x) }
+        foreach ($r in $rows) {
+            $id = Get-RowId $r
+            if ($inList.Contains($id) -or $script:CeHave.Contains($id)) { $already++; continue }
+            $script:CePicked.Add($id); [void]$inList.Add($id); $new++
+        }
+        $msg = '{0} title(s) ready to add' -f $script:CePicked.Count
+        $msg += $(if ($new -gt 0) { " (+$new just now)" } else { ' (nothing new from that filter)' })
+        if ($already -gt 0 -and $new -gt 0) { $msg += ", $already already in" }
+        $script:CePickLbl.Text = $msg + '.'
+        $script:CeClear.Visible = ($script:CePicked.Count -gt 0)
+    })
+    $lnkClear.Add_LinkClicked({
+        $script:CePicked.Clear(); $script:CePickLbl.Text = ''; $script:CeClear.Visible = $false
+    })
+    # Enter in the filter box means Add for a hand-picked collection (it would otherwise press Create).
+    $txtQ.Add_Enter({ if (-not [bool]$script:CeRb.Checked) { $script:CeDlg.AcceptButton = $script:CeAddQ } })
+    $txtQ.Add_Leave({ $script:CeDlg.AcceptButton = $script:CeOk })
+    $dlg.Controls.AddRange(@($lblN, $txtN, $lblK, $rbMan, $rbRule, $lblQ, $txtQ, $btnAddQ, $hq, $lblS, $cboS, $chkDesc, $lblL, $nudL, $hs, $chkDate, $chkAdd, $lblPicked, $lnkClear, $err, $ok, $cancel))
     $res = $dlg.ShowDialog($form)
     $dlg.Dispose()
     if ($res -ne [Windows.Forms.DialogResult]::OK) { return $null }
@@ -4303,10 +4375,11 @@ function New-CollectionFromUi {
               SortDesc = $res.SortDesc; ByDate = $res.ByDate; Limit = $res.Limit; Created = $now; Modified = $now }
     $added = 0
     if ($res.Type -eq 'manual' -and $res.AddSelected) { $added = Add-RecordsToCollection $col $sel }
+    if ($res.Type -eq 'manual' -and @($res.Picked).Count -gt 0) { $added += (Add-RecordsToCollection $col (Get-RecordsById $res.Picked)) }
     [void]$script:Collections.Add($col)
     [void](Save-Collections)
     Set-CollectionScope $col.Name
-    $lblStatus.Text = if ($res.Type -eq 'manual') { 'Created "{0}" with {1} title(s). Select titles and use Add selected to fill it.' -f $col.Name, $added } else { 'Created the rule collection "{0}".' -f $col.Name }
+    $lblStatus.Text = if ($res.Type -eq 'manual') { $(if ($added -gt 0) { 'Created "{0}" with {1} title(s).' -f $col.Name, $added } else { 'Created "{0}". Select titles and use Add selected, or build it with the Add button in Edit.' -f $col.Name }) } else { 'Created the rule collection "{0}".' -f $col.Name }
 }
 
 function Edit-ActiveCollection {
@@ -4318,10 +4391,12 @@ function Edit-ActiveCollection {
     $col.Name = $res.Name
     if ([string]$col.Type -eq 'rule') { $col.Query = $res.Query; $col.SortBy = $res.SortBy; $col.SortDesc = $res.SortDesc; $col.Limit = $res.Limit }
     $col.ByDate = $res.ByDate
+    $added = 0
+    if ([string]$col.Type -ne 'rule' -and @($res.Picked).Count -gt 0) { $added = Add-RecordsToCollection $col (Get-RecordsById $res.Picked) }
     $col.Modified = (Get-Date).ToString('s')
     [void](Save-Collections)
     Set-CollectionScope $col.Name
-    $lblStatus.Text = 'Saved "{0}".' -f $col.Name
+    $lblStatus.Text = if ($added -gt 0) { 'Saved "{0}" and added {1} title(s).' -f $col.Name, $added } else { 'Saved "{0}".' -f $col.Name }
 }
 
 function Remove-ActiveCollection {

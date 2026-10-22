@@ -146,7 +146,7 @@ Writing `.nfo` sidecar files is not implemented. If it is added, it will be opt-
 
 ## Updating
 
-Click **Check for updates** at the bottom right of the window. The app asks GitHub for the latest release and, if there is a newer one, shows what changed. Nothing is downloaded until you click **Download update**. It then:
+Click the version at the bottom right of the window. An update window opens and checks GitHub straight away, with a status line and progress bar. If there is a newer release it shows the release description (what changed). Nothing is downloaded until you click **Download update**. It then:
 
 1. downloads the release zip and its `SHA256SUMS.txt`, and checks the zip against that checksum (a mismatch discards it);
 2. unpacks it to a staging folder and checks the files inside, including that the new script is readable and carries the release's version number;

@@ -41,7 +41,7 @@ Add-Type -AssemblyName System.Data
 #region ---------------------------------------------------------------- Configuration
 $script:AppRoot         = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $script:TemplatePath    = Join-Path $script:AppRoot 'dashboard-template.html'
-$script:AppVersion      = '0.1.3'    # must match the release tag (vX.Y.Z); the release workflow checks it
+$script:AppVersion      = '0.1.4'    # must match the release tag (vX.Y.Z); the release workflow checks it
 $script:CacheVersion    = 4          # bump when the record schema changes
 $script:AppData         = Join-Path $env:LOCALAPPDATA 'Modern-Media-Library-Manager'
 $script:CacheFolder     = Join-Path $script:AppData 'Cache'
@@ -2959,6 +2959,7 @@ function Show-FetchDetails {
     $close.DialogResult = [Windows.Forms.DialogResult]::OK
     $copy.Add_Click({ try { [Windows.Forms.Clipboard]::SetText($box.Text) } catch { } }.GetNewClosure())
     $dlg.Controls.AddRange(@($head, $box, $copy, $close))
+    $box.TabStop = $false; $dlg.ActiveControl = $close
     $dlg.AcceptButton = $close; $dlg.CancelButton = $close
     [void]$dlg.ShowDialog($form)
     $dlg.Dispose()
@@ -4207,7 +4208,7 @@ function Show-CollectionEditor {
     param($Col = $null, [string]$DefaultQuery = '', [int]$SelectedCount = 0)
     $isNew = ($null -eq $Col)
     $ttl = if ($isNew) { 'New collection' } else { 'Edit collection' }
-    $dlg = New-DialogForm $ttl 540 548
+    $dlg = New-DialogForm $ttl 540 596
 
     $lblN = New-Label 'NAME' 24 18 $script:cMuted $script:fontSmall
     $txtN = New-Object Windows.Forms.TextBox
@@ -4218,6 +4219,9 @@ function Show-CollectionEditor {
     $isRule = if ($isNew) { [bool]$DefaultQuery } else { [string]$Col.Type -eq 'rule' }
     $rbMan  = New-FlatRadio 'Static (manual additions)' 24 104 (-not $isRule)
     $rbRule = New-FlatRadio 'Dynamic (grows with library changes)' 24 130 $isRule
+    $lblKindHelp = New-Object Windows.Forms.Label
+    $lblKindHelp.Location = New-Object Drawing.Point(24, 158); $lblKindHelp.Size = New-Object Drawing.Size(492, 40)
+    $lblKindHelp.ForeColor = $script:cMuted; $lblKindHelp.BackColor = [Drawing.Color]::Transparent; $lblKindHelp.Font = $script:fontSmall
 
     $lblQ = New-Label 'FILTER TERMS' 24 172 $script:cMuted $script:fontSmall
     $txtQ = New-Object Windows.Forms.TextBox
@@ -4270,6 +4274,7 @@ function Show-CollectionEditor {
     }
 
     Enable-FilterSuggest -TextBox $txtQ -Owner $dlg -GetTable { , $grid.DataSource }
+    $script:CeKindHelp = $lblKindHelp
     $script:CeRb = $rbRule; $script:CeAdd = $chkAdd; $script:CeAddQ = $btnAddQ; $script:CeHq = $hq; $script:CeHs = $hs
     $script:CePicked = New-Object 'System.Collections.Generic.List[string]'
     $script:CeHave = New-Object 'System.Collections.Generic.HashSet[string]'          # titles already in the collection (editing)
@@ -4277,6 +4282,7 @@ function Show-CollectionEditor {
     $script:CePickLbl = $lblPicked; $script:CeClear = $lnkClear
     $apply = {
         $rule = [bool]$script:CeRb.Checked
+        $script:CeKindHelp.Text = if ($rule) { 'Dynamic: a saved filter that is re-checked on every scan. New matches join by themselves and titles that stop matching drop out. Only the filter is stored.' } else { 'Static: a fixed list. Titles stay in it until you remove them. Fill it with the Add button (every title a filter finds) or by selecting titles in the grid.' }
         $script:CeAdd.Enabled = -not $rule
         $script:CeAddQ.Enabled = -not $rule
         if ($rule) {
@@ -4359,7 +4365,8 @@ function Show-CollectionEditor {
     # Enter in the filter box means Add for a hand-picked collection (it would otherwise press Create).
     $txtQ.Add_Enter({ if (-not [bool]$script:CeRb.Checked) { $script:CeDlg.AcceptButton = $script:CeAddQ } })
     $txtQ.Add_Leave({ $script:CeDlg.AcceptButton = $script:CeOk })
-    $dlg.Controls.AddRange(@($lblN, $txtN, $lblK, $rbMan, $rbRule, $lblQ, $txtQ, $btnAddQ, $hq, $lblS, $cboS, $chkDesc, $lblL, $nudL, $hs, $chkDate, $chkAdd, $lblPicked, $lnkClear, $err, $ok, $cancel))
+    foreach ($c in @($lblQ, $txtQ, $btnAddQ, $hq, $lblS, $cboS, $chkDesc, $lblL, $nudL, $hs, $chkDate, $chkAdd, $lblPicked, $lnkClear, $err, $ok, $cancel)) { $c.Top += 48 }
+    $dlg.Controls.AddRange(@($lblN, $txtN, $lblK, $rbMan, $rbRule, $lblKindHelp, $lblQ, $txtQ, $btnAddQ, $hq, $lblS, $cboS, $chkDesc, $lblL, $nudL, $hs, $chkDate, $chkAdd, $lblPicked, $lnkClear, $err, $ok, $cancel))
     $res = $dlg.ShowDialog($form)
     $dlg.Dispose()
     if ($res -ne [Windows.Forms.DialogResult]::OK) { return $null }
@@ -5410,16 +5417,25 @@ catch { @{ Ok = $false; Error = $_.Exception.Message } }
 '@
 
 $script:UpdDownloadScript = @'
-param([string]$ZipUrl, [string]$SumsUrl, [string]$ZipName, [string]$Tag, [string]$Dest, [string]$Ua)
+param([string]$ZipUrl, [string]$SumsUrl, [string]$ZipName, [string]$Tag, [string]$Dest, [string]$Ua, [hashtable]$Prog)
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-function Get-Url([string]$Url, [string]$To) {
+function Set-Prog([int]$Pct, [string]$Text) { if ($null -ne $Prog) { if ($Pct -ge 0) { $Prog.Percent = $Pct }; if ($Text) { $Prog.Text = $Text } } }
+function Get-Url([string]$Url, [string]$To, [bool]$Track) {
     $req = [Net.WebRequest]::Create($Url)
     $req.Timeout = 30000
     if ($req -is [Net.HttpWebRequest]) { $req.UserAgent = $Ua; $req.ReadWriteTimeout = 30000 }
     $resp = $req.GetResponse()
     try {
+        $total = [long]$resp.ContentLength; $done = 0L
         $in = $resp.GetResponseStream(); $out = [IO.File]::Create($To)
-        try { $in.CopyTo($out) } finally { $out.Dispose(); $in.Dispose() }
+        try {
+            $buf = New-Object byte[] 65536
+            while (($n = $in.Read($buf, 0, $buf.Length)) -gt 0) {
+                $out.Write($buf, 0, $n); $done += $n
+                if ($Track -and $total -gt 0) { Set-Prog ([int](100.0 * $done / $total)) ('{0:N1} of {1:N1} MB' -f ($done / 1MB), ($total / 1MB)) }
+            }
+        }
+        finally { $out.Dispose(); $in.Dispose() }
     }
     finally { $resp.Close() }
 }
@@ -5432,12 +5448,15 @@ try {
     if (Test-Path -LiteralPath $Dest) { Remove-Item -LiteralPath $Dest -Recurse -Force }
     New-Item -ItemType Directory -Path $Dest -Force | Out-Null
     $pkg = Join-Path $Dest 'package.zip'; $sumFile = Join-Path $Dest 'SHA256SUMS.txt'
-    Get-Url $ZipUrl $pkg
-    Get-Url $SumsUrl $sumFile
+    Set-Prog 0 'Connecting...'
+    Get-Url $ZipUrl $pkg $true
+    Set-Prog 100 'Checking the download...'
+    Get-Url $SumsUrl $sumFile $false
     $sums = @{}
     foreach ($line in [IO.File]::ReadAllLines($sumFile)) { if ($line -match '^([0-9a-fA-F]{64})\s+\*?(.+?)\s*$') { $sums[$Matches[2]] = $Matches[1].ToLowerInvariant() } }
     if (-not $sums.ContainsKey($ZipName)) { throw 'The release has no checksum for the zip, so it was not installed.' }
     if ((Get-Sha $pkg) -ne $sums[$ZipName]) { throw 'The downloaded file does not match its published checksum (SHA-256), so it was discarded.' }
+    Set-Prog 100 'Unpacking...'
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $zf = [IO.Compression.ZipFile]::OpenRead($pkg)
     try { foreach ($en in $zf.Entries) { if ($en.FullName -match '(^|[\\/])\.\.([\\/]|$)' -or [IO.Path]::IsPathRooted($en.FullName)) { throw 'The zip contains an unsafe path, so it was discarded.' } } } finally { $zf.Dispose() }
@@ -5449,6 +5468,7 @@ try {
     foreach ($n in @('Modern-Media-Library-Manager.ps1', 'dashboard-template.html', 'Run-ModernMediaLibraryManager.cmd')) {
         if ($sums.ContainsKey($n)) { if ((Get-Sha (Join-Path $root $n)) -ne $sums[$n]) { throw "The file $n does not match its published checksum." } }
     }
+    Set-Prog 100 'Checking the new files...'
     $src = [IO.File]::ReadAllText($ps1)
     if ($src -notmatch '(?m)^\$script:AppVersion\s*=\s*''([^'']+)''') { throw 'The new version has no version number.' }
     if ('v' + $Matches[1] -ne $Tag) { throw "The package says version $($Matches[1]) but the release is $Tag." }
@@ -5530,6 +5550,11 @@ function Set-UpdateLink {
 }
 
 # --- background job plumbing ---
+$script:UpdProg = [hashtable]::Synchronized(@{ Percent = 0; Text = '' })
+$script:UpdWin = $null
+$script:UpdQuit = $false
+$script:UpdPulse = 0
+
 function Start-UpdateJob {
     param([string]$Kind, [string]$Script, [hashtable]$Params)
     $ps = [powershell]::Create()
@@ -5539,20 +5564,65 @@ function Start-UpdateJob {
     $script:UpdTimer.Start()
 }
 
+function Get-ReleaseNotesText {
+    # Only what you wrote in the release description: the automatic "Verify this download" block is cut off.
+    param([string]$Body)
+    $t = ([string]$Body) -replace "`r?`n", "`r`n"
+    $m = [regex]::Match($t, '(?im)^\s*#{1,6}\s*Verify this download.*$')
+    if ($m.Success) { $t = $t.Substring(0, $m.Index) }
+    $t = $t.Trim()
+    if (-not $t) { $t = '(This release has no description.)' }
+    $t
+}
+
+function Update-UpdateWindow {
+    # Brings the update window in line with the current state (called after every state change and while a job runs).
+    $w = $script:UpdWin
+    if ($null -eq $w) { return }
+    $st = [string]$script:Upd.State
+    $trackW = $w.Track.Width
+    $status = ''; $detail = ''; $pct = 0; $btn = ''; $btnOn = $true; $showNotes = $false
+    switch ($st) {
+        'checking'    { $status = 'Connecting to the update server...'; $detail = 'Looking for the latest release on GitHub.'; $btn = 'Check for updates'; $btnOn = $false }
+        'available'   { $status = ('Version {0} is available (you have v{1}).' -f $script:Upd.Info.Tag, $script:AppVersion); $detail = 'Read what is new, then download it. Nothing is installed until you restart.'; $btn = 'Download update'; $showNotes = $true }
+        'downloading' { $pct = [int]$script:UpdProg.Percent; $status = ('Downloading {0}...  {1}%' -f $script:Upd.Info.Tag, $pct); $detail = [string]$script:UpdProg.Text; $btn = 'Downloading...'; $btnOn = $false; $showNotes = $true }
+        'ready'       { $pct = 100; $status = ('Update {0} is downloaded and checked.' -f $script:Upd.Info.Tag); $detail = 'Restart to finish. Your settings and scan cache are kept.'; $btn = 'Restart now'; $showNotes = $true }
+        'page'        { $status = ('Version {0} is out, but it has no installable files.' -f $script:Upd.Info.Tag); $detail = 'The release page can be opened to download it by hand.'; $btn = 'Open release page' }
+        default       { $status = [string]$script:Upd.Msg; if (-not $status) { $status = 'Check whether a newer version is available.' }; $detail = ''; $btn = 'Check for updates' }
+    }
+    $w.Status.Text = $status
+    $w.Detail.Text = $detail
+    if ($st -eq 'checking') {         # no percentage to show: a block slides along the track
+        $script:UpdPulse = ($script:UpdPulse + 1) % 20
+        $bw = [int]($trackW * 0.25)
+        $w.Fill.Left = [int](($trackW - $bw) * ($script:UpdPulse / 19.0)); $w.Fill.Width = $bw
+    }
+    else { $w.Fill.Left = 0; $w.Fill.Width = [int]($trackW * $pct / 100.0) }
+    $w.Main.Text = $btn; $w.Main.Enabled = $btnOn
+    $w.Notes.Visible = $showNotes; $w.NotesCap.Visible = $showNotes
+    if ($showNotes -and $script:Upd.Info -and $w.Notes.Tag -ne [string]$script:Upd.Info.Tag) {
+        $w.Notes.Text = Get-ReleaseNotesText ([string]$script:Upd.Info.Notes); $w.Notes.Tag = [string]$script:Upd.Info.Tag
+        $w.Notes.SelectionStart = 0; $w.Notes.SelectionLength = 0
+    }
+}
+
 function Complete-UpdateCheck {
     param($Res)
-    if (-not $Res.Ok) { $script:Upd.State = 'idle'; $lblStatus.Text = 'Could not check for updates: ' + [string]$Res.Error; return }
+    if (-not $Res.Ok) { $script:Upd.State = 'idle'; $script:Upd.Msg = 'Could not reach the update server: ' + [string]$Res.Error; $lblStatus.Text = 'Could not check for updates.'; Update-UpdateWindow; return }
     if ($Res.None -or -not (Test-NewerVersion $Res.Tag $script:AppVersion)) {
-        $script:Upd.State = 'idle'; $lblStatus.Text = 'You are on the latest version (v' + $script:AppVersion + ').'; return
+        $script:Upd.State = 'idle'; $script:Upd.Msg = 'You are on the latest version (v' + $script:AppVersion + ').'
+        $lblStatus.Text = $script:Upd.Msg; Update-UpdateWindow; return
     }
+    $script:Upd.Info = $Res
     if (-not $Res.ZipUrl -or -not $Res.SumsUrl) {
-        $script:Upd.Info = $Res; $script:Upd.State = 'page'
+        $script:Upd.State = 'page'
         $lblStatus.Text = 'Version ' + $Res.Tag + ' is out, but its release has no zip or checksum file to install.'
-        Set-UpdateLink 'Open the release page'; return
+        Update-UpdateWindow; return
     }
-    $script:Upd.State = 'available'; $script:Upd.Info = $Res
+    $script:Upd.State = 'available'
     $lblStatus.Text = 'Update available: ' + $Res.Tag + '.'
-    Set-UpdateLink "What's new / Update"
+    if ($null -eq $script:UpdWin) { Set-UpdateLink "What's new / Update" }
+    Update-UpdateWindow
 }
 
 function Complete-UpdateDownload {
@@ -5560,15 +5630,20 @@ function Complete-UpdateDownload {
     if (-not $Res.Ok) {
         $script:Upd.State = 'available'
         $lblStatus.Text = 'The update was not installed: ' + [string]$Res.Error
-        Set-UpdateLink "What's new / Update"
+        if ($null -ne $script:UpdWin) { [void][Windows.Forms.MessageBox]::Show($script:UpdWin.Dlg, 'The update was not installed:' + "`n`n" + [string]$Res.Error, 'Update', 'OK', 'Warning') }
+        else { Set-UpdateLink "What's new / Update" }
+        Update-UpdateWindow
         return
     }
     $script:Upd.State = 'ready'; $script:Upd.Stage = [string]$Res.Stage
     $lblStatus.Text = 'Update ' + $script:Upd.Info.Tag + ' downloaded and checked.'
-    Set-UpdateLink 'Restart to finish updating'
+    Update-UpdateWindow
+    if ($null -ne $script:UpdWin) { Invoke-UpdateRestartFlow }          # the window is open: go straight to the restart question
+    else { Set-UpdateLink 'Restart to finish updating' }
 }
 
 $script:UpdTimer.Add_Tick({
+    if ($null -ne $script:UpdWin) { Update-UpdateWindow }
     $j = $script:Upd.Job
     if ($null -eq $j -or -not $j.Async.IsCompleted) { return }
     $script:UpdTimer.Stop()
@@ -5586,35 +5661,74 @@ $script:UpdTimer.Add_Tick({
 
 function Start-UpdateCheck {
     if ($null -ne $script:Upd.Job) { return }
-    $script:Upd.State = 'checking'
+    $script:Upd.State = 'checking'; $script:Upd.Msg = ''
     Set-UpdateLink ''
     $lblStatus.Text = 'Checking for updates...'
+    Update-UpdateWindow
     Start-UpdateJob -Kind 'check' -Script $script:UpdCheckScript -Params @{ Repo = $script:UpdateRepo; Ua = ('ModernMediaLibraryManager/' + $script:AppVersion) }
 }
 
-function Show-UpdateDialog {
-    # Release notes and the Download button. Returns $true when the user chose to download.
-    param($Info)
-    $dlg  = New-DialogForm "What's new" 660 500
-    $head = New-Label ('Version {0} is available (you have v{1})' -f $Info.Tag, $script:AppVersion) 24 18 $script:cText $script:fontBold
-    $box = New-Object Windows.Forms.TextBox
-    $box.Multiline = $true; $box.ReadOnly = $true; $box.ScrollBars = 'Vertical'; $box.WordWrap = $true
-    $box.Location = New-Object Drawing.Point(24, 52); $box.Size = New-Object Drawing.Size(612, 330)
-    $box.BackColor = $script:cPanel2; $box.ForeColor = $script:cText; $box.BorderStyle = 'FixedSingle'; $box.Font = $script:fontBase
-    $notes = ([string]$Info.Notes) -replace "`r?`n", "`r`n"
-    if (-not $notes.Trim()) { $notes = '(The release has no description.)' }
-    $box.Text = $notes
-    $hint = New-Label 'Download checks the file against the release checksum and keeps your settings, scan cache and collections. Nothing is installed until you restart.' 24 392 $script:cMuted $script:fontSmall
-    $hint.AutoSize = $false; $hint.Size = New-Object Drawing.Size(612, 34)
-    $ok     = New-FlatButton 'Download update' 150 'primary'
-    $later  = New-FlatButton 'Not now' 100 'secondary'
-    $ok.Location    = New-Object Drawing.Point(386, 446); $ok.DialogResult = [Windows.Forms.DialogResult]::OK
-    $later.Location = New-Object Drawing.Point(546, 446); $later.DialogResult = [Windows.Forms.DialogResult]::Cancel
-    $dlg.Controls.AddRange(@($head, $box, $hint, $ok, $later))
-    $dlg.AcceptButton = $ok; $dlg.CancelButton = $later
-    $go = ($dlg.ShowDialog($form) -eq [Windows.Forms.DialogResult]::OK)
+function Start-UpdateDownload {
+    if ($null -ne $script:Upd.Job -or $null -eq $script:Upd.Info) { return }
+    $script:Upd.State = 'downloading'; Set-UpdateLink ''
+    $script:UpdProg.Percent = 0; $script:UpdProg.Text = 'Connecting...'
+    $lblStatus.Text = 'Downloading ' + $script:Upd.Info.Tag + '...'
+    Update-UpdateWindow
+    Start-UpdateJob -Kind 'download' -Script $script:UpdDownloadScript -Params @{
+        ZipUrl = [string]$script:Upd.Info.ZipUrl; SumsUrl = [string]$script:Upd.Info.SumsUrl; ZipName = [string]$script:Upd.Info.ZipName
+        Tag = [string]$script:Upd.Info.Tag; Dest = (Join-Path $script:UpdateFolder 'staging'); Ua = ('ModernMediaLibraryManager/' + $script:AppVersion); Prog = $script:UpdProg }
+}
+
+function Show-UpdateWindow {
+    # One window for the whole update: checks as soon as it opens, shows progress and the release description, then asks about the restart.
+    if ($null -ne $script:UpdWin) { return }
+    $dlg = New-DialogForm 'Software update' 640 560
+    $status = New-Object Windows.Forms.Label
+    $status.Location = New-Object Drawing.Point(24, 18); $status.Size = New-Object Drawing.Size(592, 24); $status.AutoEllipsis = $true
+    $status.ForeColor = $script:cText; $status.BackColor = [Drawing.Color]::Transparent; $status.Font = $script:fontBold
+    $track = New-Object Windows.Forms.Panel
+    $track.Location = New-Object Drawing.Point(24, 50); $track.Size = New-Object Drawing.Size(592, 10); $track.BackColor = $script:cPanel2
+    $fill = New-Object Windows.Forms.Panel
+    $fill.Location = New-Object Drawing.Point(0, 0); $fill.Size = New-Object Drawing.Size(0, 10); $fill.BackColor = $script:cAccent
+    $track.Controls.Add($fill)
+    $detail = New-Object Windows.Forms.Label
+    $detail.Location = New-Object Drawing.Point(24, 66); $detail.Size = New-Object Drawing.Size(592, 20); $detail.AutoEllipsis = $true
+    $detail.ForeColor = $script:cMuted; $detail.BackColor = [Drawing.Color]::Transparent; $detail.Font = $script:fontSmall
+    $cap = New-Label "WHAT'S NEW" 24 102 $script:cMuted $script:fontSmall
+    $notes = New-Object Windows.Forms.TextBox
+    $notes.Multiline = $true; $notes.ReadOnly = $true; $notes.ScrollBars = 'Vertical'; $notes.WordWrap = $true; $notes.TabStop = $false
+    $notes.Location = New-Object Drawing.Point(24, 124); $notes.Size = New-Object Drawing.Size(592, 316)
+    $notes.BackColor = $script:cPanel2; $notes.ForeColor = $script:cText; $notes.BorderStyle = 'FixedSingle'; $notes.Font = $script:fontBase
+    $hint = New-Label 'Downloads are checked against the release checksum. Your settings and scan cache are kept.' 24 452 $script:cMuted $script:fontSmall
+    $main  = New-FlatButton 'Check for updates' 170 'primary'; $main.Location = New-Object Drawing.Point(266, 506)
+    $close = New-FlatButton 'Close' 100 'secondary'; $close.Location = New-Object Drawing.Point(516, 506); $close.DialogResult = [Windows.Forms.DialogResult]::Cancel
+    $dlg.Controls.AddRange(@($status, $track, $detail, $cap, $notes, $hint, $main, $close))
+    $dlg.CancelButton = $close; $dlg.ActiveControl = $main
+    $script:UpdWin = @{ Dlg = $dlg; Status = $status; Track = $track; Fill = $fill; Detail = $detail; NotesCap = $cap; Notes = $notes; Main = $main }
+    $main.Add_Click({
+        switch ($script:Upd.State) {
+            'available' { Start-UpdateDownload }
+            'ready'     { Invoke-UpdateRestartFlow }
+            'page'      { try { Start-Process ([string]$script:Upd.Info.Url) } catch { } }
+            'checking'  { }
+            'downloading' { }
+            default     { Start-UpdateCheck }
+        }
+    })
+    $dlg.Add_Shown({
+        $script:UpdWin.Notes.SelectionStart = 0; $script:UpdWin.Notes.SelectionLength = 0; $script:UpdWin.Main.Focus()
+        if ($script:Upd.State -eq 'idle' -and $null -eq $script:Upd.Job) { Start-UpdateCheck }
+        $script:UpdTimer.Start()
+    })
+    Update-UpdateWindow
+    [void]$dlg.ShowDialog($form)
     $dlg.Dispose()
-    $go
+    $script:UpdWin = $null
+    if ($null -eq $script:Upd.Job) { $script:UpdTimer.Stop() }
+    # closed while the download ran: it carries on, and the status bar link offers the restart when it is done
+    if ($script:Upd.State -eq 'ready') { Set-UpdateLink 'Restart to finish updating' }
+    elseif ($script:Upd.State -eq 'available') { Set-UpdateLink "What's new / Update" }
+    if ($script:UpdQuit) { $script:UpdQuit = $false; $form.Close() }
 }
 
 function Copy-UpdateFiles {
@@ -5628,16 +5742,18 @@ function Copy-UpdateFiles {
 }
 
 function Invoke-UpdateApply {
+    # Returns $true when the updater has been started and the app should close now.
     $info = $script:Upd.Info; $stage = [string]$script:Upd.Stage
+    $owner = if ($null -ne $script:UpdWin) { $script:UpdWin.Dlg } else { $form }
     $newPs1 = Join-Path $stage 'Modern-Media-Library-Manager.ps1'
-    if (-not $stage -or -not (Test-Path -LiteralPath $newPs1)) { $lblStatus.Text = 'The downloaded update is gone; click Check for updates to fetch it again.'; Set-UpdateLink ''; $script:Upd.State = 'idle'; return }
-    if (-not $btnScan.Enabled) { [void][Windows.Forms.MessageBox]::Show('A scan or fetch is still running. Let it finish (or cancel it), then click again.', 'Update', 'OK', 'Information'); return }
+    if (-not $stage -or -not (Test-Path -LiteralPath $newPs1)) { $script:Upd.State = 'idle'; $script:Upd.Msg = 'The downloaded update is gone; check for updates again to fetch it.'; $lblStatus.Text = $script:Upd.Msg; Set-UpdateLink ''; Update-UpdateWindow; return $false }
+    if (-not $btnScan.Enabled) { [void][Windows.Forms.MessageBox]::Show($owner, 'A scan or fetch is still running. Let it finish (or cancel it), then restart from the update window or the link in the status bar.', 'Update', 'OK', 'Information'); return $false }
     $probe = Join-Path $script:AppRoot '.write-test'
     try { [IO.File]::WriteAllText($probe, 'x'); Remove-Item -LiteralPath $probe -Force }
     catch {
-        [void][Windows.Forms.MessageBox]::Show("This folder is protected, so the app cannot update itself here:`n$($script:AppRoot)`n`nThe release page will open so you can download it by hand.", 'Update', 'OK', 'Information')
+        [void][Windows.Forms.MessageBox]::Show($owner, "This folder is protected, so the app cannot update itself here:`n$($script:AppRoot)`n`nThe release page will open so you can download it by hand.", 'Update', 'OK', 'Information')
         try { Start-Process $info.Url } catch { }
-        return
+        return $false
     }
     $prev = Join-Path $script:UpdateFolder 'previous'
     $cur  = Join-Path $script:AppRoot 'Modern-Media-Library-Manager.ps1'
@@ -5647,47 +5763,41 @@ function Invoke-UpdateApply {
         try {
             Copy-UpdateFiles -Stage $stage -Prev $prev -AppDir $script:AppRoot
             $script:AppVersion = ([string]$info.Tag).TrimStart('v')
-            $lblStatus.Text = 'Updated to ' + $info.Tag + '. The dashboard template applies the next time you open the dashboard; no restart needed.'
-            Set-UpdateLink ''; $script:Upd.State = 'idle'; $lnkVer.Text = 'v' + $script:AppVersion + '   |   Check for updates'
+            $script:Upd.State = 'idle'; $script:Upd.Msg = 'Updated to ' + $info.Tag + '. The dashboard template applies the next time you open the dashboard; no restart needed.'
+            $lblStatus.Text = $script:Upd.Msg
+            Set-UpdateLink ''; $lnkVer.Text = 'v' + $script:AppVersion + '   |   Check for updates'
             $script:DashboardStale = $true
         }
-        catch { $lblStatus.Text = 'The update could not be copied: ' + $_.Exception.Message }
-        return
+        catch { $script:Upd.Msg = 'The update could not be copied: ' + $_.Exception.Message; $lblStatus.Text = $script:Upd.Msg }
+        Update-UpdateWindow
+        return $false
     }
-    $ask = [Windows.Forms.MessageBox]::Show("The app will close and reopen in a couple of seconds on $($info.Tag), then re-run your last scan from the cache.`n`nThe old version is kept so it can roll back if the new one does not start.`n`nRestart now?", 'Update', 'YesNo', 'Question')
-    if ($ask -ne [Windows.Forms.DialogResult]::Yes) { return }
+    $ask = [Windows.Forms.MessageBox]::Show($owner, "The app will close and reopen in a couple of seconds on $($info.Tag), then re-run your last scan from the cache.`n`nThe old version is kept so it can roll back if the new one does not start.`n`nRestart now?", 'Update', 'YesNo', 'Question')
+    if ($ask -ne [Windows.Forms.DialogResult]::Yes) { return $false }
     New-Item -ItemType Directory -Path $script:UpdateFolder -Force | Out-Null
     $helper = Join-Path $script:UpdateFolder 'apply.ps1'
     $log    = Join-Path $script:UpdateFolder 'update.log'
     [IO.File]::WriteAllText($helper, $script:UpdApplyScript, (New-Object Text.UTF8Encoding($false)))
     $argLine = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}" -WaitPid {1} -AppDir "{2}" -Stage "{3}" -Prev "{4}" -LogFile "{5}"' -f $helper, $PID, $script:AppRoot, $stage, $prev, $log
     try { [void](Start-Process -FilePath 'powershell.exe' -ArgumentList $argLine -WindowStyle Hidden) }
-    catch { [void][Windows.Forms.MessageBox]::Show('The updater could not start: ' + $_.Exception.Message, 'Update', 'OK', 'Error'); return }
-    $form.Close()
+    catch { [void][Windows.Forms.MessageBox]::Show($owner, 'The updater could not start: ' + $_.Exception.Message, 'Update', 'OK', 'Error'); return $false }
+    return $true
 }
 
-function Invoke-UpdateLink {
-    switch ($script:Upd.State) {
-        'available' {
-            if (Show-UpdateDialog -Info $script:Upd.Info) {
-                $script:Upd.State = 'downloading'; Set-UpdateLink ''
-                $lblStatus.Text = 'Downloading ' + $script:Upd.Info.Tag + '...'
-                Start-UpdateJob -Kind 'download' -Script $script:UpdDownloadScript -Params @{
-                    ZipUrl = [string]$script:Upd.Info.ZipUrl; SumsUrl = [string]$script:Upd.Info.SumsUrl; ZipName = [string]$script:Upd.Info.ZipName
-                    Tag = [string]$script:Upd.Info.Tag; Dest = (Join-Path $script:UpdateFolder 'staging'); Ua = ('ModernMediaLibraryManager/' + $script:AppVersion) }
-            }
-        }
-        'ready' { Invoke-UpdateApply }
-        'page'  { try { Start-Process ([string]$script:Upd.Info.Url) } catch { } }
+function Invoke-UpdateRestartFlow {
+    if (Invoke-UpdateApply) {
+        if ($null -ne $script:UpdWin) { $script:UpdQuit = $true; $script:UpdWin.Dlg.Close() }      # the window closes first, then the app
+        else { $form.Close() }
     }
 }
-$lnkUpdate.Add_LinkClicked({ Invoke-UpdateLink })
-$lnkVer.Add_LinkClicked({
-    if ($script:Upd.State -in @('available', 'ready')) { Invoke-UpdateLink }
-    elseif ($script:Upd.State -in @('idle', 'page')) { Start-UpdateCheck }
+
+$lnkUpdate.Add_LinkClicked({
+    if ($script:Upd.State -eq 'ready') { Invoke-UpdateRestartFlow } else { Show-UpdateWindow }
 })
-$tip.SetToolTip($lnkVer, 'Looks for a newer release on GitHub. Nothing is downloaded until you choose to.')
+$lnkVer.Add_LinkClicked({ Show-UpdateWindow })
+$tip.SetToolTip($lnkVer, 'Opens the update window: checks GitHub for a newer release. Nothing is downloaded until you choose to.')
 #endregion
+
 
 if ($script:Settings['Source'] -eq 'Local') { $radLocal.Checked = $true } else { $radPlex.Checked = $true }
 Set-SourceMode ([bool]$radPlex.Checked)

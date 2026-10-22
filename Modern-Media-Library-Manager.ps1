@@ -41,7 +41,7 @@ Add-Type -AssemblyName System.Data
 #region ---------------------------------------------------------------- Configuration
 $script:AppRoot         = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $script:TemplatePath    = Join-Path $script:AppRoot 'dashboard-template.html'
-$script:AppVersion      = '0.1.5'    # must match the release tag (vX.Y.Z); the release workflow checks it
+$script:AppVersion      = '0.1.6'    # must match the release tag (vX.Y.Z); the release workflow checks it
 $script:CacheVersion    = 4          # bump when the record schema changes
 $script:AppData         = Join-Path $env:LOCALAPPDATA 'Modern-Media-Library-Manager'
 $script:CacheFolder     = Join-Path $script:AppData 'Cache'
@@ -2478,6 +2478,31 @@ function Switch-ToExternalDashboard {
     if (Test-Path -LiteralPath $script:LiveDashboard) { Start-Process $script:LiveDashboard }
 }
 
+$script:WvMapped = $false
+function Get-DashboardNavUrl {
+    # The live dashboard is opened through the mapped address when there is one; any other address is used as given.
+    param([string]$Url)
+    $base = ([Uri]$script:LiveDashboard).AbsoluteUri
+    if ($script:WvMapped -and $Url.StartsWith($base)) { return ('https://mmlm.dashboard/' + [Uri]::EscapeDataString([IO.Path]::GetFileName($script:LiveDashboard)) + $Url.Substring($base.Length)) }
+    $Url
+}
+
+function Save-CardPng {
+    # The dashboard hands over an exported card; ask where to keep it and write it out.
+    param([string]$Name, [string]$Base64)
+    try {
+        $bytes = [Convert]::FromBase64String($Base64)
+        $dlg = New-Object Windows.Forms.SaveFileDialog
+        $dlg.Filter = 'PNG image (*.png)|*.png'
+        $dlg.FileName = ($Name -replace '[\\/:*?"<>|]', '_')
+        $dlg.InitialDirectory = [Environment]::GetFolderPath('MyPictures')
+        if ($dlg.ShowDialog($form) -ne [Windows.Forms.DialogResult]::OK) { return }
+        [IO.File]::WriteAllBytes($dlg.FileName, $bytes)
+        Set-UiProgress -Text "Card saved: $($dlg.FileName)"
+    }
+    catch { [Windows.Forms.MessageBox]::Show("Could not save the card image:`n$_", 'Export Card to PNG', 'OK', 'Error') | Out-Null }
+}
+
 function Show-DashboardPane {
     param([Parameter(Mandatory)][string]$Url)
     $script:DashboardUrl = $Url
@@ -2491,7 +2516,24 @@ function Show-DashboardPane {
         $wv.CreationProperties = $props
         $wv.Add_CoreWebView2InitializationCompleted({
             param($sender, $e)
-            if ($e.IsSuccess) { $sender.CoreWebView2.Navigate($script:DashboardUrl) }
+            if ($e.IsSuccess) {
+                # Serve the dashboard folder under its own address so the page can read its poster files (needed to export a card as PNG)
+                try {
+                    $sender.CoreWebView2.SetVirtualHostNameToFolderMapping('mmlm.dashboard', (Split-Path -Parent $script:LiveDashboard), [Microsoft.Web.WebView2.Core.CoreWebView2HostResourceAccessKind]::Allow)
+                    $script:WvMapped = $true
+                } catch { $script:WvMapped = $false }
+                try {
+                    $sender.CoreWebView2.add_WebMessageReceived({
+                        param($s2, $e2)
+                        try { $m = $e2.TryGetWebMessageAsString() } catch { return }
+                        if ($m -and $m.StartsWith('savepng|')) {
+                            $bits = $m.Split([char[]]@('|'), 3)
+                            if ($bits.Count -eq 3) { Save-CardPng -Name $bits[1] -Base64 $bits[2] }
+                        }
+                    })
+                } catch { }
+                $sender.CoreWebView2.Navigate((Get-DashboardNavUrl $script:DashboardUrl))
+            }
             else { Switch-ToExternalDashboard -Reason $e.InitializationException.Message }
         })
         $dashHost.Controls.Add($wv)
@@ -2499,7 +2541,7 @@ function Show-DashboardPane {
         [void]$wv.EnsureCoreWebView2Async($null)
     }
     elseif ($null -ne $script:wv.CoreWebView2) {
-        $script:wv.CoreWebView2.Navigate($Url)
+        $script:wv.CoreWebView2.Navigate((Get-DashboardNavUrl $Url))
     }
     # else: still initialising - the completed handler navigates to the latest $script:DashboardUrl
 }
@@ -3075,22 +3117,24 @@ $toolbar = New-Object Windows.Forms.Panel
 $toolbar.Dock = 'Top'; $toolbar.Height = 54; $toolbar.Width = 1280; $toolbar.BackColor = $script:cBg
 $btnViewGrid   = New-FlatButton 'Grid view' 110 'primary'
 $btnViewDetail = New-FlatButton 'Detail view' 110 'secondary'
+$btnViewPoster = New-FlatButton 'Poster view' 110 'secondary'
 $btnViewDash   = New-FlatButton 'Dashboard' 110 'secondary'
 $btnViewGrid.Location   = New-Object Drawing.Point(24, 10)
 $btnViewDetail.Location = New-Object Drawing.Point(142, 10)
-$btnViewDash.Location   = New-Object Drawing.Point(260, 10)
-$lblFilter = New-Label 'Filter:' 400 18 $script:cMuted $script:fontBase
+$btnViewPoster.Location = New-Object Drawing.Point(260, 10)
+$btnViewDash.Location   = New-Object Drawing.Point(378, 10)
+$lblFilter = New-Label 'Filter:' 518 18 $script:cMuted $script:fontBase
 $txtFilter = New-Object Windows.Forms.TextBox
-$txtFilter.Location = New-Object Drawing.Point(448, 13); $txtFilter.Size = New-Object Drawing.Size(300, 26)
+$txtFilter.Location = New-Object Drawing.Point(566, 13); $txtFilter.Size = New-Object Drawing.Size(230, 26)
 $txtFilter.BackColor = $script:cPanel2; $txtFilter.ForeColor = $script:cText; $txtFilter.BorderStyle = 'FixedSingle'
-$lblCount = New-Label '' 765 18 $script:cMuted $script:fontBase
+$lblCount = New-Label '' 812 18 $script:cMuted $script:fontBase
 $btnCols = New-FlatButton 'Columns' 90 'secondary'
 $btnCols.Location = New-Object Drawing.Point(1166, 10); $btnCols.Anchor = 'Top,Right'
 $btnFetch = New-FlatButton 'Fetch info' 100 'secondary'
 $btnFetch.Location = New-Object Drawing.Point(1056, 10); $btnFetch.Anchor = 'Top,Right'
 $btnEdit = New-FlatButton 'Edit info' 100 'secondary'
 $btnEdit.Location = New-Object Drawing.Point(946, 10); $btnEdit.Anchor = 'Top,Right'
-$toolbar.Controls.AddRange(@($btnViewGrid, $btnViewDetail, $btnViewDash, $lblFilter, $txtFilter, $lblCount, $btnEdit, $btnFetch, $btnCols))
+$toolbar.Controls.AddRange(@($btnViewGrid, $btnViewDetail, $btnViewPoster, $btnViewDash, $lblFilter, $txtFilter, $lblCount, $btnEdit, $btnFetch, $btnCols))
 
 # collection bar: sits under the toolbar once a scan has results
 $collBar = New-Object Windows.Forms.Panel
@@ -3220,6 +3264,23 @@ $rightPane.Controls.Add($headPanel)
 $detailHost.Controls.Add($rightPane)       # Fill first, then Left
 $detailHost.Controls.Add($leftPane)
 
+# poster view: a scrolling wall of posters, painted by hand so a library of thousands stays quick (only what is on screen is drawn)
+$script:PosterItems = New-Object System.Collections.Generic.List[object]
+$script:PosterImgs  = New-Object 'System.Collections.Generic.Dictionary[string,object]'
+$script:PosterW = 150; $script:PosterH = 225; $script:PosterCap = 44; $script:PosterGapX = 20; $script:PosterGapY = 16
+$script:PosterHover = -1
+$posterHost = New-Object Windows.Forms.Panel
+$posterHost.Dock = 'Fill'; $posterHost.Padding = New-Object Windows.Forms.Padding(24, 0, 24, 12); $posterHost.Visible = $false
+$posterCanvas = New-Object BufferedPanel
+$posterCanvas.Dock = 'Fill'; $posterCanvas.BackColor = $script:cBg
+$posterScroll = New-Object Windows.Forms.VScrollBar
+$posterScroll.Dock = 'Right'; $posterScroll.Enabled = $false
+$posterHost.Controls.Add($posterCanvas)      # Fill first, then Right
+$posterHost.Controls.Add($posterScroll)
+try {   # a plain panel does not take the keyboard focus, which the mouse wheel needs
+    [Windows.Forms.Control].GetMethod('SetStyle', [Reflection.BindingFlags]'Instance,NonPublic').Invoke($posterCanvas, @([Windows.Forms.ControlStyles]::Selectable, $true))
+} catch { }
+
 # dashboard view: the WebView2 control is created lazily inside this panel (see Show-DashboardPane)
 $dashHost = New-Object Windows.Forms.Panel
 $dashHost.Dock = 'Fill'; $dashHost.BackColor = $script:cBg; $dashHost.Visible = $false
@@ -3227,6 +3288,7 @@ $dashHost.Dock = 'Fill'; $dashHost.BackColor = $script:cBg; $dashHost.Visible = 
 $content.Controls.Add($lblEmpty)
 $content.Controls.Add($gridHost)
 $content.Controls.Add($detailHost)
+$content.Controls.Add($posterHost)
 $content.Controls.Add($dashHost)
 $content.Controls.Add($toolbar)            # Top docked last so it sits above the Fill controls
 
@@ -3239,12 +3301,14 @@ $form.Controls.Add($header)
 
 #region ---------------------------------------------------------------- View helpers
 function Set-View {
-    param([ValidateSet('grid', 'detail', 'dashboard')][string]$View)
+    param([ValidateSet('grid', 'detail', 'poster', 'dashboard')][string]$View)
     $hasData = $script:ScanResults.Count -gt 0
     $script:CurrentView = $View
     $lblEmpty.Visible   = -not $hasData
     $gridHost.Visible   = $hasData -and ($View -eq 'grid')
     $detailHost.Visible = $hasData -and ($View -eq 'detail')
+    $posterHost.Visible = $hasData -and ($View -eq 'poster')
+    if ($posterHost.Visible) { Update-PosterList }
     $dashHost.Visible   = $hasData -and ($View -eq 'dashboard')
     # filter + column picker only make sense for the table views
     $showFilter = $hasData -and ($View -ne 'dashboard')
@@ -3256,7 +3320,7 @@ function Set-View {
     $collBar.Visible   = $hasData
     $toolbar.Height    = $(if ($hasData) { 132 } else { 54 })          # the collection bar is the toolbar's second row
     $btnCollAdd.Visible = $hasData -and ($View -eq 'grid')
-    foreach ($pair in @(@($btnViewGrid, 'grid'), @($btnViewDetail, 'detail'), @($btnViewDash, 'dashboard'))) {
+    foreach ($pair in @(@($btnViewGrid, 'grid'), @($btnViewDetail, 'detail'), @($btnViewPoster, 'poster'), @($btnViewDash, 'dashboard'))) {
         $btn = $pair[0]
         if ($pair[1] -eq $View) {
             $btn.BackColor = $script:cAccent; $btn.ForeColor = [Drawing.Color]::White; $btn.FlatAppearance.BorderSize = 0
@@ -3265,6 +3329,83 @@ function Set-View {
             $btn.BackColor = $script:cPanel2; $btn.ForeColor = $script:cText; $btn.FlatAppearance.BorderSize = 1
         }
     }
+}
+
+function Get-PosterGeometry {
+    $cw = $script:PosterW + $script:PosterGapX; $ch = $script:PosterH + $script:PosterCap + $script:PosterGapY
+    $w = [Math]::Max($posterCanvas.ClientSize.Width, 1)
+    $cols = [Math]::Max(1, [int][Math]::Floor(($w + $script:PosterGapX) / $cw))
+    $x0 = [Math]::Max(0, [int][Math]::Floor(($w - ($cols * $cw - $script:PosterGapX)) / 2))
+    $rows = [int][Math]::Ceiling($script:PosterItems.Count / [double]$cols)
+    @{ CW = $cw; CH = $ch; Cols = $cols; X0 = $x0; Rows = $rows; Total = ($rows * $ch) }
+}
+
+function Update-PosterScroll {
+    $g = Get-PosterGeometry
+    $vh = [Math]::Max($posterCanvas.ClientSize.Height, 1)
+    if ($g.Total -gt $vh) {
+        $posterScroll.Enabled = $true
+        $posterScroll.SmallChange = [int]($g.CH / 3)
+        $posterScroll.Maximum = $g.Total
+        $posterScroll.LargeChange = $vh
+        $maxV = $g.Total - $vh + 1
+        if ($posterScroll.Value -gt $maxV) { $posterScroll.Value = $maxV }
+    }
+    else { $posterScroll.Value = 0; $posterScroll.Enabled = $false }
+    $posterCanvas.Invalidate()
+}
+
+function Update-PosterList {
+    # Same titles, same order as the grid (its filter, collection and sorting all carry over).
+    $list = New-Object System.Collections.Generic.List[object]
+    if ($grid.DataSource -is [System.Data.DataTable]) {
+        $view = $grid.DataSource.DefaultView
+        for ($i = 0; $i -lt $view.Count; $i++) {
+            $d = $view[$i]
+            $y = 0; if ($d['Year'] -isnot [DBNull]) { $y = [int]$d['Year'] }
+            $list.Add([pscustomobject]@{ Title = [string]$d['Title']; Year = $y; Path = [string]$d['PosterPath']; FullPath = [string]$d['FullPath'] })
+        }
+    }
+    $script:PosterItems = $list
+    $script:PosterHover = -1
+    $posterScroll.Value = 0
+    Update-PosterScroll
+}
+
+function Get-PosterImage {
+    # Small cached copy of a poster (the same thumbnails the dashboard uses); $null when there is none.
+    param([string]$Path)
+    if (-not $Path) { return $null }
+    if ($script:PosterImgs.ContainsKey($Path)) { return $script:PosterImgs[$Path] }
+    $bmp = $null
+    try {
+        if (Test-Path -LiteralPath $Path) {
+            $th = Get-PosterThumbnail -Source $Path
+            if ($th) {
+                $ms = New-Object IO.MemoryStream(, [IO.File]::ReadAllBytes($th))
+                try { $img = [Drawing.Image]::FromStream($ms); try { $bmp = New-Object Drawing.Bitmap($img) } finally { $img.Dispose() } } finally { $ms.Dispose() }
+            }
+        }
+    } catch { $bmp = $null }
+    if ($script:PosterImgs.Count -ge 400) {
+        foreach ($v in @($script:PosterImgs.Values)) { if ($null -ne $v) { $v.Dispose() } }
+        $script:PosterImgs.Clear()
+    }
+    $script:PosterImgs[$Path] = $bmp
+    $bmp
+}
+
+function Get-PosterIndexAt {
+    param([int]$X, [int]$Y)
+    $g = Get-PosterGeometry
+    $px = $X - $g.X0; $py = $Y + $posterScroll.Value
+    if ($px -lt 0 -or $py -lt 0) { return -1 }
+    $c = [int][Math]::Floor($px / $g.CW); $r = [int][Math]::Floor($py / $g.CH)
+    if ($c -ge $g.Cols) { return -1 }
+    if (($px - $c * $g.CW) -gt $script:PosterW -or ($py - $r * $g.CH) -gt ($script:PosterH + $script:PosterCap)) { return -1 }
+    $i = $r * $g.Cols + $c
+    if ($i -ge $script:PosterItems.Count) { return -1 }
+    $i
 }
 
 function Format-MoneyShort {
@@ -3492,12 +3633,84 @@ function Update-Filter {
         $lblCount.Text = '{0} of {1} titles' -f $grid.DataSource.DefaultView.Count, $total
     }
     Update-DetailList -Filter $text
+    if ($posterHost.Visible) { Update-PosterList }
 }
 #endregion
 
 #region ---------------------------------------------------------------- Events
 $btnViewGrid.Add_Click({ Set-View 'grid' })
 $btnViewDetail.Add_Click({ Set-View 'detail' })
+$btnViewPoster.Add_Click({ Set-View 'poster' })
+$posterScroll.Add_ValueChanged({ $posterCanvas.Invalidate() })
+$posterCanvas.Add_Resize({ if ($posterHost.Visible) { Update-PosterScroll } })
+$posterCanvas.Add_MouseEnter({ [void]$posterCanvas.Focus() })
+$posterCanvas.Add_MouseWheel({
+    param($s, $e)
+    if (-not $posterScroll.Enabled) { return }
+    $maxV = $posterScroll.Maximum - $posterScroll.LargeChange + 1
+    $v = $posterScroll.Value - [int]($e.Delta / 120.0 * $posterScroll.SmallChange * 1.5)
+    $posterScroll.Value = [Math]::Max(0, [Math]::Min($maxV, $v))
+})
+$posterCanvas.Add_MouseMove({
+    param($s, $e)
+    $i = Get-PosterIndexAt $e.X $e.Y
+    if ($i -ne $script:PosterHover) {
+        $script:PosterHover = $i
+        $txt = ''
+        if ($i -ge 0) { $it = $script:PosterItems[$i]; $txt = $it.Title; if ($it.Year -gt 0) { $txt = "$txt ($($it.Year))" } }
+        $tip.SetToolTip($posterCanvas, $txt)
+    }
+})
+$posterCanvas.Add_MouseDoubleClick({
+    param($s, $e)
+    $i = Get-PosterIndexAt $e.X $e.Y
+    if ($i -lt 0) { return }
+    $path = $script:PosterItems[$i].FullPath
+    $txtFilter.Text = ''
+    for ($k = 0; $k -lt $script:DetailItems.Count; $k++) {
+        if ($script:DetailItems[$k].FullPath -eq $path) { Set-View 'detail'; $listFiles.SelectedIndex = $k; break }
+    }
+})
+$posterCanvas.Add_Paint({
+    param($s, $e)
+    $g = $e.Graphics
+    $g.Clear($script:cBg)
+    $flagsC = [Windows.Forms.TextFormatFlags]::NoPadding -bor [Windows.Forms.TextFormatFlags]::HorizontalCenter -bor [Windows.Forms.TextFormatFlags]::EndEllipsis -bor [Windows.Forms.TextFormatFlags]::SingleLine
+    if ($script:PosterItems.Count -eq 0) {
+        [Windows.Forms.TextRenderer]::DrawText($g, 'Nothing matches the current filter', $script:fontBase, (New-Object Drawing.Rectangle(0, 40, $s.ClientSize.Width, 30)), $script:cMuted, ($flagsC -bor [Windows.Forms.TextFormatFlags]::VerticalCenter))
+        return
+    }
+    $geo = Get-PosterGeometry
+    $top = $posterScroll.Value
+    $r0 = [int][Math]::Floor($top / $geo.CH); $r1 = [int][Math]::Ceiling(($top + $s.ClientSize.Height) / $geo.CH)
+    $g.InterpolationMode = [Drawing.Drawing2D.InterpolationMode]::HighQualityBilinear
+    $bgPh = New-Object Drawing.SolidBrush($script:cPanel2)
+    $flagsW = [Windows.Forms.TextFormatFlags]::NoPadding -bor [Windows.Forms.TextFormatFlags]::HorizontalCenter -bor [Windows.Forms.TextFormatFlags]::VerticalCenter -bor [Windows.Forms.TextFormatFlags]::WordBreak -bor [Windows.Forms.TextFormatFlags]::EndEllipsis
+    try {
+        for ($r = $r0; $r -le $r1; $r++) {
+            for ($c = 0; $c -lt $geo.Cols; $c++) {
+                $i = $r * $geo.Cols + $c
+                if ($i -ge $script:PosterItems.Count) { break }
+                $it = $script:PosterItems[$i]
+                $x = $geo.X0 + $c * $geo.CW; $y = $r * $geo.CH - $top
+                $rect = New-Object Drawing.Rectangle($x, $y, $script:PosterW, $script:PosterH)
+                $img = Get-PosterImage $it.Path
+                if ($null -ne $img) { $g.DrawImage($img, $rect) }
+                else {
+                    $g.FillRectangle($bgPh, $rect)
+                    [Windows.Forms.TextRenderer]::DrawText($g, $it.Title, $script:fontBase, (New-Object Drawing.Rectangle(($x + 10), ($y + 10), ($script:PosterW - 20), ($script:PosterH - 20))), $script:cMuted, $flagsW)
+                }
+                $tr = New-Object Drawing.Rectangle(($x - 8), ($y + $script:PosterH + 4), ($script:PosterW + 16), 18)
+                [Windows.Forms.TextRenderer]::DrawText($g, $it.Title, $script:fontSmall, $tr, $script:cText, $flagsC)
+                if ($it.Year -gt 0) {
+                    $yr = New-Object Drawing.Rectangle(($x - 8), ($y + $script:PosterH + 22), ($script:PosterW + 16), 16)
+                    [Windows.Forms.TextRenderer]::DrawText($g, [string]$it.Year, $script:fontSmall, $yr, $script:cMuted, $flagsC)
+                }
+            }
+        }
+    }
+    finally { $bgPh.Dispose() }
+})
 $txtFilter.Add_TextChanged({ Update-Filter })
 $tip.SetToolTip($txtFilter, "Type to search title, file, genre, studio, cast or director.`nSuggestions appear as you type (Down, then Enter, picks one).`nOr filter columns with  field:value  - for example  source:unknown  or  resolution:1080p.`nNumber columns take ranges and comparisons:  year:1980-1989   rating:>=7.5.  Combine several terms to narrow further.`nExport CSV then saves only the rows shown.")
 

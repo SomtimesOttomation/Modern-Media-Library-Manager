@@ -154,6 +154,10 @@ h1{font-size:22px;margin:0;letter-spacing:.2px}
 .sheet .x{all:unset;position:absolute;right:16px;top:14px;z-index:2;cursor:pointer;width:32px;height:32px;display:grid;place-items:center;border-radius:50%;background:rgba(255,255,255,.08)}
 .sheet .x:hover{background:rgba(255,255,255,.18)}
 .sheet .pimg{box-shadow:0 14px 40px rgba(0,0,0,.5)}
+.sheet .xp{all:unset;position:absolute;left:28px;top:7px;z-index:2;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;line-height:16px;color:var(--accent)}
+.sheet .xp:hover{color:#A9BBFF;text-decoration:underline}
+.sheet .xp[disabled]{opacity:.65;cursor:progress;text-decoration:none}
+.sheet .xp svg{width:13px;height:13px}
 .sheet .pcol{display:flex;flex-direction:column;gap:12px;min-width:0}
 .pcol .spec dl{grid-template-columns:1fr auto}
 .pcol .spec dd{text-align:right;font-weight:600}
@@ -614,7 +618,9 @@ function openModal(i){
   const compat = hdrClass(r).k === 'sdr' ? '' :
     `<div class="spec"><h4>Device compatibility</h4><dl>${ALL_DEVICES.map(d => { const s = deviceStatus(d, r);
       return `<dt title="${esc(d.note)}">${esc(d.name)}</dt><dd><span class="sdot" style="background:${STATUS[s].color}"></span>${STATUS[s].label}</dd>`; }).join('')}</dl></div>`;
+  cardRec = r;
   const html =`<div class="sheet"><button class="x" data-close="1">✕</button>
+    <button class="xp" data-export="1" type="button" title="Save this card as a PNG image"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v8M4.5 6.8 8 10.3l3.5-3.5M2.5 13.5h11"/></svg><span>Export Card to PNG</span></button>
     <div class="pcol"><div class="pimg">${r.Poster ? `<img src="${esc(r.Poster)}" alt="">` : `<div class="ph">${esc(r.Title)}</div>`}</div>${scoreCards(r)}</div>
     <div>
       <h2>${esc(r.Title)}</h2>
@@ -636,6 +642,67 @@ function openModal(i){
       </div>
     </div></div>`;
   const m = $('#modal'); m.innerHTML = html; m.hidden = false; document.body.style.overflow = 'hidden';
+}
+/* ---- Export the open title card as a PNG ----
+   The card is cloned with every computed style written inline, drawn through an SVG foreignObject onto a canvas, and saved.
+   It is taken from the top of the card to the bottom (not just the part in view), without the scroll bar, with the rounded corners kept. */
+let cardRec = null;
+function blobToDataUrl(b){ return new Promise((ok, no) => { const f = new FileReader(); f.onload = () => ok(f.result); f.onerror = () => no(f.error); f.readAsDataURL(b); }); }
+function loadImage(src){ return new Promise((ok, no) => { const im = new Image(); im.onload = () => ok(im); im.onerror = () => no(new Error('image')); im.src = src; }); }
+async function imageAsDataUrl(src){
+  if (!src) return null;
+  if (/^data:/i.test(src)) return src;
+  try { const r = await fetch(src); if (r.ok) return await blobToDataUrl(await r.blob()); } catch (e) {}
+  try { const im = await loadImage(src), c = document.createElement('canvas'); c.width = im.naturalWidth; c.height = im.naturalHeight; c.getContext('2d').drawImage(im, 0, 0); return c.toDataURL('image/jpeg', .92); }
+  catch (e) { return null; }       // a poster the browser will not let a script read (a plain file:// page)
+}
+function inlineStyles(src, dst){
+  const cs = getComputedStyle(src); let t = '';
+  for (let i = 0; i < cs.length; i++){ const p = cs[i]; if (/^(animation|transition)/.test(p)) continue; t += p + ':' + cs.getPropertyValue(p) + ';'; }
+  dst.style.cssText = t;
+  for (let i = 0; i < src.children.length; i++) inlineStyles(src.children[i], dst.children[i]);
+}
+async function exportCard(btn){
+  const sheet = document.querySelector('#modal .sheet');
+  if (!sheet || btn.disabled) return;
+  const label = btn.querySelector('span'), idle = 'Export Card to PNG';
+  btn.disabled = true; label.textContent = 'Exporting…';
+  let note = '';
+  try {
+    const W = Math.ceil(sheet.getBoundingClientRect().width);
+    const clone = sheet.cloneNode(true);
+    inlineStyles(sheet, clone);
+    clone.querySelectorAll('.x,.xp').forEach(n => n.remove());
+    for (const im of [...clone.querySelectorAll('img')]){
+      const d = await imageAsDataUrl(im.getAttribute('src'));
+      if (d) im.setAttribute('src', d); else { im.remove(); note = 'Saved without the poster (this browser cannot read it)'; }
+    }
+    clone.style.cssText += ';width:' + W + 'px;height:auto;max-height:none;min-height:0;overflow:visible;box-shadow:none;position:relative;margin:0;transform:none;';
+    const host = document.createElement('div');                          // measure the whole card, not the part that is scrolled into view
+    host.style.cssText = 'position:fixed;left:-30000px;top:0;visibility:hidden;pointer-events:none';
+    host.appendChild(clone); document.body.appendChild(host);
+    const H = Math.ceil(clone.getBoundingClientRect().height);
+    const xml = new XMLSerializer().serializeToString(clone);
+    host.remove();
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + W + '" height="' + H + '"><foreignObject x="0" y="0" width="' + W + '" height="' + H + '">' + xml + '</foreignObject></svg>';
+    const img = await loadImage('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg));
+    const scale = 2, c = document.createElement('canvas');
+    c.width = W * scale; c.height = H * scale;
+    const ctx = c.getContext('2d'); ctx.scale(scale, scale); ctx.drawImage(img, 0, 0, W, H);   // the canvas starts transparent, so the corners stay see-through
+    const blob = await new Promise(ok => c.toBlob(ok, 'image/png'));
+    if (!blob) throw new Error('empty image');
+    const name = (cardRec ? (cardRec.Title + (cardRec.Year > 0 ? ' (' + cardRec.Year + ')' : '')) : 'Card').replace(/[\\/:*?"<>|]+/g, '_').trim() + '.png';
+    if (window.chrome && window.chrome.webview){                          // inside the app: it shows the Save As box
+      const data = await blobToDataUrl(blob);
+      window.chrome.webview.postMessage('savepng|' + name + '|' + data.slice(data.indexOf(',') + 1));
+    } else {
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+      document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    }
+  } catch (e) { note = 'Could not export the card'; console.error(e); }
+  label.textContent = note || idle;
+  if (note) setTimeout(() => { if (label.isConnected) label.textContent = idle; }, 4500);
+  btn.disabled = false;
 }
 /* Ratings and box office, under the poster. Only the rows that have a value are shown. */
 const TOMATO = '<svg class="rti" viewBox="0 0 16 16" aria-label="Fresh"><circle cx="8" cy="9.2" r="6.4" fill="#E63428"/><path d="M8 5 4.8 2.2 8 3.2 11.4 1.4 10 5z" fill="#46AA46"/></svg>';
@@ -698,9 +765,10 @@ function openWall(keepScroll){
 
 /* ================= events ================= */
 document.addEventListener('click', e => {
-  const t = e.target.closest('[data-chart],[data-dev],[data-open],[data-health],[data-remove],[data-close],#clear,#more,#modal,#viewwall');
+  const t = e.target.closest('[data-chart],[data-dev],[data-open],[data-health],[data-remove],[data-close],[data-export],#clear,#more,#modal,#viewwall');
   if (!t) return;
   if (t.id === 'viewwall'){ openWall(false); return; }
+  if (t.dataset.export !== undefined){ exportCard(t); return; }
   if (t.id === 'modal' && e.target === t || t.dataset.close){ closeModal(); return; }
   if (t.dataset.open !== undefined){ openModal(+t.dataset.open); return; }
   if (t.id === 'clear'){ filters.clear(); shown = 60; update(); return; }

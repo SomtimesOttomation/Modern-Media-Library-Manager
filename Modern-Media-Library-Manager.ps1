@@ -41,7 +41,7 @@ Add-Type -AssemblyName System.Data
 #region ---------------------------------------------------------------- Configuration
 $script:AppRoot         = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $script:TemplatePath    = Join-Path $script:AppRoot 'dashboard-template.html'
-$script:AppVersion      = '0.1.2'    # must match the release tag (vX.Y.Z); the release workflow checks it
+$script:AppVersion      = '0.1.3'    # must match the release tag (vX.Y.Z); the release workflow checks it
 $script:CacheVersion    = 4          # bump when the record schema changes
 $script:AppData         = Join-Path $env:LOCALAPPDATA 'Modern-Media-Library-Manager'
 $script:CacheFolder     = Join-Path $script:AppData 'Cache'
@@ -4090,9 +4090,9 @@ function Update-CollectionBar {
         if ($col.SortBy) { $bits += ('sorted by {0}{1}' -f $col.SortBy, $(if ($col.SortDesc) { ' (highest first)' } else { '' })) }
         if ([int]$col.Limit -gt 0) { $bits += ('top {0}' -f $col.Limit) }
         if ($col.ByDate) { $bits += 'in release order' }
-        $lblCollInfo.Text = ('Rule: {0}   -   {1} title(s) in this scan' -f ($bits -join ', '), $n)
+        $lblCollInfo.Text = ('Dynamic: {0}   -   {1} title(s) in this scan' -f ($bits -join ', '), $n)
     }
-    else { $lblCollInfo.Text = ('Hand-picked: {0} saved, {1} found in this scan{2}' -f $col.Items.Count, $n, $(if ($col.ByDate) { ', in release order' } else { '' })) }
+    else { $lblCollInfo.Text = ('Static: {0} saved, {1} found in this scan{2}' -f $col.Items.Count, $n, $(if ($col.ByDate) { ', in release order' } else { '' })) }
 }
 
 function Update-CollectionScope {
@@ -4143,7 +4143,7 @@ function Get-RecordsById {
 }
 
 function Add-RecordsToCollection {
-    # Adds titles to a hand-picked collection (skipping ones already in it). Returns how many were new.
+    # Adds titles to a Static (hand-picked) collection (skipping ones already in it). Returns how many were new.
     param($Col, $Records)
     $have = @{}
     foreach ($it in $Col.Items) { foreach ($k in $it.Ids) { $have[[string]$k] = $true } }
@@ -4162,7 +4162,7 @@ function Add-RecordsToCollection {
 }
 
 function Show-AddToCollectionDialog {
-    # Returns the collection name to add to (an existing hand-picked one, or a new name), or $null.
+    # Returns the collection name to add to (an existing Static one, or a new name), or $null.
     param([int]$Count)
     $dlg  = New-DialogForm 'Add to collection' 480 226
     $head = New-Label ("Add {0} title(s) to:" -f $Count) 24 18 $script:cText $script:fontBold
@@ -4178,7 +4178,7 @@ function Show-AddToCollectionDialog {
     $note = New-Object Windows.Forms.Label
     $note.Location = New-Object Drawing.Point(24, 86); $note.Size = New-Object Drawing.Size(432, 36)
     $note.ForeColor = $script:cMuted; $note.BackColor = [Drawing.Color]::Transparent; $note.Font = $script:fontSmall
-    $note.Text = 'Pick a hand-picked collection, or type a new name to create one. Rule collections fill themselves from their filter.'
+    $note.Text = 'Pick a Static collection, or type a new name to create one. Dynamic collections fill themselves from their filter.'
     $err = New-Object Windows.Forms.Label
     $err.Location = New-Object Drawing.Point(24, 130); $err.Size = New-Object Drawing.Size(432, 20)
     $err.ForeColor = (RGB 255 107 129); $err.BackColor = [Drawing.Color]::Transparent
@@ -4191,7 +4191,7 @@ function Show-AddToCollectionDialog {
         $name = $script:AcCbo.Text.Trim()
         if (-not $name) { $script:AcErr.Text = 'Pick a collection or type a name.'; return }
         $ex = Get-CollectionByName $name
-        if ($null -ne $ex -and [string]$ex.Type -eq 'rule') { $script:AcErr.Text = 'That is a rule collection; it fills itself from its filter.'; return }
+        if ($null -ne $ex -and [string]$ex.Type -eq 'rule') { $script:AcErr.Text = 'That is a Dynamic collection; it fills itself from its filter.'; return }
         $script:AcResult = $name
         $script:AcDlg.DialogResult = [Windows.Forms.DialogResult]::OK
     })
@@ -4214,12 +4214,12 @@ function Show-CollectionEditor {
     $txtN.Location = New-Object Drawing.Point(24, 40); $txtN.Size = New-Object Drawing.Size(492, 26)
     $txtN.BackColor = $script:cPanel2; $txtN.ForeColor = $script:cText; $txtN.BorderStyle = 'FixedSingle'; $txtN.MaxLength = 80
 
-    $lblK  = New-Label 'KIND' 24 82 $script:cMuted $script:fontSmall
+    $lblK  = New-Label 'FILTER' 24 82 $script:cMuted $script:fontSmall
     $isRule = if ($isNew) { [bool]$DefaultQuery } else { [string]$Col.Type -eq 'rule' }
-    $rbMan  = New-FlatRadio 'Hand-picked: you add titles from the grid' 24 104 (-not $isRule)
-    $rbRule = New-FlatRadio 'Rule: a saved filter that stays up to date as the library changes' 24 130 $isRule
+    $rbMan  = New-FlatRadio 'Static (manual additions)' 24 104 (-not $isRule)
+    $rbRule = New-FlatRadio 'Dynamic (grows with library changes)' 24 130 $isRule
 
-    $lblQ = New-Label 'FILTER' 24 172 $script:cMuted $script:fontSmall
+    $lblQ = New-Label 'FILTER TERMS' 24 172 $script:cMuted $script:fontSmall
     $txtQ = New-Object Windows.Forms.TextBox
     $txtQ.Location = New-Object Drawing.Point(24, 194); $txtQ.Size = New-Object Drawing.Size(398, 26)
     $btnAddQ = New-FlatButton 'Add' 84 'secondary'; $btnAddQ.Location = New-Object Drawing.Point(432, 190); $btnAddQ.Height = 32
@@ -4280,7 +4280,7 @@ function Show-CollectionEditor {
         $script:CeAdd.Enabled = -not $rule
         $script:CeAddQ.Enabled = -not $rule
         if ($rule) {
-            $script:CeHq.Text = 'Same as the filter box. Examples:  genre:Horror year:1980-1989   studio:Pixar   rating:>=7.5   resolution:2160p.'
+            $script:CeHq.Text = 'The filter is the collection, so Add is off. Examples:  genre:Horror year:1980-1989   studio:Pixar   rating:>=7.5'
             $script:CeHs.Text = 'A top 10 is: sort by Rating, highest first, limit 10. A sort and limit with an empty filter ranks the whole library.'
         }
         else {
@@ -4311,12 +4311,13 @@ function Show-CollectionEditor {
         $q = $script:CeQ.Text.Trim()
         $s = if ($script:CeSort.SelectedIndex -gt 0) { [string]$script:CeSort.SelectedItem } else { '' }
         $lim = [int]$script:CeLimit.Value
-        if ($kind -eq 'rule' -and -not $q -and -not $s -and $lim -le 0) { $script:CeErr.Text = 'A rule needs a filter, or a sort and a limit.'; return }
+        if ($kind -eq 'rule' -and -not $q -and -not $s -and $lim -le 0) { $script:CeErr.Text = 'A Dynamic collection needs a filter, or a sort and a limit.'; return }
         $script:CeResult = @{ Name = $name; Type = $kind; Query = $(if ($kind -eq 'rule') { $q } else { '' }); SortBy = $(if ($kind -eq 'rule') { $s } else { '' })
                               SortDesc = [bool]($kind -eq 'rule' -and $script:CeDesc.Checked); ByDate = [bool]$script:CeDate.Checked; Limit = $(if ($kind -eq 'rule') { $lim } else { 0 }); AddSelected = [bool]$script:CeAdd.Checked; Picked = @($script:CePicked.ToArray()) }
         $script:CeDlg.DialogResult = [Windows.Forms.DialogResult]::OK
     })
     $script:CeOk = $ok; $script:CeTitle = $isNew
+    $tip.SetToolTip($btnAddQ, 'For Static collections: adds every title the filter finds. A Dynamic collection is the filter itself, so Add is off for it.')
     # Add: everything the filter (with its sort and limit) finds goes into the pending list; a later Create / Save puts the list in the collection.
     $btnAddQ.Add_Click({
         $script:CeErr.Text = ''
@@ -4459,8 +4460,8 @@ $btnCollNew.Add_Click({ New-CollectionFromUi })
 $btnCollEdit.Add_Click({ Edit-ActiveCollection })
 $btnCollDel.Add_Click({ Remove-ActiveCollection })
 $btnCollAdd.Add_Click({ Add-SelectedToCollection })
-$tip.SetToolTip($btnCollNew, "Make a collection: a hand-picked list, or a rule such as  genre:Horror year:1980-1989.`nIf the filter box has text, it is offered as the rule.")
-$tip.SetToolTip($btnCollAdd, "Add the titles selected in the grid to a hand-picked collection (or start a new one).")
+$tip.SetToolTip($btnCollNew, "Make a collection: a Static list you add to, or a Dynamic one such as  genre:Horror year:1980-1989.`nIf the filter box has text, it is offered as a Dynamic collection.")
+$tip.SetToolTip($btnCollAdd, "Add the titles selected in the grid to a Static collection (or start a new one).")
 $tip.SetToolTip($cboColl, "Show only the titles in a collection - in the grid, detail view, dashboard and exports.")
 
 Import-Collections

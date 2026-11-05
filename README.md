@@ -42,7 +42,7 @@ The launcher starts PowerShell with `-ExecutionPolicy Bypass` for that one proce
 - **Collections.** Your own named title lists, either Static (you add titles) or Dynamic (a saved filter plus an optional sort and limit, so a "top 10" works). Pick one and the grid, detail view, dashboard and exports show only its titles, and the dashboard takes the collection's name as its title. See [Collections](#collections).
 - **Remembers** your source, options, window size and column layout.
 
-TV shows are not supported yet; the option is visible but disabled.
+TV shows (Plex only for now): tick **TV Shows** to scan one row per episode, with Show, Season and Episode columns and a **Group by** Show / Season / None toggle. Missing-episode detection is not included yet.
 
 ## Collections
 

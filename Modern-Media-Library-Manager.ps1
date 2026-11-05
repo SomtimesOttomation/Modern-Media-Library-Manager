@@ -2177,6 +2177,7 @@ function Save-Settings {
     catch { }
 }
 
+$script:HasTv = $false
 function Set-GridColumnLayout {
     # Applies remembered visibility/widths. Columns the settings file has never seen (new fields) use their default.
     $vis    = @($script:Settings['VisibleColumns'])
@@ -2187,7 +2188,7 @@ function Set-GridColumnLayout {
         if ($null -eq $col) { continue }
         if     ($vis -contains $f.Name) { $col.Visible = $true }
         elseif ($hid -contains $f.Name) { $col.Visible = $false }
-        else                            { $col.Visible = $f.Show }
+        else                            { $col.Visible = ($f.Show -or ($script:HasTv -and ($f.Name -eq 'Season' -or $f.Name -eq 'Episode'))) }
     }
     $grid.AutoResizeColumns('DisplayedCells')
     foreach ($c in $grid.Columns) {
@@ -2828,7 +2829,7 @@ $chkRebuild = New-FlatCheckBox 'Rebuild local cache' 24 82
 $chkVideo   = New-FlatCheckBox 'Video' 190 82 $true
 $chkAudio   = New-FlatCheckBox 'Audio' 262 82 $true
 $chkMovies  = New-FlatCheckBox 'Movies' 190 82 $true
-$chkShows   = New-FlatCheckBox 'TV Shows (coming soon)' 270 82 $false
+$chkShows   = New-FlatCheckBox 'TV Shows' 270 82 $false
 $chkEmbed   = New-FlatCheckBox 'Embed posters' 334 82
 $chkFel     = New-FlatCheckBox 'FEL / MEL probe' 470 82
 $tip = New-Object Windows.Forms.ToolTip
@@ -2856,7 +2857,7 @@ $controls.Controls.AddRange(@($lblSource, $radPlex, $radLocal, $lblFolder, $txtF
 $chkVideo.Checked  = [bool]$script:Settings['Video']
 $chkAudio.Checked  = [bool]$script:Settings['Audio']
 $chkMovies.Checked = [bool]$script:Settings['PlexMovies']
-$chkShows.Checked  = $false; $chkShows.Enabled = $false; $chkShows.Cursor = [Windows.Forms.Cursors]::Default     # greyed out until TV support is finished
+$chkShows.Checked  = [bool]$script:Settings['PlexShows']
 $chkEmbed.Checked  = [bool]$script:Settings['EmbedPosters']
 $chkFel.Checked    = [bool]$script:Settings['DetectFel']
 try { $nudPar.Value = [Math]::Max(1, [Math]::Min(12, [int]$script:Settings['Parallel'])) } catch { $nudPar.Value = 4 }
@@ -2969,7 +2970,7 @@ function Show-FetchDialog {
     $msg.AutoSize = $false; $msg.Location = New-Object Drawing.Point(24, 48); $msg.Size = New-Object Drawing.Size(452, 100)
     $msg.ForeColor = $script:cMuted; $msg.BackColor = [Drawing.Color]::Transparent; $msg.Font = $script:fontBase
     $omdb = if ($script:OmdbKey) { 'and OMDb (Rotten Tomatoes critic score, domestic box office)' } else { '(add an OMDb key under the gear button to also get Rotten Tomatoes and domestic box office)' }
-    $msg.Text = "The $Scope will be looked up on TMDB (year, genre, rating, studio, director, certification, worldwide box office), the IMDb ratings file $omdb.`nIt runs in the background and can be cancelled. Movies only for now; TV titles are skipped."
+    $msg.Text = "The $Scope will be looked up on TMDB (year, genre, rating, studio, director, certification, worldwide box office), the IMDb ratings file $omdb.`nIt runs in the background and can be cancelled. Movies only for now; TV episodes are skipped."
     $chk  = New-FlatCheckBox 'Replace existing values (otherwise only empty fields are filled)' 24 160
     $ok     = New-FlatButton 'Fetch' 100 'primary'
     $cancel = New-FlatButton 'Cancel' 100 'secondary'
@@ -3149,11 +3150,18 @@ $btnCollNew  = New-FlatButton 'New...' 76 'secondary';           $btnCollNew.Loc
 $btnCollEdit = New-FlatButton 'Edit...' 76 'secondary';          $btnCollEdit.Location = New-Object Drawing.Point(448, 8)
 $btnCollDel  = New-FlatButton 'Delete' 76 'secondary';           $btnCollDel.Location  = New-Object Drawing.Point(530, 8)
 $btnCollAdd  = New-FlatButton 'Add selected...' 130 'secondary'; $btnCollAdd.Location  = New-Object Drawing.Point(612, 8)
+$lblGroup = New-Label 'Group by:' 770 15 $script:cMuted $script:fontBase
+$cboGroup = New-Object Windows.Forms.ComboBox
+$cboGroup.DropDownStyle = 'DropDownList'; $cboGroup.FlatStyle = 'Flat'
+$cboGroup.Location = New-Object Drawing.Point(846, 11); $cboGroup.Size = New-Object Drawing.Size(110, 28)
+$cboGroup.BackColor = $script:cPanel2; $cboGroup.ForeColor = $script:cText
+[void]$cboGroup.Items.AddRange(@('Show', 'Season', 'None')); $cboGroup.SelectedIndex = 0
+$lblGroup.Visible = $false; $cboGroup.Visible = $false
 $lblCollInfo = New-Object Windows.Forms.Label
 $lblCollInfo.AutoSize = $false; $lblCollInfo.AutoEllipsis = $true; $lblCollInfo.TextAlign = 'MiddleLeft'
 $lblCollInfo.Location = New-Object Drawing.Point(24, 48); $lblCollInfo.Size = New-Object Drawing.Size(1232, 22); $lblCollInfo.Anchor = 'Top,Left,Right'
 $lblCollInfo.ForeColor = $script:cMuted; $lblCollInfo.BackColor = [Drawing.Color]::Transparent; $lblCollInfo.Font = $script:fontSmall
-$collBar.Controls.AddRange(@($lblColl, $cboColl, $btnCollNew, $btnCollEdit, $btnCollDel, $btnCollAdd, $lblCollInfo))
+$collBar.Controls.AddRange(@($lblColl, $cboColl, $btnCollNew, $btnCollEdit, $btnCollDel, $btnCollAdd, $lblGroup, $cboGroup, $lblCollInfo))
 $toolbar.Controls.Add($collBar)
 
 # empty-state message
@@ -3320,6 +3328,7 @@ function Set-View {
     $collBar.Visible   = $hasData
     $toolbar.Height    = $(if ($hasData) { 132 } else { 54 })          # the collection bar is the toolbar's second row
     $btnCollAdd.Visible = $hasData -and ($View -eq 'grid')
+    $lblGroup.Visible = $hasData -and $script:HasTv -and ($View -eq 'grid'); $cboGroup.Visible = $lblGroup.Visible
     foreach ($pair in @(@($btnViewGrid, 'grid'), @($btnViewDetail, 'detail'), @($btnViewPoster, 'poster'), @($btnViewDash, 'dashboard'))) {
         $btn = $pair[0]
         if ($pair[1] -eq $View) {
@@ -3620,6 +3629,20 @@ function Set-CollectionOrder {
     elseif ($script:OrderApplied) { $grid.DataSource.DefaultView.Sort = ''; $script:OrderApplied = $false }
 }
 
+function Set-TvGrouping {
+    # TV rows are one per episode. Grouping is a sort (Show or Season first, then Season / Episode) plus a divider line drawn between groups.
+    if ($grid.DataSource -isnot [System.Data.DataTable] -or -not $script:HasTv) { return }
+    if (Test-ActiveByDate) { return }
+    $mode = [string]$cboGroup.SelectedItem
+    $sort = switch ($mode) {
+        'Show'   { '[Show] ASC, [Season] ASC, [Episode] ASC, [Title] ASC' }
+        'Season' { '[Season] ASC, [Show] ASC, [Episode] ASC, [Title] ASC' }
+        default  { '' }
+    }
+    $grid.DataSource.DefaultView.Sort = $sort
+    $script:OrderApplied = ($sort -ne '')
+}
+
 function Update-Filter {
     $text = $txtFilter.Text.Trim()
     if ($grid.DataSource -is [System.Data.DataTable]) {
@@ -3638,6 +3661,20 @@ function Update-Filter {
 #endregion
 
 #region ---------------------------------------------------------------- Events
+$cboGroup.Add_SelectedIndexChanged({ Set-TvGrouping; $grid.Invalidate() })
+$grid.Add_RowPostPaint({
+    param($s, $e)
+    # a thin accent line above the first row of each Show / Season group
+    if ($e.RowIndex -lt 1 -or -not $script:HasTv -or $s.DataSource -isnot [System.Data.DataTable]) { return }
+    $col = switch ([string]$cboGroup.SelectedItem) { 'Show' { 'Show' } 'Season' { 'Season' } default { '' } }
+    if (-not $col -or -not ([string]$s.DataSource.DefaultView.Sort).StartsWith("[$col]")) { return }
+    $a = $s.Rows[$e.RowIndex - 1].Cells[$col].Value; $b = $s.Rows[$e.RowIndex].Cells[$col].Value
+    if ([string]$a -ne [string]$b) {
+        $pen = New-Object Drawing.Pen($script:cAccent, 2)
+        $e.Graphics.DrawLine($pen, $e.RowBounds.Left, $e.RowBounds.Top, $e.RowBounds.Right, $e.RowBounds.Top)
+        $pen.Dispose()
+    }
+})
 $btnViewGrid.Add_Click({ Set-View 'grid' })
 $btnViewDetail.Add_Click({ Set-View 'detail' })
 $btnViewPoster.Add_Click({ Set-View 'poster' })
@@ -3719,7 +3756,12 @@ $grid.Add_CellFormatting({
     param($s, $e)
     if ($e.ColumnIndex -lt 0) { return }
     $cn = $s.Columns[$e.ColumnIndex].Name
-    if ($cn -eq 'RuntimeMin') {
+    if ($cn -eq 'Season' -or $cn -eq 'Episode') {
+        $isTv = $false; try { $isTv = [bool][string]$s.Rows[$e.RowIndex].Cells['Show'].Value } catch { }
+        $e.Value = if ($isTv) { [string]$e.Value } else { '' }
+        $e.FormattingApplied = $true
+    }
+    elseif ($cn -eq 'RuntimeMin') {
         $e.Value = Format-Runtime $e.Value
         $e.FormattingApplied = $true
     }
@@ -5244,6 +5286,7 @@ function Complete-Scan {
             return
         }
         $script:ScanResults = $results
+        $script:HasTv = (@($results | Where-Object { [string]$_.Show }).Count -gt 0)
         $cancelled = [bool]$s.Cancel
         if ($results.Count -eq 0 -and -not $cancelled) {
             $lblStatus.Text = 'Nothing found.'
@@ -5256,7 +5299,7 @@ function Complete-Scan {
             $table = ConvertTo-DataTable -Records $results
             $grid.DataSource = $table
             Set-GridColumnLayout     # remembered visibility/widths; brand-new fields fall back to their default
-            try { Update-CollectionScope; $script:OrderApplied = $false; Set-CollectionOrder } catch { }          # the active collection is re-evaluated against this scan
+            try { Update-CollectionScope; $script:OrderApplied = $false; Set-CollectionOrder; Set-TvGrouping } catch { }          # the active collection is re-evaluated against this scan
             $grid.ClearSelection()
             Update-Filter
         }

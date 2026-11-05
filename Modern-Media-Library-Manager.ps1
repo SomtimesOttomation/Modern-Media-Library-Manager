@@ -5934,8 +5934,9 @@ function Show-UpdateWindow {
     $notes.Location = New-Object Drawing.Point(24, 124); $notes.Size = New-Object Drawing.Size(592, 316)
     $notes.BackColor = $script:cPanel2; $notes.ForeColor = $script:cText; $notes.BorderStyle = 'FixedSingle'; $notes.Font = $script:fontBase
     $hint = New-Label 'Downloads are checked against the release checksum. Your settings and scan cache are kept.' 24 452 $script:cMuted $script:fontSmall
-    $main  = New-FlatButton 'Check for updates' 170 'primary'; $main.Location = New-Object Drawing.Point(266, 506)
-    $close = New-FlatButton 'Close' 100 'secondary'; $close.Location = New-Object Drawing.Point(516, 506); $close.DialogResult = [Windows.Forms.DialogResult]::Cancel
+    $bx = [int](($dlg.ClientSize.Width - (170 + 16 + 100)) / 2)                          # the two buttons sit side by side, centred
+    $main  = New-FlatButton 'Check for updates' 170 'primary'; $main.Location = New-Object Drawing.Point($bx, 506)
+    $close = New-FlatButton 'Close' 100 'secondary'; $close.Location = New-Object Drawing.Point(($bx + 170 + 16), 506); $close.DialogResult = [Windows.Forms.DialogResult]::Cancel
     $dlg.Controls.AddRange(@($status, $track, $detail, $cap, $notes, $hint, $main, $close))
     $dlg.CancelButton = $close; $dlg.ActiveControl = $main
     $script:UpdWin = @{ Dlg = $dlg; Status = $status; Track = $track; Fill = $fill; Detail = $detail; NotesCap = $cap; Notes = $notes; Main = $main }

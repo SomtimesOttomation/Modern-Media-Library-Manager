@@ -3940,7 +3940,8 @@ function Get-TvShowRecords {
 
 function Set-GridTable {
     # Each tab has its own table: movies are one row per title, TV is the show / season / episode tree.
-    $want = $(if ($script:Tab -eq 'TV') { $script:TvTable } else { $script:MovieTable })
+    # plain assignment on purpose: $( ) would unroll a DataTable into its rows and the grid would get an array of DataRows
+    if ($script:Tab -eq 'TV') { $want = $script:TvTable } else { $want = $script:MovieTable }
     if (-not [object]::ReferenceEquals($grid.DataSource, $want)) { $grid.DataSource = $want }
     if ($null -eq $want) { return }
     Set-GridColumnLayout

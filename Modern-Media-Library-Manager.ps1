@@ -62,6 +62,9 @@ $script:DashboardUrl    = ''
 $script:CurrentView     = 'grid'
 $script:Tab             = 'Movies'          # library tab: 'Movies' (default) or 'TV'
 $script:TabCounts       = @{ Movies = 0; TV = 0 }
+$script:Scanning        = $false            # a scan is running (it owns one tab; the other tab stays usable)
+$script:ScanTab         = ''
+$script:EmptyText       = $null
 $script:WebView2Ready   = $false
 $script:WebView2Failed  = $false
 $script:WebView2Error   = ''
@@ -993,7 +996,7 @@ function Get-PlexStubs {
         }
         $start += $nodes.Count
         if (-not $t) { break }                                           # no paging info: one page is all there is
-        Set-UiProgress -Text ("Listing {0}: {1} of {2}" -f $Section.Title, [math]::Min($start, $total), $total)
+        Set-UiProgress -Text ("Listing {0}: {1} of {2}" -f $Section.Title, [math]::Min($start, $total), $total) -Value ([math]::Min($start, $total)) -Max $total
     }
     $stubs
 }
@@ -1397,6 +1400,7 @@ function Invoke-PlexScan {
 
     # 1) list every item (cheap) ---------------------------------------------------------
     $stubs = New-Object System.Collections.Generic.List[object]
+    Set-ScanPhase -Lo 0.0 -Hi 0.05
     foreach ($sec in $sections) {
         foreach ($s in @(Get-PlexStubs -BaseUrl $BaseUrl -Token $Token -Section $sec)) { $stubs.Add($s) }
     }
@@ -1406,7 +1410,14 @@ function Invoke-PlexScan {
     # 2) reuse cached records whose Plex 'updatedAt' has not changed ------------------------
     $byKey = @{}
     $todo  = New-Object System.Collections.Generic.List[object]
+    Set-ScanPhase -Lo 0.05 -Hi 0.10
+    $chk = 0
     foreach ($s in $stubs) {
+        $chk++
+        if (($chk % 250) -eq 0) {
+            if (Test-ScanCancelled) { break }
+            Set-UiProgress -Text ("Checking saved results: {0} of {1}" -f $chk, $stubs.Count) -Value $chk -Max $stubs.Count
+        }
         $ck = Join-Path $script:CacheFolder ((Get-StringHash ('plex|{0}|{1}|{2}|{3}|rt2' -f $BaseUrl.ToLowerInvariant(), $s.Key, $s.Updated, $script:CacheVersion)) + '.json')
         $s | Add-Member -NotePropertyName CacheFile -NotePropertyValue $ck -Force
         if ($Rebuild) { Remove-Item -LiteralPath $ck -Force -ErrorAction SilentlyContinue }
@@ -1420,11 +1431,11 @@ function Invoke-PlexScan {
     # 3) fetch full details for the rest, in batches ----------------------------------------
     $showCache = @{}
     $done = $stubs.Count - $todo.Count
-    $postLo = if ($todo.Count -gt 0) { 0.8 } else { 0.0 }       # the overall bar: details 0-80 %, posters 80-100 % (all of it when everything was cached)
-    Set-ScanPhase -Lo 0.0 -Hi $postLo
+    $postLo = if ($todo.Count -gt 0) { 0.8 } else { 0.10 }       # the overall bar: details 0-80 %, posters 80-100 % (all of it when everything was cached)
+    Set-ScanPhase -Lo 0.10 -Hi $postLo
     for ($i = 0; $i -lt $todo.Count; $i += 25) {
         if (Test-ScanCancelled) { break }
-        $batch = @($todo | Select-Object -Skip $i -First 25)
+        $batch = @($todo.GetRange($i, [Math]::Min(25, $todo.Count - $i)))      # (Select-Object -Skip re-walks the whole list every time, which crawls on tens of thousands of episodes)
         Set-UiProgress -Text ("Reading Plex metadata: {0} of {1}" -f ($done + 1), $stubs.Count) -Value $done -Max $stubs.Count
         $map = Get-PlexMetadataMap -BaseUrl $BaseUrl -Token $Token -Keys @($batch | ForEach-Object { $_.Key })
         foreach ($s in $batch) {
@@ -2817,6 +2828,18 @@ function New-LibraryTab {
 $tabMovies = New-LibraryTab 'Movies' 'Movies' 14 90
 $tabTv     = New-LibraryTab 'TV Shows' 'TV' 104 100
 $tabBar.Controls.AddRange(@($tabMovies, $tabTv))
+function Update-TabLabels {
+    # The tab being scanned says so; widths follow the text.
+    $x = 14
+    foreach ($t in @($tabMovies, $tabTv)) {
+        $name = $(if ([string]$t.Tag -eq 'TV') { 'TV Shows' } else { 'Movies' })
+        $t.Text = $(if ($script:Scanning -and $script:ScanTab -eq [string]$t.Tag) { "$name (scanning...)" } else { $name })
+        $w = [Windows.Forms.TextRenderer]::MeasureText($t.Text, $script:fontBold).Width + 40
+        $t.Location = New-Object Drawing.Point($x, 0); $t.Size = New-Object Drawing.Size($w, 40)
+        $x += $w + 4
+        $t.Invalidate()
+    }
+}
 
 # ---- control card ---------------------------------------------------------
 $controls = New-Object Windows.Forms.Panel
@@ -3332,8 +3355,14 @@ $form.Controls.Add($tabBar)             # added last, so it docks above the head
 #region ---------------------------------------------------------------- View helpers
 function Set-View {
     param([ValidateSet('grid', 'detail', 'poster', 'dashboard')][string]$View)
-    $hasData = $script:ScanResults.Count -gt 0
+    $scanHere = ($script:Scanning -and $script:Tab -eq $script:ScanTab)      # the tab being scanned shows a notice; the other tab works normally
+    $hasData = ($script:ScanResults.Count -gt 0) -and -not $scanHere
     $script:CurrentView = $View
+    if ($scanHere) {
+        if ($null -eq $script:EmptyText) { $script:EmptyText = $lblEmpty.Text }
+        $lblEmpty.Text = "Scanning $(if ($script:Tab -eq 'TV') { 'TV Shows' } else { 'Movies' })...`r`nProgress is shown at the bottom of the window.`r`nThe other tab stays usable while this runs."
+    }
+    elseif ($null -ne $script:EmptyText) { $lblEmpty.Text = $script:EmptyText; $script:EmptyText = $null }
     $lblEmpty.Visible   = -not $hasData
     $gridHost.Visible   = $hasData -and ($View -eq 'grid')
     $detailHost.Visible = $hasData -and ($View -eq 'detail')
@@ -3706,7 +3735,7 @@ function Set-LibraryTab {
     $btnScan.Text = $(if ($Name -eq 'TV') { 'Scan TV Shows' } else { 'Scan Movies' })
     if ($grid.DataSource -is [System.Data.DataTable]) { Set-GridColumnLayout; Set-TvGrouping; Update-Filter; $grid.ClearSelection() }
     Set-View $script:CurrentView
-    if ($script:CurrentView -eq 'dashboard' -and $script:ScanResults.Count -gt 0) { Show-DashboardView }
+    if ($script:CurrentView -eq 'dashboard' -and $script:ScanResults.Count -gt 0 -and -not $script:Scanning) { Show-DashboardView }
 }
 $tabMovies.Add_Click({ Set-LibraryTab 'Movies' })
 $tabTv.Add_Click({ Set-LibraryTab 'TV' })
@@ -5182,6 +5211,9 @@ function Test-DashboardReady {
 function Show-DashboardView {
     # Builds the dashboard (only if the scan changed) and shows it inside the window.
     # Falls back to the default browser if the embedded WebView2 cannot start.
+    if ($script:Scanning) {
+        [Windows.Forms.MessageBox]::Show('The dashboard is available when the scan has finished.', 'Dashboard', 'OK', 'Information') | Out-Null; return
+    }
     if (-not (Test-DashboardReady)) { return }
 
     $btnDash.Enabled = $false; $btnScan.Enabled = $false; $btnSaveHtml.Enabled = $false
@@ -5282,11 +5314,8 @@ $btnScan.Add_Click({
     Set-OverallProgress -Fraction 0.0
     # A scan covers the active tab only; the other tab's titles are kept and put back when the scan finishes.
     $scopeTv = ($usePlex -and $script:Tab -eq 'TV')
-    $script:KeepRecords = @($script:ScanResults | Where-Object { ([bool][string]$_.Show) -ne $scopeTv })
-    $script:ScanResults = @()
+    $script:KeepRecords = @($script:ScanResults | Where-Object { ([bool][string]$_.Show) -ne $scopeTv })     # the other tab's titles stay on screen
     $script:DashboardStale = $true
-    $grid.DataSource = $null
-    $lblCount.Text = ''
     $lblStatus.Text = 'Starting...'
 
     try {
@@ -5301,6 +5330,8 @@ $btnScan.Add_Click({
                 Rebuild = [bool]$chkRebuild.Checked; DetectFel = [bool]$chkFel.Checked; Parallel = [int]$nudPar.Value }
         }
         $script:ScanTimer.Start()
+        $script:Scanning = $true; $script:ScanTab = $(if ($scopeTv) { 'TV' } else { 'Movies' })
+        Update-TabLabels; Set-View $script:CurrentView
     }
     catch {
         [Windows.Forms.MessageBox]::Show("Could not start the scan:`n$_", 'Modern Media Library Manager', 'OK', 'Error') | Out-Null
@@ -5312,6 +5343,9 @@ function Complete-Scan {
     # Runs on the UI thread once the background worker has finished (or was abandoned after Cancel).
     param([bool]$Abandoned = $false)
     $script:ScanTimer.Stop()
+    $script:Scanning = $false
+    if ($null -ne $script:EmptyText) { $lblEmpty.Text = $script:EmptyText; $script:EmptyText = $null }
+    Update-TabLabels
     $s  = $script:Sync
     $ps = $script:ScanPs
     $results = @()
@@ -5334,13 +5368,6 @@ function Complete-Scan {
             $msg = [string]$s.Error
             if ($msg -match 'rejected the token') { $script:PlexToken = ''; $script:Settings['PlexTokenProtected'] = ''; $msg += "`n`nClick Token... to enter a new one." }
             $lblStatus.Text = 'Scan failed.'
-            if (@($script:KeepRecords).Count -gt 0) {          # put the other tab's titles back
-                $script:ScanResults = @($script:KeepRecords)
-                $nTv0 = @($script:ScanResults | Where-Object { [string]$_.Show }).Count
-                $script:TabCounts = @{ Movies = ($script:ScanResults.Count - $nTv0); TV = $nTv0 }
-                $grid.DataSource = ConvertTo-DataTable -Records $script:ScanResults
-                Set-GridColumnLayout; Update-Filter
-            }
             $title = if ($script:ScanUsePlex) { 'Plex' } else { 'Modern Media Library Manager' }
             [Windows.Forms.MessageBox]::Show("The scan could not finish:`n$msg", $title, 'OK', 'Error') | Out-Null
             return

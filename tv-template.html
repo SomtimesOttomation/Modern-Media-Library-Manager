@@ -138,7 +138,7 @@
   var view = 'posters', filterText = '', match = null;   // match: null (no filter) or { shows: {name: {all, seasons: {s: [eps]}}} }
 
   function seasonLabel(n) { return n === 0 ? 'Specials' : 'Season ' + n; }
-  function years(s) { return !s.y0 ? '' : (s.y0 === s.y1 ? String(s.y0) : s.y0 + '–' + s.y1); }
+  function years(s) { return !s.y0 ? '' : (s.y0 === s.y1 ? String(s.y0) : s.y0 + '\u2013' + s.y1); }
   function fmtRating(r) { return r ? r.toFixed(1) : ''; }
   function fmtRun(min, total) {
     if (!min) return '';
@@ -179,7 +179,7 @@
       var sh = shows[i], s = sh.sum, ns = sh.seasons.length;
       var img = sh.p ? '<img loading="lazy" src="' + esc(sh.p) + '" alt="" onerror="this.remove()">' : '';
       html.push('<div class="tile" data-show="' + i + '" title="' + esc(sh.n) + '"><div class="img"><div class="ph">' + esc(sh.n) + '</div>' + img + '</div>' +
-        '<div class="name">' + esc(sh.n) + '</div><div class="meta">' + [years(s), ns + (ns === 1 ? ' season' : ' seasons'), s.n + ' ep'].filter(Boolean).join(' · ') + '</div></div>');
+        '<div class="name">' + esc(sh.n) + '</div><div class="meta">' + [years(s), ns + (ns === 1 ? ' season' : ' seasons'), s.n + ' ep'].filter(Boolean).join(' \u00B7 ') + '</div></div>');
     }
     $('tiles').innerHTML = html.join('');
     $('tiles').onclick = function (ev) {
@@ -218,14 +218,14 @@
     if (r.l === 0) {
       var s = r.sh.sum, ns = r.sh.seasons.length;
       c = ['<div class="t0" data-act="toggle">' + esc(r.sh.n) + '</div>',
-           '<div class="tg" data-act="toggle"><span class="ar">' + (r.open ? '▾' : '▸') + '</span>' + ns + (ns === 1 ? ' season' : ' seasons') + ', ' + s.n + ' ep</div>',
+           '<div class="tg" data-act="toggle"><span class="ar">' + (r.open ? '\u25BE' : '\u25B8') + '</span>' + ns + (ns === 1 ? ' season' : ' seasons') + ', ' + s.n + ' ep</div>',
            '<div>' + years(s) + '</div>', '<div class="num">' + fmtRating(s.rating) + '</div>', '<div class="num">' + fmtRun(s.run, true) + '</div>',
            '<div>' + chipRes(s.topRes) + '</div>', '<div>' + esc(s.topCodec) + '</div>', '<div>' + chipHdr(s.topHdr) + '</div>', '<div>' + esc(s.topAudio) + '</div>',
            '<div class="num">' + fmtSize(s.size) + '</div>', '<div>' + esc(s.added) + '</div>'];
     } else if (r.l === 1) {
       var t = r.se.sum;
       c = ['<div class="t1" data-act="toggle">' + seasonLabel(r.se.s) + '</div>',
-           '<div class="tg" data-act="toggle"><span class="ar">' + (r.open ? '▾' : '▸') + '</span>' + t.n + (t.n === 1 ? ' episode' : ' episodes') + '</div>',
+           '<div class="tg" data-act="toggle"><span class="ar">' + (r.open ? '\u25BE' : '\u25B8') + '</span>' + t.n + (t.n === 1 ? ' episode' : ' episodes') + '</div>',
            '<div>' + years(t) + '</div>', '<div class="num">' + fmtRating(t.rating) + '</div>', '<div class="num">' + fmtRun(t.run, true) + '</div>',
            '<div>' + chipRes(t.topRes) + '</div>', '<div>' + esc(t.topCodec) + '</div>', '<div>' + chipHdr(t.topHdr) + '</div>', '<div>' + esc(t.topAudio) + '</div>',
            '<div class="num">' + fmtSize(t.size) + '</div>', '<div>' + esc(t.added) + '</div>'];
@@ -307,7 +307,7 @@
   });
 
   $('title').textContent = 'TV Shows';
-  $('sub').textContent = D.shows.length.toLocaleString() + ' shows · ' + totalEps.toLocaleString() + ' episodes' + (D.generated ? ' · scanned ' + D.generated : '');
+  $('sub').textContent = D.shows.length.toLocaleString() + ' shows \u00B7 ' + totalEps.toLocaleString() + ' episodes' + (D.generated ? ' \u00B7 scanned ' + D.generated : '');
   setView(location.hash === '#grid' ? 'grid' : 'posters', false);
 })();
 </script>

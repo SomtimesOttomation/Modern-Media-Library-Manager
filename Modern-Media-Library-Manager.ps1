@@ -2148,8 +2148,6 @@ function Update-SettingsFromUi {
     $s = $script:Settings
     if ($script:CurrentSource -eq 'Plex') { $s['PlexUrl'] = $txtFolder.Text.Trim() } else { $s['LastFolder'] = $txtFolder.Text.Trim() }
     $s['Source']       = if ($radPlex.Checked) { 'Plex' } else { 'Local' }
-    $s['PlexMovies']   = [bool]$chkMovies.Checked
-    $s['PlexShows']    = [bool]$chkShows.Checked
     $s['Video']        = [bool]$chkVideo.Checked
     $s['Audio']        = [bool]$chkAudio.Checked
     $s['EmbedPosters'] = [bool]$chkEmbed.Checked
@@ -2856,8 +2854,6 @@ $btnWorkers.Location = New-Object Drawing.Point(1138, 8); $btnWorkers.Anchor = '
 $chkRebuild = New-FlatCheckBox 'Rebuild local cache' 24 82
 $chkVideo   = New-FlatCheckBox 'Video' 190 82 $true
 $chkAudio   = New-FlatCheckBox 'Audio' 262 82 $true
-$chkMovies  = New-FlatCheckBox 'Movies' 190 82 $true
-$chkShows   = New-FlatCheckBox 'TV Shows' 270 82 $false
 $chkEmbed   = New-FlatCheckBox 'Embed posters' 334 82
 $chkFel     = New-FlatCheckBox 'FEL / MEL probe' 470 82
 $tip = New-Object Windows.Forms.ToolTip
@@ -2868,7 +2864,7 @@ $tip.SetToolTip($btnGear, 'Settings')
 $tip.SetToolTip($radPlex, 'Read the library from your Plex server (fast: Plex has already analysed every file).')
 $tip.SetToolTip($radLocal, 'Scan a folder with MediaInfo (slower: every file is opened).')
 
-$btnScan     = New-FlatButton 'Scan Media' 130 'primary'
+$btnScan     = New-FlatButton 'Scan Movies' 130 'primary'
 $btnDash     = New-FlatButton 'Dashboard' 120 'primary'
 $btnSaveHtml = New-FlatButton 'Save HTML' 110 'secondary'
 $btnExport   = New-FlatButton 'Export CSV' 100 'secondary'
@@ -2879,13 +2875,11 @@ foreach ($b in @($btnScan, $btnDash, $btnSaveHtml, $btnExport, $btnCancel)) {
     $x -= ($b.Width + 8)
     $b.Location = New-Object Drawing.Point($x, 76); $b.Anchor = 'Top,Right'
 }
-$controls.Controls.AddRange(@($lblSource, $radPlex, $radLocal, $lblFolder, $txtFolder, $btnBrowse, $chkRebuild, $chkVideo, $chkAudio, $chkMovies, $chkShows, $chkEmbed, $chkFel, $lblPar, $nudPar, $btnWorkers, $btnScan, $btnDash, $btnSaveHtml, $btnExport, $btnCancel))
+$controls.Controls.AddRange(@($lblSource, $radPlex, $radLocal, $lblFolder, $txtFolder, $btnBrowse, $chkRebuild, $chkVideo, $chkAudio, $chkEmbed, $chkFel, $lblPar, $nudPar, $btnWorkers, $btnScan, $btnDash, $btnSaveHtml, $btnExport, $btnCancel))
 
 # remembered options (the cache-rebuild box is deliberately NOT remembered)
 $chkVideo.Checked  = [bool]$script:Settings['Video']
 $chkAudio.Checked  = [bool]$script:Settings['Audio']
-$chkMovies.Checked = [bool]$script:Settings['PlexMovies']
-$chkShows.Checked  = [bool]$script:Settings['PlexShows']
 $chkEmbed.Checked  = [bool]$script:Settings['EmbedPosters']
 $chkFel.Checked    = [bool]$script:Settings['DetectFel']
 try { $nudPar.Value = [Math]::Max(1, [Math]::Min(12, [int]$script:Settings['Parallel'])) } catch { $nudPar.Value = 4 }
@@ -3055,7 +3049,7 @@ function Update-OptionLayout {
     # reports $false for every child until the window itself is shown.
     param([bool]$Plex)
     $x = 24
-    $list = if ($Plex) { @($chkRebuild, $chkMovies, $chkShows, $chkEmbed, $chkFel) } else { @($chkRebuild, $chkVideo, $chkAudio, $chkEmbed, $chkFel) }
+    $list = if ($Plex) { @($chkRebuild, $chkEmbed, $chkFel) } else { @($chkRebuild, $chkVideo, $chkAudio, $chkEmbed, $chkFel) }
     foreach ($c in $list) {
         $c.Size     = $c.GetPreferredSize([Drawing.Size]::Empty)
         $c.Location = New-Object Drawing.Point($x, 82)
@@ -3072,7 +3066,6 @@ function Set-SourceMode {
     $txtFolder.Text   = if ($Plex) { [string]$script:Settings['PlexUrl'] } else { [string]$script:Settings['LastFolder'] }
     $btnBrowse.Text   = if ($Plex) { 'Token...' } else { 'Browse...' }
     $chkVideo.Visible = -not $Plex; $chkAudio.Visible = -not $Plex
-    $chkMovies.Visible = $Plex;     $chkShows.Visible = $Plex
     $lblPar.Visible = -not $Plex;   $nudPar.Visible = -not $Plex;   $btnWorkers.Visible = -not $Plex
     Update-OptionLayout -Plex $Plex
     $script:DashboardStale = $true
@@ -3081,7 +3074,7 @@ function Set-SourceMode {
 # ---- status bar -----------------------------------------------------------
 $statusBar = New-Object Windows.Forms.Panel
 $statusBar.Dock = 'Bottom'; $statusBar.Height = 76; $statusBar.Width = 1280; $statusBar.BackColor = $script:cPanel
-$lblStatus = New-Label 'Ready. Pick a source and click Scan Media.' 24 7 $script:cMuted $script:fontBase
+$lblStatus = New-Label 'Ready. Pick a source and click Scan.' 24 7 $script:cMuted $script:fontBase
 $progTrack = New-Object Windows.Forms.Panel
 $progTrack.Location = New-Object Drawing.Point(24, 30); $progTrack.Size = New-Object Drawing.Size(1000, 12)
 $progTrack.Anchor = 'Top,Left,Right'; $progTrack.BackColor = $script:cPanel2
@@ -3196,7 +3189,7 @@ $toolbar.Controls.Add($collBar)
 $lblEmpty = New-Object Windows.Forms.Label
 $lblEmpty.Dock = 'Fill'; $lblEmpty.TextAlign = 'MiddleCenter'; $lblEmpty.ForeColor = $script:cMuted
 $lblEmpty.Font = New-Object Drawing.Font('Segoe UI', 12)
-$lblEmpty.Text = "Pick a source (Plex server or a local folder), then click Scan Media.`r`nTick 'Rebuild local cache' to ignore previously saved results."
+$lblEmpty.Text = "Pick a source (Plex server or a local folder), then click Scan (it scans the tab you are on).`r`nTick 'Rebuild local cache' to ignore previously saved results."
 
 # grid view
 $gridHost = New-Object Windows.Forms.Panel
@@ -3710,6 +3703,7 @@ function Set-LibraryTab {
     if ($script:Tab -eq $Name) { return }
     $script:Tab = $Name
     $tabMovies.Invalidate(); $tabTv.Invalidate()
+    $btnScan.Text = $(if ($Name -eq 'TV') { 'Scan TV Shows' } else { 'Scan Movies' })
     if ($grid.DataSource -is [System.Data.DataTable]) { Set-GridColumnLayout; Set-TvGrouping; Update-Filter; $grid.ClearSelection() }
     Set-View $script:CurrentView
     if ($script:CurrentView -eq 'dashboard' -and $script:ScanResults.Count -gt 0) { Show-DashboardView }
@@ -4076,6 +4070,7 @@ $btnFetch.Add_Click({
     })
     $script:ScanUsePlex = $false
     $script:ScanMode    = 'Scrape'
+    $script:KeepRecords = @()
     $script:ScanWatch   = [Diagnostics.Stopwatch]::StartNew()
     $script:CancelAt    = $null
     $script:RateT = $null; $script:RateV = 0; $script:RateVal = $null
@@ -5243,13 +5238,13 @@ $btnScan.Add_Click({
     $folder  = $txtFolder.Text.Trim()
 
     if ($usePlex) {
-        if (-not $chkMovies.Checked -and -not $chkShows.Checked) {
-            [Windows.Forms.MessageBox]::Show('Select Movies and/or TV Shows.', 'Modern Media Library Manager', 'OK', 'Warning') | Out-Null; return
-        }
         if (-not (Confirm-PlexToken -BaseUrl $folder)) { return }
         $folder = $txtFolder.Text.Trim()           # the connect dialog may have changed the address
     }
     else {
+        if ($script:Tab -eq 'TV') {
+            [Windows.Forms.MessageBox]::Show('TV Shows are scanned from Plex for now. Switch the source to Plex server, or use the Movies tab for a local folder.', 'Modern Media Library Manager', 'OK', 'Information') | Out-Null; return
+        }
         if ([string]::IsNullOrWhiteSpace($folder)) {
             [Windows.Forms.MessageBox]::Show('Please choose a folder to scan (a UNC path such as \\server\share\Movies works).', 'Modern Media Library Manager', 'OK', 'Warning') | Out-Null; return
         }
@@ -5285,6 +5280,9 @@ $btnScan.Add_Click({
 
     $btnScan.Enabled = $false; $btnBrowse.Enabled = $false; $btnDash.Enabled = $false; $btnSaveHtml.Enabled = $false; $btnExport.Enabled = $false; $btnCancel.Enabled = $true; $btnFetch.Enabled = $false
     Set-OverallProgress -Fraction 0.0
+    # A scan covers the active tab only; the other tab's titles are kept and put back when the scan finishes.
+    $scopeTv = ($usePlex -and $script:Tab -eq 'TV')
+    $script:KeepRecords = @($script:ScanResults | Where-Object { ([bool][string]$_.Show) -ne $scopeTv })
     $script:ScanResults = @()
     $script:DashboardStale = $true
     $grid.DataSource = $null
@@ -5294,7 +5292,7 @@ $btnScan.Add_Click({
     try {
         if ($usePlex) {
             Start-ScanWorker -Mode 'Plex' -ScanArgs @{
-                BaseUrl = $folder; Token = $script:PlexToken; Movies = [bool]$chkMovies.Checked; Shows = [bool]$chkShows.Checked
+                BaseUrl = $folder; Token = $script:PlexToken; Movies = ($script:Tab -eq 'Movies'); Shows = ($script:Tab -eq 'TV')
                 Rebuild = [bool]$chkRebuild.Checked; DetectFel = [bool]$chkFel.Checked }
         }
         else {
@@ -5336,19 +5334,27 @@ function Complete-Scan {
             $msg = [string]$s.Error
             if ($msg -match 'rejected the token') { $script:PlexToken = ''; $script:Settings['PlexTokenProtected'] = ''; $msg += "`n`nClick Token... to enter a new one." }
             $lblStatus.Text = 'Scan failed.'
+            if (@($script:KeepRecords).Count -gt 0) {          # put the other tab's titles back
+                $script:ScanResults = @($script:KeepRecords)
+                $nTv0 = @($script:ScanResults | Where-Object { [string]$_.Show }).Count
+                $script:TabCounts = @{ Movies = ($script:ScanResults.Count - $nTv0); TV = $nTv0 }
+                $grid.DataSource = ConvertTo-DataTable -Records $script:ScanResults
+                Set-GridColumnLayout; Update-Filter
+            }
             $title = if ($script:ScanUsePlex) { 'Plex' } else { 'Modern Media Library Manager' }
             [Windows.Forms.MessageBox]::Show("The scan could not finish:`n$msg", $title, 'OK', 'Error') | Out-Null
             return
         }
+        $scanned = $results.Count
+        if ($script:ScanMode -ne 'Scrape') { $results = @($results) + @($script:KeepRecords) }
         $script:ScanResults = $results
         $script:HasTv = (@($results | Where-Object { [string]$_.Show }).Count -gt 0)
         $nTv = @($results | Where-Object { [string]$_.Show }).Count
         $script:TabCounts = @{ Movies = ($results.Count - $nTv); TV = $nTv }
-        if ($script:TabCounts[$script:Tab] -eq 0 -and $script:TabCounts[$(if ($script:Tab -eq 'TV') { 'Movies' } else { 'TV' })] -gt 0) { $script:Tab = $(if ($script:Tab -eq 'TV') { 'Movies' } else { 'TV' }); $tabMovies.Invalidate(); $tabTv.Invalidate() }
         $cancelled = [bool]$s.Cancel
         if ($results.Count -eq 0 -and -not $cancelled) {
             $lblStatus.Text = 'Nothing found.'
-            $lblEmpty.Text = if ($script:ScanUsePlex) { 'Plex returned no movies or episodes for that selection.' } else { 'No matching media files were found in that folder.' }
+            $lblEmpty.Text = if ($script:ScanUsePlex) { 'Plex returned nothing for that selection.' } else { 'No matching media files were found in that folder.' }
             return
         }
         if ($results.Count -gt 0) {
@@ -5364,7 +5370,7 @@ function Complete-Scan {
         $state = if ($cancelled) { 'Cancelled' } else { 'Done' }
         $total = [int]$s.Total
         $took  = ' in {0:N0}s' -f $script:ScanWatch.Elapsed.TotalSeconds
-        $lblStatus.Text = "$state. $($results.Count) of $total item(s) processed$took."
+        $lblStatus.Text = "$state. $scanned of $total item(s) processed$took."
         if ($script:ScanMode -eq 'Scrape') {
             $lblStatus.Text = "$state. $([string]$s.Summary)"
             $script:FetchDetails = @($s.Details)

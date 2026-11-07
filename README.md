@@ -42,7 +42,7 @@ The launcher starts PowerShell with `-ExecutionPolicy Bypass` for that one proce
 - **Collections.** Your own named title lists, either Static (you add titles) or Dynamic (a saved filter plus an optional sort and limit, so a "top 10" works). Pick one and the grid, detail view, dashboard and exports show only its titles, and the dashboard takes the collection's name as its title. See [Collections](#collections).
 - **Remembers** your source, options, window size and column layout.
 
-Two tabs above the header, **Movies** (default) and **TV Shows**, split the library; **Scan** scans the tab you are on and keeps the other tab's titles. TV Shows (Plex only for now) opens on a poster wall with one tile per show (double-click a show to open it in the grid). The TV grid is a tree, Show > Season > Episode, collapsed by default; click the arrow column next to Title (or double-click a row) to open one, or its header for Expand all / Collapse all. Episodes load when their season is opened. Missing-episode detection is not included yet.
+Two tabs above the header, **Movies** (default) and **TV Shows**, split the library; **Scan** scans the tab you are on and keeps the other tab's titles. TV Shows (Plex only for now) opens on a poster wall with one tile per show; click a show to open it in the grid. The TV grid is Show > Season > Episode, collapsed by default: click a show or season (or the arrow column next to Title) to open it, or **Expand all / Collapse all**. The TV page has its own filter, which searches show names and every episode. Missing-episode detection is not included yet.
 
 ## Collections
 
@@ -65,7 +65,7 @@ Collections work with both Plex and local scans. They are matched by IMDb or TMD
 
 ## Getting started
 
-1. Keep `Modern-Media-Library-Manager.ps1`, `dashboard-template.html` and `Run-ModernMediaLibraryManager.cmd` together in one folder.
+1. Keep `Modern-Media-Library-Manager.ps1`, `dashboard-template.html`, `tv-template.html` and `Run-ModernMediaLibraryManager.cmd` together in one folder.
 2. If Windows blocked the download, run once in PowerShell: `Get-ChildItem . -Recurse | Unblock-File`
 3. Double-click `Run-ModernMediaLibraryManager.cmd`. It starts PowerShell in the mode WinForms needs.
 4. Pick a source, then click **Scan Media**.

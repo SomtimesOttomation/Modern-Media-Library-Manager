@@ -19,6 +19,7 @@
     Folder layout (keep these together):
         Modern-Media-Library-Manager.ps1  this script
         dashboard-template.html    dashboard page the script fills with your data
+        tv-template.html           TV Shows page (posters and the show / season / episode grid)
         lib\                       WebView2 DLLs - created automatically on first use of the Dashboard view
                                    (or copy Microsoft.Web.WebView2.Core.dll, ...WinForms.dll and WebView2Loader.dll in yourself)
         Run-ModernMediaLibraryManager.cmd  optional double-click launcher
@@ -67,10 +68,12 @@ $script:ScanTab         = ''
 $script:EmptyText       = $null
 $script:DetailStale     = $true
 $script:TabView         = @{ Movies = 'grid'; TV = 'poster' }   # each tab remembers its own view; TV opens on posters
-$script:MovieTable      = $null             # grid table for the Movies tab
-$script:TvTable         = $null             # grid table for the TV tab: show / season rows, episode rows added when a season is opened
-$script:TvIndex         = $null             # show name -> @{ Ord; First; Seasons (season number -> episode records) }
-$script:TvShowRow = @{}; $script:TvSeasonRows = @{}; $script:TvEpRows = @{}
+$script:MovieTable      = $null             # grid table for the Movies tab (TV has no WinForms grid: its views are tv.html in the embedded browser)
+$script:TvRecords       = @()               # this scan's episodes
+$script:TvPageStale     = $true             # tvdata.js needs writing again
+$script:TvPageTicks     = 0                 # cache-buster for tv.html after a rewrite
+$script:WebShowing      = ''                # what the embedded browser shows: 'tv:<ticks>' or 'dash'
+$script:TvTemplatePath  = Join-Path $script:AppRoot 'tv-template.html'
 $script:WebView2Ready   = $false
 $script:WebView2Failed  = $false
 $script:WebView2Error   = ''
@@ -2515,8 +2518,8 @@ $script:WvMapped = $false
 function Get-DashboardNavUrl {
     # The live dashboard is opened through the mapped address when there is one; any other address is used as given.
     param([string]$Url)
-    $base = ([Uri]$script:LiveDashboard).AbsoluteUri
-    if ($script:WvMapped -and $Url.StartsWith($base)) { return ('https://mmlm.dashboard/' + [Uri]::EscapeDataString([IO.Path]::GetFileName($script:LiveDashboard)) + $Url.Substring($base.Length)) }
+    $base = ([Uri]((Split-Path -Parent $script:LiveDashboard).TrimEnd('\') + '\')).AbsoluteUri      # the live folder: index.html, tv.html, thumbs
+    if ($script:WvMapped -and $Url.StartsWith($base)) { return ('https://mmlm.dashboard/' + $Url.Substring($base.Length)) }
     $Url
 }
 
@@ -2559,6 +2562,11 @@ function Show-DashboardPane {
                     $sender.CoreWebView2.add_WebMessageReceived({
                         param($s2, $e2)
                         try { $m = $e2.TryGetWebMessageAsString() } catch { return }
+                        if ($m -and $m.StartsWith('tvview|')) {
+                            $v = $m.Substring(7)
+                            if ($script:Tab -eq 'TV' -and ($v -eq 'grid' -or $v -eq 'poster') -and $script:CurrentView -ne $v) { Set-View $v }
+                            return
+                        }
                         if ($m -and $m.StartsWith('savepng|')) {
                             $bits = $m.Split([char[]]@('|'), 3)
                             if ($bits.Count -eq 3) { Save-CardPng -Name $bits[1] -Base64 $bits[2] }
@@ -3379,22 +3387,26 @@ function Set-View {
     }
     elseif ($null -ne $script:EmptyText) { $lblEmpty.Text = $script:EmptyText; $script:EmptyText = $null }
     $lblEmpty.Visible   = -not $hasData
-    $gridHost.Visible   = $hasData -and ($View -eq 'grid')
+    $tvPage = $hasData -and ($script:Tab -eq 'TV') -and ($View -eq 'grid' -or $View -eq 'poster')     # TV posters / grid are tv.html
+    if ($tvPage -and @($script:TvRecords).Count -eq 0) { $tvPage = $false; $hasData = $false; $lblEmpty.Visible = $true }
+    $gridHost.Visible   = $hasData -and ($View -eq 'grid') -and -not $tvPage
     $detailHost.Visible = $hasData -and ($View -eq 'detail')
     if ($hasData -and ($View -eq 'detail') -and $script:DetailStale) { Update-DetailList -Filter $txtFilter.Text.Trim(); $script:DetailStale = $false }
-    $posterHost.Visible = $hasData -and ($View -eq 'poster')
+    $posterHost.Visible = $hasData -and ($View -eq 'poster') -and -not $tvPage
     if ($posterHost.Visible) { Update-PosterList }
-    $dashHost.Visible   = $hasData -and ($View -eq 'dashboard')
+    $dashHost.Visible   = $hasData -and (($View -eq 'dashboard') -or $tvPage)
+    if ($tvPage) { Show-TvPage -View $(if ($View -eq 'grid') { 'grid' } else { 'posters' }) }
     # filter + column picker only make sense for the table views
-    $showFilter = $hasData -and ($View -ne 'dashboard')
+    $showFilter = $hasData -and ($View -ne 'dashboard') -and -not $tvPage          # the TV page has its own filter
     $lblFilter.Visible = $showFilter; $txtFilter.Visible = $showFilter; $lblCount.Visible = $showFilter
     if (-not $showFilter) { Hide-FilterSuggest $txtFilter }
-    $btnCols.Visible   = $hasData -and ($View -eq 'grid')
-    $btnFetch.Visible  = $hasData -and ($View -eq 'grid')
-    $btnEdit.Visible   = $hasData -and ($View -eq 'grid')
-    $collBar.Visible   = $hasData
-    $toolbar.Height    = $(if ($hasData) { 132 } else { 54 })          # the collection bar is the toolbar's second row
-    $btnCollAdd.Visible = $hasData -and ($View -eq 'grid')
+    $movieGrid = $hasData -and ($View -eq 'grid') -and ($script:Tab -ne 'TV')
+    $btnCols.Visible   = $movieGrid
+    $btnFetch.Visible  = $movieGrid
+    $btnEdit.Visible   = $movieGrid
+    $collBar.Visible   = $hasData -and ($script:Tab -ne 'TV')                     # collections are for movies for now
+    $toolbar.Height    = $(if ($collBar.Visible) { 132 } else { 54 })          # the collection bar is the toolbar's second row
+    $btnCollAdd.Visible = $movieGrid
     foreach ($pair in @(@($btnViewGrid, 'grid'), @($btnViewDetail, 'detail'), @($btnViewPoster, 'poster'), @($btnViewDash, 'dashboard'))) {
         $btn = $pair[0]
         if ($pair[1] -eq $View) {
@@ -3434,20 +3446,7 @@ function Update-PosterList {
     try {
         # Same titles, same order as the grid (its filter, collection and sorting all carry over).
         $list = New-Object System.Collections.Generic.List[object]
-        if ($script:Tab -eq 'TV' -and $null -ne $script:TvTable -and [object]::ReferenceEquals($grid.DataSource, $script:TvTable)) {
-            # one tile per show; with a filter, every show that has a matching row
-            $seen = @{}
-            $view = $script:TvTable.DefaultView
-            for ($i = 0; $i -lt $view.Count; $i++) {
-                $show = [string]$view[$i]['Show']
-                if (-not $show -or $seen.ContainsKey($show)) { continue }
-                $seen[$show] = $true
-                $sr = $script:TvShowRow[$show]
-                $y = 0; if ($sr['Year'] -isnot [DBNull]) { $y = [int]$sr['Year'] }
-                $list.Add([pscustomobject]@{ Title = $show; Year = $y; Path = [string]$sr['PosterPath']; FullPath = 'tv:' + $show })
-            }
-        }
-        elseif ($grid.DataSource -is [System.Data.DataTable]) {
+        if ($grid.DataSource -is [System.Data.DataTable]) {
             $view = $grid.DataSource.DefaultView
             for ($i = 0; $i -lt $view.Count; $i++) {
                 $d = $view[$i]
@@ -3728,33 +3727,18 @@ function Set-CollectionOrder {
     elseif ($script:OrderApplied) { $grid.DataSource.DefaultView.Sort = ''; $script:OrderApplied = $false }
 }
 
-function Set-TvGrouping {
-    # The TV grid is a tree; its order comes from the _Sort column and column sorting is switched off.
-    if ($script:Tab -ne 'TV' -or $null -eq $script:TvTable -or -not [object]::ReferenceEquals($grid.DataSource, $script:TvTable)) { return }
-    $script:TvTable.DefaultView.Sort = '[_Sort] ASC'
-    foreach ($c in $grid.Columns) { $c.SortMode = [Windows.Forms.DataGridViewColumnSortMode]::NotSortable }
-}
-
 function Update-Filter {
     try {
         $text = $txtFilter.Text.Trim()
         if ($grid.DataSource -is [System.Data.DataTable]) {
             $parts = @()
             $fx = Get-FilterExpression $grid.DataSource $text
-            $isTree = [object]::ReferenceEquals($grid.DataSource, $script:TvTable)
             if ($fx) { $parts += ('(' + $fx + ')') }
-            elseif ($isTree) { $parts += '[_Vis] = true' }          # no filter: the tree shows what is expanded
             $sx = Get-ScopeExpression
             if ($sx) { $parts += $sx }
             $grid.DataSource.DefaultView.RowFilter = ($parts -join ' AND ')
-            if ($isTree) {
-                $lblCount.Text = '{0:N0} shows, {1:N0} episodes' -f $script:TvShowRow.Count, [int]$script:TabCounts['TV']
-                if ($fx) { $lblCount.Text += ('  -  {0:N0} rows match (opened seasons only)' -f $grid.DataSource.DefaultView.Count) }
-            }
-            else {
-                $total = if ($null -ne $script:ScopeIds) { $script:ScopeIds.Count } else { [int]$script:TabCounts[$script:Tab] }
-                $lblCount.Text = '{0} of {1} titles' -f $grid.DataSource.DefaultView.Count, $total
-            }
+            $total = if ($null -ne $script:ScopeIds) { $script:ScopeIds.Count } else { [int]$script:TabCounts[$script:Tab] }
+            $lblCount.Text = '{0} of {1} titles' -f $grid.DataSource.DefaultView.Count, $total
         }
         # the detail list is rebuilt only while it is on screen (with 50,000+ episodes it is not free)
         if ($detailHost.Visible) { Update-DetailList -Filter $text; $script:DetailStale = $false } else { $script:DetailStale = $true }
@@ -3776,203 +3760,233 @@ function Show-UiError {
     [Windows.Forms.MessageBox]::Show("Something went wrong in $Where (shown once; also logged to %TEMP%\MMLM-errors.log):`n`n$msg", 'Modern Media Library Manager', 'OK', 'Error') | Out-Null
 }
 
-function Set-TreeValue {
-    param($Row, [string]$Name, $Value)
-    if ($null -eq $Value -or ($Value -is [string] -and $Value -eq '')) { $Row[$Name] = [DBNull]::Value; return }
-    $ty = $Row.Table.Columns[$Name].DataType
-    if ($Value -is $ty) { $Row[$Name] = $Value; return }
-    try { $Row[$Name] = [Convert]::ChangeType($Value, $ty) } catch { $Row[$Name] = [DBNull]::Value }
-}
+$script:TvDataCs = @'
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Management.Automation;
+using System.Text;
 
-function Add-TreeRow {
-    # One grid row. Episodes copy every field of their record; show and season rows get a few summary fields.
-    param($Table, $Rec, [hashtable]$Set)
-    $row = $Table.NewRow()
-    if ($null -ne $Rec) { foreach ($f in $script:Fields) { Set-TreeValue $row $f.Name $Rec.($f.Name) } }
-    foreach ($k in $Set.Keys) { Set-TreeValue $row $k $Set[$k] }
-    $Table.Rows.Add($row)
-    $row
-}
-
-function Get-TvMinYear {
-    param($Recs)
-    $y = 0
-    foreach ($r in $Recs) { $v = 0; try { $v = [int]$r.Year } catch { }; if ($v -gt 0 -and ($y -eq 0 -or $v -lt $y)) { $y = $v } }
-    $y
-}
-
-function Build-TvTree {
-    # Index the episodes by show and season, then make a table with one row per show and per season only.
-    # Episode rows are added the first time their season is opened, so 50,000+ episodes never all load at once.
-    param([object[]]$Records)
-    $idx = @{}
-    foreach ($r in $Records) {
-        $show = [string]$r.Show
-        if (-not $show) { continue }
-        if (-not $idx.ContainsKey($show)) { $idx[$show] = @{ Seasons = New-Object 'System.Collections.Generic.SortedDictionary[int,object]'; EpCount = 0 } }
-        $e = $idx[$show]
-        $sn = 0; try { $sn = [int]$r.Season } catch { }
-        if (-not $e.Seasons.ContainsKey($sn)) { $e.Seasons[$sn] = New-Object 'System.Collections.Generic.List[object]' }
-        $e.Seasons[$sn].Add($r)
-        $e['EpCount'] = 1 + [int]$e['EpCount']          # (not $e.Count: on a hashtable that can mean the number of keys)
+public static class MmlmTvData
+{
+    static object Get(PSObject o, string name)
+    {
+        PSPropertyInfo p = o.Properties[name];
+        if (p == null) return null;
+        object v = p.Value;
+        if (v is PSObject) v = ((PSObject)v).BaseObject;
+        return v;
     }
-    $t = New-Object System.Data.DataTable
-    foreach ($f in $script:Fields) { [void]$t.Columns.Add((New-Object System.Data.DataColumn($f.Name, $script:TypeMap[$f.Type]))) }
-    [void]$t.Columns.Add('_Tog', [string]); [void]$t.Columns.Add('_Level', [int]); [void]$t.Columns.Add('_Vis', [bool])
-    [void]$t.Columns.Add('_Open', [bool]); [void]$t.Columns.Add('_Sort', [long]); [void]$t.Columns.Add('_Key', [string])
-    $script:TvShowRow = @{}; $script:TvSeasonRows = @{}; $script:TvEpRows = @{}
-    $names = @($idx.Keys | Sort-Object { $_.ToLowerInvariant() })
-    $t.BeginLoadData()
-    $ord = 0
-    foreach ($show in $names) {
-        $ord++
-        $e = $idx[$show]; $e['Ord'] = $ord
-        $first = $null; foreach ($sn in $e.Seasons.Keys) { if ($e.Seasons[$sn].Count -gt 0) { $first = $e.Seasons[$sn][0]; break } }
-        $e['First'] = $first
-        $all = New-Object 'System.Collections.Generic.List[object]'; foreach ($sn in $e.Seasons.Keys) { $all.AddRange($e.Seasons[$sn]) }
-        $ns = $e.Seasons.Count
-        $sr = Add-TreeRow $t $null @{
-            Title = $show; Show = $show; Year = (Get-TvMinYear $all); Library = $first.Library; Genre = $first.Genre; Studio = $first.Studio
-            MPAARating = $first.MPAARating; PosterPath = $first.PosterPath; PlexThumb = $first.PlexThumb
-            _Tog = ('{0} season{1}, {2} ep' -f $ns, $(if ($ns -eq 1) { '' } else { 's' }), [int]$e['EpCount']); _Level = 0; _Vis = $true; _Open = $false
-            _Sort = [long]$ord * 10000000000; _Key = $show }
-        $script:TvShowRow[$show] = $sr
-        $list = New-Object 'System.Collections.Generic.List[object]'
-        foreach ($sn in $e.Seasons.Keys) {
-            $eps = $e.Seasons[$sn]
-            $row = Add-TreeRow $t $null @{
-                Title = $(if ($sn -eq 0) { 'Specials' } else { "Season $sn" }); Show = $show; Season = $sn; Year = (Get-TvMinYear $eps)
-                Library = $first.Library; PosterPath = $first.PosterPath
-                _Tog = ('{0} episode{1}' -f $eps.Count, $(if ($eps.Count -eq 1) { '' } else { 's' })); _Level = 1; _Vis = $false; _Open = $false
-                _Sort = [long]$ord * 10000000000 + ([long]$sn + 1) * 100000; _Key = "$show|$sn" }
-            $list.Add($row)
+    static string Str(PSObject o, string name) { object v = Get(o, name); return v == null ? "" : Convert.ToString(v, CultureInfo.InvariantCulture); }
+    static double Num(PSObject o, string name)
+    {
+        object v = Get(o, name); if (v == null) return 0;
+        double d; return double.TryParse(Convert.ToString(v, CultureInfo.InvariantCulture), NumberStyles.Float, CultureInfo.InvariantCulture, out d) ? d : 0;
+    }
+    static void JStr(StringBuilder sb, string s)
+    {
+        if (string.IsNullOrEmpty(s)) { sb.Append("null"); return; }
+        sb.Append('"');
+        foreach (char c in s)
+        {
+            switch (c)
+            {
+                case '"': sb.Append("\\\""); break;
+                case '\\': sb.Append("\\\\"); break;
+                case '\n': sb.Append("\\n"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\t': sb.Append("\\t"); break;
+                case '<': sb.Append("\\u003c"); break;
+                default:
+                    if (c < 0x20 || c > 0x7e) sb.Append("\\u").Append(((int)c).ToString("x4")); else sb.Append(c);
+                    break;
+            }
         }
-        $script:TvSeasonRows[$show] = $list
+        sb.Append('"');
     }
-    $t.EndLoadData()
-    $t.DefaultView.Sort = '[_Sort] ASC'
-    $script:TvIndex = $idx
-    $script:TvTable = $t
-}
+    static void JNum(StringBuilder sb, double d) { sb.Append(d == 0 ? "0" : d.ToString("0.##", CultureInfo.InvariantCulture)); }
 
-function Add-TvEpisodeRows {
-    # First time a season opens: one row per episode, from the records already in memory.
-    param([string]$Show, [int]$Season)
-    $key = "$Show|$Season"
-    if ($script:TvEpRows.ContainsKey($key)) { return }
-    $e = $script:TvIndex[$Show]
-    $eps = @($e.Seasons[$Season] | Sort-Object @{ Expression = { try { [int]$_.Episode } catch { 0 } } }, @{ Expression = { [string]$_.Title } })
-    $list = New-Object 'System.Collections.Generic.List[object]'
-    $n = 0
-    foreach ($r in $eps) {
-        $n++
-        $title = [string]$r.Title
-        if ($title.StartsWith($Show + ' - ')) { $title = $title.Substring($Show.Length + 3) }
-        $row = Add-TreeRow $script:TvTable $r @{ Title = $title; _Tog = ''; _Level = 2; _Vis = $false; _Open = $false
-            _Sort = [long]$e.Ord * 10000000000 + ([long]$Season + 1) * 100000 + $n; _Key = $key }
-        $list.Add($row)
-    }
-    $script:TvEpRows[$key] = $list
-}
-
-function Set-TvOpen {
-    # Opens or closes one show (its seasons) or one season (its episodes). Closing a show also hides its episodes.
-    param($Row, [bool]$Open)
-    $lvl = [int]$Row['_Level']
-    if ($lvl -eq 0) {
-        $show = [string]$Row['_Key']
-        $Row['_Open'] = $Open
-        foreach ($sr in $script:TvSeasonRows[$show]) {
-            $sr['_Vis'] = $Open
-            $k = [string]$sr['_Key']
-            if ($script:TvEpRows.ContainsKey($k)) { foreach ($er in $script:TvEpRows[$k]) { $er['_Vis'] = ($Open -and [bool]$sr['_Open']) } }
+    // Groups episode records by show and season and returns the show names in display order.
+    public static Dictionary<string, SortedDictionary<int, List<PSObject>>> Index(object[] records)
+    {
+        var idx = new Dictionary<string, SortedDictionary<int, List<PSObject>>>(StringComparer.Ordinal);
+        foreach (object r in records)
+        {
+            PSObject o = r as PSObject ?? PSObject.AsPSObject(r);
+            string show = Str(o, "Show");
+            if (show.Length == 0) continue;
+            SortedDictionary<int, List<PSObject>> seasons;
+            if (!idx.TryGetValue(show, out seasons)) { seasons = new SortedDictionary<int, List<PSObject>>(); idx[show] = seasons; }
+            int sn = (int)Num(o, "Season");
+            List<PSObject> list;
+            if (!seasons.TryGetValue(sn, out list)) { list = new List<PSObject>(); seasons[sn] = list; }
+            list.Add(o);
         }
+        return idx;
     }
-    elseif ($lvl -eq 1) {
-        $k = [string]$Row['_Key']
-        if ($Open) { $parts = $k.Split('|'); Add-TvEpisodeRows -Show ($k.Substring(0, $k.LastIndexOf('|'))) -Season ([int]$parts[$parts.Length - 1]) }
-        $Row['_Open'] = $Open
-        if ($script:TvEpRows.ContainsKey($k)) { foreach ($er in $script:TvEpRows[$k]) { $er['_Vis'] = $Open } }
-    }
-}
 
-function Invoke-TvToggle {
-    # Applies a change to the tree while keeping the row you clicked on screen.
-    param([object[]]$Rows, [bool[]]$Open)
-    if ($null -eq $script:TvTable) { return }
-    $form.Cursor = [Windows.Forms.Cursors]::WaitCursor
-    $first = 0; try { $first = $grid.FirstDisplayedScrollingRowIndex } catch { }
-    $keep = $null; if ($Rows.Count -eq 1) { $keep = [long]$Rows[0]['_Sort'] }
-    try {
-        $script:TvTable.BeginLoadData()
-        for ($i = 0; $i -lt $Rows.Count; $i++) { Set-TvOpen $Rows[$i] $Open[$i] }
+    public static string[] ShowOrder(Dictionary<string, SortedDictionary<int, List<PSObject>>> idx)
+    {
+        var names = new List<string>(idx.Keys);
+        names.Sort(StringComparer.OrdinalIgnoreCase);
+        return names.ToArray();
     }
-    finally { $script:TvTable.EndLoadData(); $form.Cursor = [Windows.Forms.Cursors]::Default }
-    Update-TvToggleHeader
-    $view = $script:TvTable.DefaultView
-    if ($view.Count -gt 0) {
-        try { $grid.FirstDisplayedScrollingRowIndex = [Math]::Max(0, [Math]::Min($first, $view.Count - 1)) } catch { }
-        if ($null -ne $keep -and -not $txtFilter.Text.Trim()) {
-            $at = $view.Find($keep)
-            if ($at -ge 0) { try { $grid.CurrentCell = $grid.Rows[$at].Cells['Title'] } catch { } }
+
+    public static int MinYear(SortedDictionary<int, List<PSObject>> seasons)
+    {
+        int y = 0;
+        foreach (var kv in seasons) foreach (PSObject o in kv.Value) { int v = (int)Num(o, "Year"); if (v > 0 && (y == 0 || v < y)) y = v; }
+        return y;
+    }
+
+    public static PSObject FirstEpisode(SortedDictionary<int, List<PSObject>> seasons)
+    {
+        foreach (var kv in seasons) if (kv.Value.Count > 0) return kv.Value[0];
+        return null;
+    }
+
+    public static string BuildJs(Dictionary<string, SortedDictionary<int, List<PSObject>>> idx, IDictionary posters, string library, string generated)
+    {
+        var sb = new StringBuilder(8 * 1024 * 1024);
+        sb.Append("window.TVDATA={\"generated\":"); JStr(sb, generated);
+        sb.Append(",\"library\":"); JStr(sb, library);
+        sb.Append(",\"cols\":[\"e\",\"title\",\"year\",\"rating\",\"runtime\",\"res\",\"codec\",\"hdr\",\"audio\",\"size\",\"added\",\"file\"],\"shows\":[");
+        bool firstShow = true;
+        foreach (string show in ShowOrder(idx))
+        {
+            var seasons = idx[show];
+            PSObject f = FirstEpisode(seasons);
+            if (!firstShow) sb.Append(','); firstShow = false;
+            sb.Append("{\"n\":"); JStr(sb, show);
+            sb.Append(",\"p\":"); JStr(sb, posters != null && posters.Contains(show) ? Convert.ToString(posters[show]) : "");
+            sb.Append(",\"lib\":"); JStr(sb, Str(f, "Library"));
+            sb.Append(",\"genre\":"); JStr(sb, Str(f, "Genre"));
+            sb.Append(",\"studio\":"); JStr(sb, Str(f, "Studio"));
+            sb.Append(",\"cert\":"); JStr(sb, Str(f, "MPAARating"));
+            sb.Append(",\"seasons\":[");
+            bool firstSeason = true;
+            foreach (var kv in seasons)
+            {
+                if (!firstSeason) sb.Append(','); firstSeason = false;
+                sb.Append("{\"s\":").Append(kv.Key).Append(",\"eps\":[");
+                var eps = new List<PSObject>(kv.Value);
+                eps.Sort((a, b) => { int c = Num(a, "Episode").CompareTo(Num(b, "Episode")); return c != 0 ? c : string.CompareOrdinal(Str(a, "Title"), Str(b, "Title")); });
+                bool firstEp = true;
+                foreach (PSObject r in eps)
+                {
+                    if (!firstEp) sb.Append(','); firstEp = false;
+                    string t = Str(r, "Title");
+                    if (t.StartsWith(show + " - ", StringComparison.Ordinal)) t = t.Substring(show.Length + 3);
+                    string a1 = Str(r, "AudioFormat"), a2 = Str(r, "AudioLayout");
+                    string audio = (a1 + " " + a2).Trim();
+                    sb.Append('['); JNum(sb, Num(r, "Episode"));
+                    sb.Append(','); JStr(sb, t);
+                    sb.Append(','); JNum(sb, Num(r, "Year"));
+                    sb.Append(','); JNum(sb, Num(r, "Rating"));
+                    sb.Append(','); JNum(sb, Num(r, "RuntimeMin"));
+                    sb.Append(','); JStr(sb, Str(r, "ResolutionClass"));
+                    sb.Append(','); JStr(sb, Str(r, "VideoCodec"));
+                    sb.Append(','); JStr(sb, Str(r, "HDRType"));
+                    sb.Append(','); JStr(sb, audio);
+                    sb.Append(','); JNum(sb, Num(r, "FileSizeGB"));
+                    sb.Append(','); JStr(sb, Str(r, "Added"));
+                    sb.Append(','); JStr(sb, Str(r, "FileName"));
+                    sb.Append(']');
+                }
+                sb.Append("]}");
+            }
+            sb.Append("]}");
         }
+        sb.Append("]};");
+        return sb.ToString();
     }
-    if ($posterHost.Visible) { Update-PosterList }
 }
-
-function Update-TvToggleHeader {
-    $c = $grid.Columns['_Tog']
-    if ($null -eq $c) { return }
-    $any = $false
-    foreach ($r in $script:TvShowRow.Values) { if ([bool]$r['_Open']) { $any = $true; break } }
-    $c.HeaderText = $(if ($any) { 'Collapse all' } else { 'Expand all' })
-}
-
-function Open-TvShow {
-    # From the poster wall: open the show in the grid and scroll to it.
-    param([string]$Show)
-    if (-not $script:TvShowRow.ContainsKey($Show)) { return }
-    $txtFilter.Text = ''
-    Set-View 'grid'
-    $row = $script:TvShowRow[$Show]
-    if (-not [bool]$row['_Open']) { Invoke-TvToggle -Rows @($row) -Open @($true) }
-    $at = $script:TvTable.DefaultView.Find([long]$row['_Sort'])
-    if ($at -ge 0) { try { $grid.FirstDisplayedScrollingRowIndex = $at; $grid.CurrentCell = $grid.Rows[$at].Cells['Title'] } catch { } }
+'@
+function Initialize-TvData {
+    # Compiled once per session (a second or two); turns tens of thousands of episodes into the TV page's data quickly.
+    if (-not ('MmlmTvData' -as [type])) { Add-Type -TypeDefinition $script:TvDataCs -Language CSharp }
 }
 
 function Get-TvShowRecords {
-    # The dashboard on the TV tab: one card per show (a copy of its first episode, named after the show).
+    # The dashboard on the TV tab: one card per show (a copy of its first episode, named after the show, earliest year).
+    if (@($script:TvRecords).Count -eq 0) { return @() }
+    Initialize-TvData
+    $idx = [MmlmTvData]::Index([object[]]$script:TvRecords)
     $out = New-Object 'System.Collections.Generic.List[object]'
-    if ($null -eq $script:TvIndex) { return @() }
-    foreach ($show in @($script:TvShowRow.Keys | Sort-Object { $_.ToLowerInvariant() })) {
-        $e = $script:TvIndex[$show]
-        if ($null -eq $e.First) { continue }
-        $c = $e.First.PSObject.Copy()
+    foreach ($show in [MmlmTvData]::ShowOrder($idx)) {
+        $first = [MmlmTvData]::FirstEpisode($idx[$show])
+        if ($null -eq $first) { continue }
+        $c = $first.PSObject.Copy()
         $c.Title = $show
-        $y = [int]$script:TvShowRow[$show]['Year']; if ($y -gt 0) { $c.Year = $y }
+        $y = [MmlmTvData]::MinYear($idx[$show])
+        if ($y -gt 0) { $c.Year = $y }
         $out.Add($c)
     }
     $out.ToArray()
 }
 
+function Write-TvPage {
+    # tv.html + tvdata.js + show posters in the live dashboard folder. Returns $false when there is nothing to show.
+    if (@($script:TvRecords).Count -eq 0) { return $false }
+    if (-not (Test-Path -LiteralPath $script:TvTemplatePath)) { throw "The TV page needs tv-template.html next to this script.`nLooked for: $($script:TvTemplatePath)" }
+    Set-UiProgress -Text 'Preparing the TV page...'
+    Initialize-TvData
+    $idx = [MmlmTvData]::Index([object[]]$script:TvRecords)
+    $thumbDir = Join-Path $script:LiveFolder 'thumbs'
+    if (-not (Test-Path -LiteralPath $thumbDir)) { New-Item -Path $thumbDir -ItemType Directory -Force | Out-Null }
+    $posters = @{}
+    foreach ($show in $idx.Keys) {
+        $first = [MmlmTvData]::FirstEpisode($idx[$show])
+        $src = [string]$first.PosterPath
+        if (-not $src -or -not (Test-Path -LiteralPath $src)) { continue }
+        try {
+            # Plex posters are already small copies in the thumbnail folder; only other images need resizing
+            $thumb = $(if ($src.StartsWith($script:ThumbFolder, [StringComparison]::OrdinalIgnoreCase)) { $src } else { Get-PosterThumbnail -Source $src })
+            if ($thumb) {
+                $leaf = [IO.Path]::GetFileName($thumb)
+                $dest = Join-Path $thumbDir $leaf
+                if (-not (Test-Path -LiteralPath $dest)) { Copy-Item -LiteralPath $thumb -Destination $dest }
+                $posters[$show] = 'thumbs/' + $leaf
+            }
+        } catch { }
+    }
+    $js = [MmlmTvData]::BuildJs($idx, $posters, (Get-LibraryName), (Get-Date).ToString('yyyy-MM-dd HH:mm'))
+    [IO.File]::WriteAllText((Join-Path $script:LiveFolder 'tvdata.js'), $js, (New-Object Text.UTF8Encoding($false)))
+    Copy-Item -LiteralPath $script:TvTemplatePath -Destination (Join-Path $script:LiveFolder 'tv.html') -Force
+    $script:TvPageStale = $false
+    $script:TvPageTicks = [DateTime]::Now.Ticks
+    $true
+}
+
+function Show-TvPage {
+    # Shows tv.html (posters or grid) in the embedded browser. Switching between the two only changes the page's #hash, so nothing reloads.
+    param([ValidateSet('posters', 'grid')][string]$View)
+    try {
+        if ($script:TvPageStale) { if (-not (Write-TvPage)) { return } }
+        $file = Join-Path $script:LiveFolder 'tv.html'
+        $url  = ([Uri]$file).AbsoluteUri + '?t=' + $script:TvPageTicks + '#' + $View
+        if (-not (Initialize-WebView2)) { Start-Process $url; return }
+        $tag = 'tv:' + $script:TvPageTicks
+        if ($script:WebShowing -eq $tag -and $null -ne $script:wv -and $null -ne $script:wv.CoreWebView2) {
+            [void]$script:wv.CoreWebView2.ExecuteScriptAsync("if (location.hash !== '#$View') location.hash = '#$View';")
+        }
+        else {
+            $script:WebShowing = $tag
+            Show-DashboardPane -Url $url
+        }
+        Set-UiProgress -Text 'TV page ready.'
+    }
+    catch { Show-UiError 'Show-TvPage' $_ }
+}
+
 function Set-GridTable {
     try {
-        # Each tab has its own table: movies are one row per title, TV is the show / season / episode tree.
+        # Movies use the WinForms grid; the TV tab's grid and posters are tv.html, so the grid is left empty there.
         # plain assignment on purpose: $( ) would unroll a DataTable into its rows and the grid would get an array of DataRows
-        if ($script:Tab -eq 'TV') { $want = $script:TvTable } else { $want = $script:MovieTable }
+        if ($script:Tab -eq 'TV') { $want = $null } else { $want = $script:MovieTable }
         if (-not [object]::ReferenceEquals($grid.DataSource, $want)) { $grid.DataSource = $want }
-        if ($null -eq $want) { return }
-        Set-GridColumnLayout
-        if ($script:Tab -eq 'TV') {
-            foreach ($n in @('_Level', '_Vis', '_Open', '_Sort', '_Key', 'Show')) { if ($grid.Columns[$n]) { $grid.Columns[$n].Visible = $false } }
-            $tc = $grid.Columns['_Tog']
-            if ($tc) {
-                $tc.Visible = $true; $tc.Width = 150; $tc.DefaultCellStyle.ForeColor = $script:cMuted
-                try { $tc.DisplayIndex = [Math]::Min($grid.Columns.Count - 1, $grid.Columns['Title'].DisplayIndex + 1) } catch { }
-                Update-TvToggleHeader
-            }
-            Set-TvGrouping
-        }
+        if ($null -ne $want) { Set-GridColumnLayout }
     }
     catch { Show-UiError 'Set-GridTable' $_ }
 }
@@ -3981,6 +3995,7 @@ function Set-LibraryTab {
     param([string]$Name)
     if ($script:Tab -eq $Name) { return }
     $script:Tab = $Name
+    $script:DashboardStale = $true            # the dashboard is built for one tab at a time
     $tabMovies.Invalidate(); $tabTv.Invalidate()
     $btnScan.Text = $(if ($Name -eq 'TV') { 'Scan TV Shows' } else { 'Scan Movies' })
     try {
@@ -3995,15 +4010,6 @@ function Set-LibraryTab {
 }
 $tabMovies.Add_Click({ Set-LibraryTab 'Movies' })
 $tabTv.Add_Click({ Set-LibraryTab 'TV' })
-$grid.Add_CellClick({
-    param($s, $e)
-    # the expand column toggles a show or a season
-    if ($e.RowIndex -lt 0 -or $e.ColumnIndex -lt 0 -or -not [object]::ReferenceEquals($s.DataSource, $script:TvTable)) { return }
-    if ($s.Columns[$e.ColumnIndex].Name -ne '_Tog') { return }
-    $drv = $s.Rows[$e.RowIndex].DataBoundItem
-    if ($null -eq $drv -or [int]$drv['_Level'] -ge 2) { return }
-    Invoke-TvToggle -Rows @($drv.Row) -Open @(-not [bool]$drv['_Open'])
-})
 $btnViewGrid.Add_Click({ Set-View 'grid' })
 $btnViewDetail.Add_Click({ Set-View 'detail' })
 $btnViewPoster.Add_Click({ Set-View 'poster' })
@@ -4032,7 +4038,6 @@ $posterCanvas.Add_MouseDoubleClick({
     $i = Get-PosterIndexAt $e.X $e.Y
     if ($i -lt 0) { return }
     $path = $script:PosterItems[$i].FullPath
-    if ($path.StartsWith('tv:')) { Open-TvShow -Show $path.Substring(3); return }
     $txtFilter.Text = ''
     Update-DetailList; $script:DetailStale = $false
     for ($k = 0; $k -lt $script:DetailItems.Count; $k++) {
@@ -4087,24 +4092,6 @@ $grid.Add_CellFormatting({
     param($s, $e)
     if ($e.ColumnIndex -lt 0) { return }
     $cn = $s.Columns[$e.ColumnIndex].Name
-    if ([object]::ReferenceEquals($s.DataSource, $script:TvTable)) {
-        $lvl = 2
-        try { $lvl = [int]$s.Rows[$e.RowIndex].DataBoundItem['_Level'] } catch { }
-        if ($cn -eq 'Title') {
-            $e.CellStyle.Padding = New-Object Windows.Forms.Padding((6 + 22 * $lvl), 0, 0, 0)
-            if ($lvl -eq 0) { $e.CellStyle.Font = $script:fontBold }
-        }
-        elseif ($cn -eq '_Tog') {
-            if ($lvl -lt 2) {
-                $open = $false; try { $open = [bool]$s.Rows[$e.RowIndex].DataBoundItem['_Open'] } catch { }
-                $g = $(if ($open) { [string][char]0x25BE } else { [string][char]0x25B8 })
-                $e.Value = $g + '  ' + [string]$e.Value
-                $e.CellStyle.ForeColor = $script:cText
-            }
-            $e.FormattingApplied = $true
-            return
-        }
-    }
     if ($cn -eq 'Season' -or $cn -eq 'Episode') {
         $isTv = $false; try { $isTv = [bool][string]$s.Rows[$e.RowIndex].Cells['Show'].Value } catch { }
         $e.Value = if ($isTv) { [string]$e.Value } else { '' }
@@ -4301,13 +4288,6 @@ $listFiles.Add_SelectedIndexChanged({
 $grid.Add_CellDoubleClick({
     param($s, $e)
     if ($e.RowIndex -lt 0) { return }
-    if ([object]::ReferenceEquals($s.DataSource, $script:TvTable)) {
-        $drv = $s.Rows[$e.RowIndex].DataBoundItem
-        if ($null -ne $drv -and [int]$drv['_Level'] -lt 2) {
-            if ($s.Columns[$e.ColumnIndex].Name -ne '_Tog') { Invoke-TvToggle -Rows @($drv.Row) -Open @(-not [bool]$drv['_Open']) }
-            return
-        }
-    }
     $path = $grid.Rows[$e.RowIndex].Cells['FullPath'].Value
     $txtFilter.Text = ''
     Update-DetailList; $script:DetailStale = $false
@@ -5420,14 +5400,6 @@ $grid.Add_CellMouseDown({
 # right-click a column header to hide it quickly (bring it back with the Columns button)
 $grid.Add_ColumnHeaderMouseClick({
     param($s, $e)
-    if ($e.Button -eq [Windows.Forms.MouseButtons]::Left -and $grid.Columns[$e.ColumnIndex].Name -eq '_Tog' -and $null -ne $script:TvTable) {
-        # Expand all opens every show to its seasons (episodes load when a season is opened); Collapse all closes everything.
-        $open = ($grid.Columns['_Tog'].HeaderText -eq 'Expand all')
-        $rows = @($script:TvShowRow.Values)
-        $flags = New-Object bool[] $rows.Count; for ($i = 0; $i -lt $rows.Count; $i++) { $flags[$i] = $open }
-        Invoke-TvToggle -Rows $rows -Open $flags
-        return
-    }
     if ($e.Button -eq [Windows.Forms.MouseButtons]::Right) {
         $grid.Columns[$e.ColumnIndex].Visible = $false
         Save-Settings
@@ -5512,6 +5484,7 @@ function Show-DashboardView {
         $url = ([Uri]$script:LiveDashboard).AbsoluteUri + '?t=' + [DateTime]::Now.Ticks
 
         if (Initialize-WebView2) {
+            $script:WebShowing = 'dash'
             Set-View 'dashboard'                       # make the host visible before the control is created
             Show-DashboardPane -Url $url
             Set-UiProgress -Text 'Dashboard ready.' -Value 1 -Max 1
@@ -5683,7 +5656,7 @@ function Complete-Scan {
                 $mov = New-Object 'System.Collections.Generic.List[object]'; $tvr = New-Object 'System.Collections.Generic.List[object]'
                 foreach ($r0 in $results) { if ([string]$r0.Show) { $tvr.Add($r0) } else { $mov.Add($r0) } }
                 $script:MovieTable = ConvertTo-DataTable -Records $mov.ToArray()
-                Build-TvTree -Records $tvr.ToArray()
+                $script:TvRecords = $tvr.ToArray(); $script:TvPageStale = $true; $script:WebShowing = ''
                 $grid.DataSource = $null
                 Set-GridTable            # this tab's table, remembered visibility/widths
             }
@@ -6133,7 +6106,7 @@ try {
     $root = Join-Path $x 'Modern-Media-Library-Manager'
     $ps1 = Join-Path $root 'Modern-Media-Library-Manager.ps1'
     if (-not (Test-Path -LiteralPath $ps1)) { throw 'The zip does not contain the app script.' }
-    foreach ($n in @('Modern-Media-Library-Manager.ps1', 'dashboard-template.html', 'Run-ModernMediaLibraryManager.cmd')) {
+    foreach ($n in @('Modern-Media-Library-Manager.ps1', 'dashboard-template.html', 'tv-template.html', 'Run-ModernMediaLibraryManager.cmd')) {
         if ($sums.ContainsKey($n)) { if ((Get-Sha (Join-Path $root $n)) -ne $sums[$n]) { throw "The file $n does not match its published checksum." } }
     }
     Set-Prog 100 'Checking the new files...'

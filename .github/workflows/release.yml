@@ -41,14 +41,14 @@ jobs:
           STAGE="dist/stage/Modern-Media-Library-Manager"
           ZIP="dist/Modern-Media-Library-Manager-${GITHUB_REF_NAME}.zip"
           mkdir -p "$STAGE/lib"
-          for f in Modern-Media-Library-Manager.ps1 dashboard-template.html Run-ModernMediaLibraryManager.cmd README.md LICENSE; do
+          for f in Modern-Media-Library-Manager.ps1 dashboard-template.html tv-template.html Run-ModernMediaLibraryManager.cmd README.md LICENSE; do
             cp "$f" "$STAGE/"
           done
           cp lib/README.txt "$STAGE/lib/"
           (cd dist/stage && zip -qr -X "../$(basename "$ZIP")" Modern-Media-Library-Manager)
           {
             (cd dist && sha256sum "$(basename "$ZIP")")
-            (cd "$STAGE" && sha256sum Modern-Media-Library-Manager.ps1 dashboard-template.html Run-ModernMediaLibraryManager.cmd)
+            (cd "$STAGE" && sha256sum Modern-Media-Library-Manager.ps1 dashboard-template.html tv-template.html Run-ModernMediaLibraryManager.cmd)
           } > dist/SHA256SUMS.txt
           echo "ZIP=$ZIP" >> "$GITHUB_ENV"
           cat dist/SHA256SUMS.txt

@@ -2359,15 +2359,21 @@ function ConvertTo-DataTable {
     foreach ($f in $script:Fields) {
         [void]$t.Columns.Add((New-Object System.Data.DataColumn($f.Name, $script:TypeMap[$f.Type])))
     }
+    $fields = @($script:Fields); $nf = $fields.Count
+    $names  = New-Object string[] $nf; $types = New-Object 'type[]' $nf
+    for ($i = 0; $i -lt $nf; $i++) { $names[$i] = $fields[$i].Name; $types[$i] = $script:TypeMap[$fields[$i].Type] }
+    $t.BeginLoadData()
     foreach ($r in $Records) {
-        $row = $t.NewRow()
-        foreach ($f in $script:Fields) {
-            $val = $r.($f.Name)
-            if ($null -eq $val) { $row[$f.Name] = [DBNull]::Value; continue }
-            try { $row[$f.Name] = [Convert]::ChangeType($val, $script:TypeMap[$f.Type]) } catch { $row[$f.Name] = [DBNull]::Value }
+        $arr = New-Object object[] $nf
+        for ($i = 0; $i -lt $nf; $i++) {
+            $val = $r.($names[$i])
+            if ($null -eq $val) { $arr[$i] = [DBNull]::Value }
+            elseif ($val -is $types[$i]) { $arr[$i] = $val }
+            else { try { $arr[$i] = [Convert]::ChangeType($val, $types[$i]) } catch { $arr[$i] = [DBNull]::Value } }
         }
-        [void]$t.Rows.Add($row)
+        [void]$t.Rows.Add($arr)
     }
+    $t.EndLoadData()
     , $t
 }
 #endregion
@@ -2833,7 +2839,8 @@ function Update-TabLabels {
     $x = 14
     foreach ($t in @($tabMovies, $tabTv)) {
         $name = $(if ([string]$t.Tag -eq 'TV') { 'TV Shows' } else { 'Movies' })
-        $t.Text = $(if ($script:Scanning -and $script:ScanTab -eq [string]$t.Tag) { "$name (scanning...)" } else { $name })
+        $n = [int]$script:TabCounts[[string]$t.Tag]
+        $t.Text = $(if ($script:Scanning -and $script:ScanTab -eq [string]$t.Tag) { "$name (scanning...)" } elseif ($n -gt 0) { '{0} ({1:N0})' -f $name, $n } else { $name })
         $w = [Windows.Forms.TextRenderer]::MeasureText($t.Text, $script:fontBold).Width + 40
         $t.Location = New-Object Drawing.Point($x, 0); $t.Size = New-Object Drawing.Size($w, 40)
         $x += $w + 4
@@ -5373,11 +5380,16 @@ function Complete-Scan {
             return
         }
         $scanned = $results.Count
-        if ($script:ScanMode -ne 'Scrape') { $results = @($results) + @($script:KeepRecords) }
+        $fresh   = @($results)                                    # just this scan's records
+        if ($script:ScanMode -ne 'Scrape') { $results = $fresh + @($script:KeepRecords) }
         $script:ScanResults = $results
-        $script:HasTv = (@($results | Where-Object { [string]$_.Show }).Count -gt 0)
-        $nTv = @($results | Where-Object { [string]$_.Show }).Count
+        $nTv = 0; foreach ($r0 in $results) { if ([string]$r0.Show) { $nTv++ } }
+        $script:HasTv = ($nTv -gt 0)
         $script:TabCounts = @{ Movies = ($results.Count - $nTv); TV = $nTv }
+        # if the tab you are looking at has nothing but the other one does (for example a TV scan finished while you were on an empty Movies tab), go there
+        if ($script:TabCounts[$script:Tab] -eq 0 -and $script:TabCounts[$(if ($script:Tab -eq 'TV') { 'Movies' } else { 'TV' })] -gt 0) { $script:Tab = $(if ($script:Tab -eq 'TV') { 'Movies' } else { 'TV' }) }
+        $btnScan.Text = $(if ($script:Tab -eq 'TV') { 'Scan TV Shows' } else { 'Scan Movies' })
+        Update-TabLabels
         $cancelled = [bool]$s.Cancel
         if ($results.Count -eq 0 -and -not $cancelled) {
             $lblStatus.Text = 'Nothing found.'
@@ -5385,8 +5397,8 @@ function Complete-Scan {
             return
         }
         if ($results.Count -gt 0) {
-            try { Set-SourceLabels -Records $results } catch { }          # measured labels first, then fetched / typed-in values on top
-            try { Merge-MetaStore -Records $results -Path $script:MetaStorePath } catch { }
+            try { Set-SourceLabels -Records $(if ($script:ScanMode -eq 'Scrape') { $results } else { $fresh }) } catch { }          # measured labels first, then fetched / typed-in values on top
+            try { Merge-MetaStore -Records $(if ($script:ScanMode -eq 'Scrape') { $results } else { $fresh }) -Path $script:MetaStorePath } catch { }
             $table = ConvertTo-DataTable -Records $results
             $grid.DataSource = $table
             Set-GridColumnLayout     # remembered visibility/widths; brand-new fields fall back to their default

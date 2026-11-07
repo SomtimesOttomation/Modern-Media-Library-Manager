@@ -54,6 +54,7 @@ $script:CollectionsPath = Join-Path $script:AppData 'collections.json'         #
 $script:DataFolder      = Join-Path $script:AppData 'datasets'                 # IMDb ratings file
 $script:InformFolder     = Join-Path $script:AppData 'Inform'                       # full MediaInfo text per file (source-clue research)
 $script:LiveFolder      = Join-Path $script:AppData 'Dashboard'                    # dashboard shown inside the app
+$script:SnapshotFolder  = Join-Path $script:AppData 'Library'                      # last scan of each tab (movies.mmls / tv.mmls), loaded at start
 $script:LiveDashboard   = Join-Path $script:LiveFolder 'index.html'
 $script:Culture         = [Globalization.CultureInfo]::InvariantCulture
 
@@ -74,6 +75,9 @@ $script:TvPageStale     = $true             # tvdata.js needs writing again
 $script:TvPageTicks     = 0                 # cache-buster for tv.html after a rewrite
 $script:WebShowing      = ''                # what the embedded browser shows: 'tv:<ticks>' or 'dash'
 $script:TvTemplatePath  = Join-Path $script:AppRoot 'tv-template.html'
+$script:TvFromDisk      = $false            # the TV page is showing last session's tvdata.js while the TV records load
+$script:TvLoad          = $null             # background load of tv.mmls: @{ Ps; Async }
+$script:SnapJobs        = New-Object System.Collections.ArrayList     # background snapshot saves still running
 $script:WebView2Ready   = $false
 $script:WebView2Failed  = $false
 $script:WebView2Error   = ''
@@ -85,7 +89,7 @@ $script:AudioExtensions = @('aac','ac3','dts','dtshd','dtshr','dtsma','eac3','fl
 $script:PosterNames     = @('poster','folder','cover','movie','thumb')     # besides "<filename>-poster"
 $script:ImageExtensions = @('jpg','jpeg','png','bmp')
 
-foreach ($dir in @($script:CacheFolder, $script:ThumbFolder, $script:LiveFolder)) {
+foreach ($dir in @($script:CacheFolder, $script:ThumbFolder, $script:LiveFolder, $script:SnapshotFolder)) {
     if (-not (Test-Path -LiteralPath $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
 }
 
@@ -1400,7 +1404,7 @@ function ConvertFrom-PlexVideo {
 }
 
 function Invoke-PlexScan {
-    param([string]$BaseUrl, [string]$Token, [bool]$Movies, [bool]$Shows, [bool]$Rebuild, [bool]$DetectFel)
+    param([string]$BaseUrl, [string]$Token, [bool]$Movies, [bool]$Shows, [bool]$Rebuild, [bool]$DetectFel, [hashtable]$Prior = @{})
 
     Set-UiProgress -Text 'Connecting to Plex...'
     $sections = @(Get-PlexSections -BaseUrl $BaseUrl -Token $Token | Where-Object {
@@ -1425,8 +1429,11 @@ function Invoke-PlexScan {
         $chk++
         if (($chk % 250) -eq 0) {
             if (Test-ScanCancelled) { break }
-            Set-UiProgress -Text ("Checking saved results: {0} of {1}" -f $chk, $stubs.Count) -Value $chk -Max $stubs.Count
+            Set-UiProgress -Text ("Checking for changes: {0} of {1}" -f $chk, $stubs.Count) -Value $chk -Max $stubs.Count
         }
+        # unchanged since the last scan (same Plex 'updatedAt'): reuse the record we already have
+        $p0 = $Prior[[string]$s.Key]
+        if ($null -ne $p0 -and [string]$p0.PlexUpdated -eq [string]$s.Updated) { $byKey[$s.Key] = $p0; continue }
         $ck = Join-Path $script:CacheFolder ((Get-StringHash ('plex|{0}|{1}|{2}|{3}|rt2' -f $BaseUrl.ToLowerInvariant(), $s.Key, $s.Updated, $script:CacheVersion)) + '.json')
         $s | Add-Member -NotePropertyName CacheFile -NotePropertyValue $ck -Force
         if ($Rebuild) { Remove-Item -LiteralPath $ck -Force -ErrorAction SilentlyContinue }
@@ -1474,6 +1481,10 @@ function Invoke-PlexScan {
         $n++
         $rec = $byKey[$s.Key]
         if ($null -eq $rec) { continue }
+        if ([string]$rec.PlexUpdated -ne [string]$s.Updated) {          # remembered so the next scan can tell what changed
+            if ($null -ne $rec.PSObject.Properties['PlexUpdated']) { $rec.PlexUpdated = $s.Updated }
+            else { $rec.PSObject.Properties.Add((New-Object Management.Automation.PSNoteProperty('PlexUpdated', [string]$s.Updated))) }
+        }
         if (($n % 5) -eq 0 -or $n -eq $stubs.Count) { Set-UiProgress -Text ("Posters: {0} of {1} titles ({2} distinct images)" -f $n, $stubs.Count, $posterSeen.Count) -Value $n -Max $stubs.Count }
 
         # one poster per distinct image: every episode of a show shares its show's poster, so it is checked / fetched once
@@ -3378,7 +3389,7 @@ $form.Controls.Add($tabBar)             # added last, so it docks above the head
 function Set-View {
     param([ValidateSet('grid', 'detail', 'poster', 'dashboard')][string]$View)
     $scanHere = ($script:Scanning -and $script:Tab -eq $script:ScanTab)      # the tab being scanned shows a notice; the other tab works normally
-    $hasData = ($script:ScanResults.Count -gt 0) -and -not $scanHere
+    $hasData = (($script:ScanResults.Count -gt 0) -or $script:TvFromDisk) -and -not $scanHere
     $script:CurrentView = $View
     $script:TabView[$script:Tab] = $View
     if ($scanHere) {
@@ -3388,7 +3399,7 @@ function Set-View {
     elseif ($null -ne $script:EmptyText) { $lblEmpty.Text = $script:EmptyText; $script:EmptyText = $null }
     $lblEmpty.Visible   = -not $hasData
     $tvPage = $hasData -and ($script:Tab -eq 'TV') -and ($View -eq 'grid' -or $View -eq 'poster')     # TV posters / grid are tv.html
-    if ($tvPage -and @($script:TvRecords).Count -eq 0) { $tvPage = $false; $hasData = $false; $lblEmpty.Visible = $true }
+    if ($tvPage -and @($script:TvRecords).Count -eq 0 -and -not $script:TvFromDisk) { $tvPage = $false; $hasData = $false; $lblEmpty.Visible = $true }
     $gridHost.Visible   = $hasData -and ($View -eq 'grid') -and -not $tvPage
     $detailHost.Visible = $hasData -and ($View -eq 'detail')
     if ($hasData -and ($View -eq 'detail') -and $script:DetailStale) { Update-DetailList -Filter $txtFilter.Text.Trim(); $script:DetailStale = $false }
@@ -3766,6 +3777,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Management.Automation;
+using System.IO;
 using System.Text;
 
 public static class MmlmTvData
@@ -3902,6 +3914,103 @@ public static class MmlmTvData
         return sb.ToString();
     }
 }
+public static class MmlmSnapshot
+{
+    // The library snapshot: every record of the last scan in one compact binary file, so the app opens on it without contacting Plex.
+    const int Magic = 0x31534D4D;   // "MMS1"
+    public static string LastMeta = "";
+
+    static void WriteInt(BinaryWriter w, int v) { uint u = (uint)v; while (u >= 0x80) { w.Write((byte)(u | 0x80)); u >>= 7; } w.Write((byte)u); }
+    static int ReadInt(BinaryReader r) { int v = 0, shift = 0; byte b; do { b = r.ReadByte(); v |= (b & 0x7F) << shift; shift += 7; } while ((b & 0x80) != 0); return v; }
+
+    static void WriteVal(BinaryWriter w, object v)
+    {
+        if (v is PSObject) v = ((PSObject)v).BaseObject;
+        if (v == null || v is DBNull) { w.Write((byte)0); return; }
+        if (v is string) { string s = (string)v; if (s.Length == 0) { w.Write((byte)8); return; } w.Write((byte)1); w.Write(s); return; }
+        if (v is int) { w.Write((byte)2); w.Write((int)v); return; }
+        if (v is long) { w.Write((byte)3); w.Write((long)v); return; }
+        if (v is double) { w.Write((byte)4); w.Write((double)v); return; }
+        if (v is float || v is decimal) { w.Write((byte)4); w.Write(Convert.ToDouble(v, CultureInfo.InvariantCulture)); return; }
+        if (v is bool) { w.Write((byte)5); w.Write((bool)v); return; }
+        if (v is DateTime) { w.Write((byte)6); w.Write(((DateTime)v).ToBinary()); return; }
+        if (v is Array) { Array a = (Array)v; w.Write((byte)7); WriteInt(w, a.Length); foreach (object x in a) WriteVal(w, x); return; }
+        if (v is short || v is byte) { w.Write((byte)2); w.Write(Convert.ToInt32(v)); return; }
+        w.Write((byte)1); w.Write(Convert.ToString(v, CultureInfo.InvariantCulture));
+    }
+    static object ReadVal(BinaryReader r)
+    {
+        byte t = r.ReadByte();
+        switch (t)
+        {
+            case 0: return null;
+            case 1: return r.ReadString();
+            case 2: return r.ReadInt32();
+            case 3: return r.ReadInt64();
+            case 4: return r.ReadDouble();
+            case 5: return r.ReadBoolean();
+            case 6: return DateTime.FromBinary(r.ReadInt64());
+            case 7: { int n = ReadInt(r); object[] a = new object[n]; for (int i = 0; i < n; i++) a[i] = ReadVal(r); return a; }
+            case 8: return "";
+            default: throw new InvalidDataException("Unknown value tag " + t);
+        }
+    }
+
+    public static void Save(object[] records, string path, string meta)
+    {
+        string tmp = path + ".tmp";
+        var names = new Dictionary<string, int>(StringComparer.Ordinal);
+        using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16))
+        using (var w = new BinaryWriter(fs, Encoding.UTF8))
+        {
+            w.Write(Magic); w.Write(meta ?? ""); WriteInt(w, records.Length);
+            foreach (object rec in records)
+            {
+                PSObject o = rec as PSObject ?? PSObject.AsPSObject(rec);
+                var props = new List<PSPropertyInfo>();
+                foreach (PSPropertyInfo p in o.Properties) if (p is PSNoteProperty) props.Add(p);
+                WriteInt(w, props.Count);
+                foreach (PSPropertyInfo p in props)
+                {
+                    int ix;
+                    if (names.TryGetValue(p.Name, out ix)) WriteInt(w, ix + 1);
+                    else { names[p.Name] = names.Count; WriteInt(w, 0); w.Write(p.Name); }
+                    WriteVal(w, p.Value);
+                }
+            }
+        }
+        if (File.Exists(path)) File.Delete(path);
+        File.Move(tmp, path);
+    }
+
+    public static object[] Load(string path)
+    {
+        var names = new List<string>();
+        using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16))
+        using (var r = new BinaryReader(fs, Encoding.UTF8))
+        {
+            if (r.ReadInt32() != Magic) throw new InvalidDataException("Not a library snapshot: " + path);
+            LastMeta = r.ReadString();
+            int n = ReadInt(r);
+            var outp = new object[n];
+            for (int i = 0; i < n; i++)
+            {
+                var o = new PSObject();
+                int pc = ReadInt(r);
+                for (int k = 0; k < pc; k++)
+                {
+                    int ix = ReadInt(r);
+                    string name;
+                    if (ix == 0) { name = r.ReadString(); names.Add(name); } else name = names[ix - 1];
+                    o.Properties.Add(new PSNoteProperty(name, ReadVal(r)));
+                }
+                outp[i] = o;
+            }
+            return outp;
+        }
+    }
+}
+
 '@
 function Initialize-TvData {
     # Compiled once per session (a second or two); turns tens of thousands of episodes into the TV page's data quickly.
@@ -3958,6 +4067,98 @@ function Write-TvPage {
     $script:TvPageTicks = [DateTime]::Now.Ticks
     $true
 }
+
+
+function Get-SnapshotPath { param([string]$Which) Join-Path $script:SnapshotFolder ($(if ($Which -eq 'TV') { 'tv.mmls' } else { 'movies.mmls' })) }
+
+function Save-LibrarySnapshot {
+    # Writes one tab's records to its snapshot file on a background thread, so the window does not freeze on 50,000+ episodes.
+    param([string]$Which, [object[]]$Records)
+    try {
+        Initialize-TvData
+        $path = Get-SnapshotPath $Which
+        $meta = '{0}|{1}' -f $Records.Count, (Get-Date).ToString('yyyy-MM-dd HH:mm')
+        $ps = [powershell]::Create()
+        [void]$ps.AddScript({ param($r, $p, $m) [MmlmSnapshot]::Save($r, $p, $m) }).AddArgument($Records).AddArgument($path).AddArgument($meta)
+        [void]$script:SnapJobs.Add(@{ Ps = $ps; Async = $ps.BeginInvoke() })
+        $script:SnapTimer.Start()
+    }
+    catch { Show-UiError 'Save-LibrarySnapshot' $_ }
+}
+
+function Import-LibrarySnapshot {
+    # At start: movies load straight away; the TV page shows last session's page at once while the episodes load in the background.
+    try {
+        $mp = Get-SnapshotPath 'Movies'; $tp = Get-SnapshotPath 'TV'
+        $haveM = Test-Path -LiteralPath $mp; $haveT = Test-Path -LiteralPath $tp
+        if (-not $haveM -and -not $haveT) { return }
+        Initialize-TvData
+        $movies = @(); $when = ''
+        if ($haveM) {
+            $movies = @([MmlmSnapshot]::Load($mp)); $when = ([MmlmSnapshot]::LastMeta -split '\|')[-1]
+            try { Merge-MetaStore -Records $movies -Path $script:MetaStorePath } catch { }
+        }
+        $tvCount = 0
+        if ($haveT) {
+            $meta = ''
+            try { $fs = [IO.File]::OpenRead($tp); $br = New-Object IO.BinaryReader($fs, [Text.Encoding]::UTF8); [void]$br.ReadInt32(); $meta = $br.ReadString(); $br.Close() } catch { }
+            $tvCount = 0; [void][int]::TryParse(($meta -split '\|')[0], [ref]$tvCount)
+            if (-not $when) { $when = ($meta -split '\|')[-1] }
+            $js = Join-Path $script:LiveFolder 'tvdata.js'
+            if (Test-Path -LiteralPath $js) {
+                if (Test-Path -LiteralPath $script:TvTemplatePath) { Copy-Item -LiteralPath $script:TvTemplatePath -Destination (Join-Path $script:LiveFolder 'tv.html') -Force }
+                $script:TvFromDisk = $true; $script:TvPageStale = $false; $script:TvPageTicks = (Get-Item -LiteralPath $js).LastWriteTime.Ticks
+            }
+            $ps = [powershell]::Create()
+            [void]$ps.AddScript({ param($p) , [MmlmSnapshot]::Load($p) }).AddArgument($tp)
+            $script:TvLoad = @{ Ps = $ps; Async = $ps.BeginInvoke() }
+            $script:SnapTimer.Start()
+        }
+        $script:ScanResults = $movies
+        $script:TabCounts = @{ Movies = $movies.Count; TV = $tvCount }
+        $script:MovieTable = ConvertTo-DataTable -Records $movies
+        $grid.DataSource = $null
+        Set-GridTable
+        Update-Filter
+        Update-TabLabels
+        $lblStatus.Text = "Showing your last scan ($when)$(if ($haveT) { '; TV episodes are still loading' }). Scan checks Plex for changes."
+        Set-View ([string]$script:TabView[$script:Tab])
+    }
+    catch { Show-UiError 'Import-LibrarySnapshot' $_ }
+}
+
+function Receive-SnapshotWork {
+    # Timer tick: picks up the background TV load and finished saves.
+    if ($null -ne $script:TvLoad -and $script:TvLoad.Async.IsCompleted) {
+        $job = $script:TvLoad; $script:TvLoad = $null
+        try {
+            $tv = @($job.Ps.EndInvoke($job.Async) | ForEach-Object { $_ })
+            if ($job.Ps.HadErrors -or $tv.Count -eq 0) { throw ($(if ($job.Ps.Streams.Error.Count) { $job.Ps.Streams.Error[0] } else { 'The TV snapshot was empty.' })) }
+            $script:TvRecords = $tv
+            $script:ScanResults = @($script:ScanResults) + $tv
+            $script:HasTv = $true
+            $script:TabCounts = @{ Movies = [int]$script:TabCounts['Movies']; TV = $tv.Count }
+            Update-TabLabels
+            $lblStatus.Text = $lblStatus.Text -replace '; TV episodes are still loading', ''
+            if ($script:Tab -eq 'TV' -and $detailHost.Visible) { Update-DetailList -Filter $txtFilter.Text.Trim() }
+        }
+        catch {
+            $lblStatus.Text = 'Could not load the last TV scan; scan TV Shows again.'
+            try { Add-Content -LiteralPath (Join-Path $env:TEMP 'MMLM-errors.log') -Value ((Get-Date).ToString('s') + ' TV snapshot: ' + $_) } catch { }
+        }
+        finally { try { $job.Ps.Dispose() } catch { } }
+    }
+    foreach ($j in @($script:SnapJobs)) {
+        if (-not $j.Async.IsCompleted) { continue }
+        try { [void]$j.Ps.EndInvoke($j.Async) } catch { try { Add-Content -LiteralPath (Join-Path $env:TEMP 'MMLM-errors.log') -Value ((Get-Date).ToString('s') + ' snapshot save: ' + $_) } catch { } }
+        try { $j.Ps.Dispose() } catch { }
+        $script:SnapJobs.Remove($j)
+    }
+    if ($null -eq $script:TvLoad -and $script:SnapJobs.Count -eq 0) { $script:SnapTimer.Stop() }
+}
+$script:SnapTimer = New-Object Windows.Forms.Timer
+$script:SnapTimer.Interval = 400
+$script:SnapTimer.Add_Tick({ Receive-SnapshotWork })
 
 function Show-TvPage {
     # Shows tv.html (posters or grid) in the embedded browser. Switching between the two only changes the page's #hash, so nothing reloads.
@@ -5526,6 +5727,9 @@ $btnSaveHtml.Add_Click({
 })
 
 $btnScan.Add_Click({
+    if ($null -ne $script:TvLoad) {
+        [Windows.Forms.MessageBox]::Show('Your last TV scan is still loading (a few seconds). Try again once the status bar says it is done.', 'Scan', 'OK', 'Information') | Out-Null; return
+    }
     $usePlex = [bool]$radPlex.Checked
     $folder  = $txtFolder.Text.Trim()
 
@@ -5580,9 +5784,12 @@ $btnScan.Add_Click({
 
     try {
         if ($usePlex) {
+            # what this tab had last time, by Plex key: unchanged items are reused without reading anything from disk
+            $prior = @{}
+            if (-not $chkRebuild.Checked) { foreach ($r0 in $script:ScanResults) { if (([bool][string]$r0.Show) -eq $scopeTv -and $r0.PlexKey -and $r0.PlexUpdated) { $prior[[string]$r0.PlexKey] = $r0 } } }
             Start-ScanWorker -Mode 'Plex' -ScanArgs @{
                 BaseUrl = $folder; Token = $script:PlexToken; Movies = ($script:Tab -eq 'Movies'); Shows = ($script:Tab -eq 'TV')
-                Rebuild = [bool]$chkRebuild.Checked; DetectFel = [bool]$chkFel.Checked }
+                Rebuild = [bool]$chkRebuild.Checked; DetectFel = [bool]$chkFel.Checked; Prior = $prior }
         }
         else {
             Start-ScanWorker -Mode 'Folder' -ScanArgs @{
@@ -5656,7 +5863,11 @@ function Complete-Scan {
                 $mov = New-Object 'System.Collections.Generic.List[object]'; $tvr = New-Object 'System.Collections.Generic.List[object]'
                 foreach ($r0 in $results) { if ([string]$r0.Show) { $tvr.Add($r0) } else { $mov.Add($r0) } }
                 $script:MovieTable = ConvertTo-DataTable -Records $mov.ToArray()
-                $script:TvRecords = $tvr.ToArray(); $script:TvPageStale = $true; $script:WebShowing = ''
+                $script:TvRecords = $tvr.ToArray(); $script:TvPageStale = $true; $script:WebShowing = ''; $script:TvFromDisk = $false
+                if (-not [bool]$s.Cancel) {           # a finished scan (or fetch) becomes what the app opens on next time
+                    if ($script:ScanMode -eq 'Scrape' -or $script:ScanTab -ne 'TV') { Save-LibrarySnapshot -Which 'Movies' -Records $mov.ToArray() }
+                    if ($script:ScanMode -ne 'Scrape' -and $script:ScanTab -eq 'TV') { Save-LibrarySnapshot -Which 'TV' -Records $tvr.ToArray() }
+                }
                 $grid.DataSource = $null
                 Set-GridTable            # this tab's table, remembered visibility/widths
             }
@@ -5743,6 +5954,7 @@ $form.Add_Shown({
     if ($radPlex.Checked -and -not $script:PlexToken) {
         [void](Show-PlexTokenDialog -BaseUrl $txtFolder.Text.Trim())
     }
+    Import-LibrarySnapshot          # open on the last scan of each tab, without contacting Plex
     # Started by the updater: pick up where the old version left off (the cache makes this quick).
     if ($env:MMLM_RESUME -eq '1') {
         $env:MMLM_RESUME = ''

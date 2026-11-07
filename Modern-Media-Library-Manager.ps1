@@ -60,6 +60,8 @@ $script:Culture         = [Globalization.CultureInfo]::InvariantCulture
 $script:DashboardStale  = $true      # set after every scan so the dashboard is rebuilt on demand
 $script:DashboardUrl    = ''
 $script:CurrentView     = 'grid'
+$script:Tab             = 'Movies'          # library tab: 'Movies' (default) or 'TV'
+$script:TabCounts       = @{ Movies = 0; TV = 0 }
 $script:WebView2Ready   = $false
 $script:WebView2Failed  = $false
 $script:WebView2Error   = ''
@@ -2188,7 +2190,8 @@ function Set-GridColumnLayout {
         if ($null -eq $col) { continue }
         if     ($vis -contains $f.Name) { $col.Visible = $true }
         elseif ($hid -contains $f.Name) { $col.Visible = $false }
-        else                            { $col.Visible = ($f.Show -or ($script:HasTv -and ($f.Name -eq 'Season' -or $f.Name -eq 'Episode'))) }
+        else                            { $col.Visible = $f.Show }
+        if ($f.Name -eq 'Show' -or $f.Name -eq 'Season' -or $f.Name -eq 'Episode') { $col.Visible = (($script:Tab -eq 'TV') -and ($hid -notcontains $f.Name)) }      # TV-only columns
     }
     $grid.AutoResizeColumns('DisplayedCells')
     foreach ($c in $grid.Columns) {
@@ -2792,6 +2795,31 @@ $btnGear.Padding = New-Object Windows.Forms.Padding(0)
 $btnGear.Location = New-Object Drawing.Point(1216, 18); $btnGear.Anchor = 'Top,Right'
 $header.Controls.AddRange(@($logo, $lblTitle, $lblSub, $btnGear))
 
+# ---- library tabs (Movies | TV Shows) above the header --------------------
+$tabBar = New-Object Windows.Forms.Panel
+$tabBar.Dock = 'Top'; $tabBar.Height = 40; $tabBar.Width = 1280; $tabBar.BackColor = $script:cBg
+function New-LibraryTab {
+    param([string]$Text, [string]$Key, [int]$X, [int]$W)
+    $t = New-Object Windows.Forms.Label
+    $t.Text = $Text; $t.Tag = $Key; $t.AutoSize = $false; $t.TextAlign = 'MiddleCenter'
+    $t.Location = New-Object Drawing.Point($X, 0); $t.Size = New-Object Drawing.Size($W, 40)
+    $t.Font = $script:fontBold; $t.Cursor = [Windows.Forms.Cursors]::Hand; $t.BackColor = [Drawing.Color]::Transparent
+    $t.Add_Paint({
+        param($s, $e)
+        $on = ([string]$s.Tag -eq $script:Tab)
+        $s.ForeColor = $(if ($on) { $script:cText } else { $script:cMuted })
+        if ($on) {
+            $br = New-Object Drawing.SolidBrush($script:cAccent)
+            $e.Graphics.FillRectangle($br, 10, $s.Height - 3, $s.Width - 20, 3)
+            $br.Dispose()
+        }
+    })
+    $t
+}
+$tabMovies = New-LibraryTab 'Movies' 'Movies' 14 90
+$tabTv     = New-LibraryTab 'TV Shows' 'TV' 104 100
+$tabBar.Controls.AddRange(@($tabMovies, $tabTv))
+
 # ---- control card ---------------------------------------------------------
 $controls = New-Object Windows.Forms.Panel
 # NOTE: every panel that hosts anchored children gets its real width BEFORE the children are added.
@@ -3305,6 +3333,7 @@ $form.Controls.Add($content)
 $form.Controls.Add($statusBar)
 $form.Controls.Add($controls)
 $form.Controls.Add($header)
+$form.Controls.Add($tabBar)             # added last, so it docks above the header
 #endregion
 
 #region ---------------------------------------------------------------- View helpers
@@ -3328,7 +3357,7 @@ function Set-View {
     $collBar.Visible   = $hasData
     $toolbar.Height    = $(if ($hasData) { 132 } else { 54 })          # the collection bar is the toolbar's second row
     $btnCollAdd.Visible = $hasData -and ($View -eq 'grid')
-    $lblGroup.Visible = $hasData -and $script:HasTv -and ($View -eq 'grid'); $cboGroup.Visible = $lblGroup.Visible
+    $lblGroup.Visible = $hasData -and ($script:Tab -eq 'TV') -and ($View -eq 'grid'); $cboGroup.Visible = $lblGroup.Visible
     foreach ($pair in @(@($btnViewGrid, 'grid'), @($btnViewDetail, 'detail'), @($btnViewPoster, 'poster'), @($btnViewDash, 'dashboard'))) {
         $btn = $pair[0]
         if ($pair[1] -eq $View) {
@@ -3609,13 +3638,27 @@ function Get-DateOrdered {
     @($Records | Sort-Object @{ Expression = { if ([int]$_.Year -gt 0) { [int]$_.Year } else { 9999 } } }, @{ Expression = { [string]$_.ReleaseDate } }, @{ Expression = { [string]$_.Title } })
 }
 
+function Get-TabRecords {
+    # Only the records that belong to the active tab: TV rows have a Show name, movies do not.
+    $tv = ($script:Tab -eq 'TV')
+    $out = New-Object 'System.Collections.Generic.List[object]'
+    foreach ($r in $script:ScanResults) { if ([bool][string]$r.Show -eq $tv) { $out.Add($r) } }
+    , $out.ToArray()
+}
+
+function Get-TabExpression {
+    if ($script:Tab -eq 'TV') { return "[Show] <> ''" }
+    "([Show] IS NULL OR [Show] = '')"
+}
+
 function Get-OrderedResults {
-    if (Test-ActiveByDate) { return (Get-DateOrdered $script:ScanResults) }
-    @($script:ScanResults)
+    $recs = @(Get-TabRecords)
+    if (Test-ActiveByDate) { return (Get-DateOrdered $recs) }
+    $recs
 }
 
 function Get-ScopedRecords {
-    $recs = @($script:ScanResults)
+    $recs = @(Get-TabRecords)
     if ($null -ne $script:ScopeIds) { $recs = @($recs | Where-Object { $script:ScopeIds.Contains((Get-RecordId $_)) }) }
     if (Test-ActiveByDate) { $recs = Get-DateOrdered $recs }
     $recs
@@ -3631,8 +3674,9 @@ function Set-CollectionOrder {
 
 function Set-TvGrouping {
     # TV rows are one per episode. Grouping is a sort (Show or Season first, then Season / Episode) plus a divider line drawn between groups.
-    if ($grid.DataSource -isnot [System.Data.DataTable] -or -not $script:HasTv) { return }
+    if ($grid.DataSource -isnot [System.Data.DataTable]) { return }
     if (Test-ActiveByDate) { return }
+    if ($script:Tab -ne 'TV') { if ($script:OrderApplied) { $grid.DataSource.DefaultView.Sort = ''; $script:OrderApplied = $false }; return }
     $mode = [string]$cboGroup.SelectedItem
     $sort = switch ($mode) {
         'Show'   { '[Show] ASC, [Season] ASC, [Episode] ASC, [Title] ASC' }
@@ -3646,13 +3690,13 @@ function Set-TvGrouping {
 function Update-Filter {
     $text = $txtFilter.Text.Trim()
     if ($grid.DataSource -is [System.Data.DataTable]) {
-        $parts = @()
+        $parts = @((Get-TabExpression))
         $fx = Get-FilterExpression $grid.DataSource $text
         if ($fx) { $parts += ('(' + $fx + ')') }
         $sx = Get-ScopeExpression
         if ($sx) { $parts += $sx }
         $grid.DataSource.DefaultView.RowFilter = ($parts -join ' AND ')
-        $total = if ($null -ne $script:ScopeIds) { $script:ScopeIds.Count } else { $script:ScanResults.Count }
+        $total = if ($null -ne $script:ScopeIds) { $script:ScopeIds.Count } else { [int]$script:TabCounts[$script:Tab] }
         $lblCount.Text = '{0} of {1} titles' -f $grid.DataSource.DefaultView.Count, $total
     }
     Update-DetailList -Filter $text
@@ -3661,11 +3705,22 @@ function Update-Filter {
 #endregion
 
 #region ---------------------------------------------------------------- Events
+function Set-LibraryTab {
+    param([string]$Name)
+    if ($script:Tab -eq $Name) { return }
+    $script:Tab = $Name
+    $tabMovies.Invalidate(); $tabTv.Invalidate()
+    if ($grid.DataSource -is [System.Data.DataTable]) { Set-GridColumnLayout; Set-TvGrouping; Update-Filter; $grid.ClearSelection() }
+    Set-View $script:CurrentView
+    if ($script:CurrentView -eq 'dashboard' -and $script:ScanResults.Count -gt 0) { Show-DashboardView }
+}
+$tabMovies.Add_Click({ Set-LibraryTab 'Movies' })
+$tabTv.Add_Click({ Set-LibraryTab 'TV' })
 $cboGroup.Add_SelectedIndexChanged({ Set-TvGrouping; $grid.Invalidate() })
 $grid.Add_RowPostPaint({
     param($s, $e)
     # a thin accent line above the first row of each Show / Season group
-    if ($e.RowIndex -lt 1 -or -not $script:HasTv -or $s.DataSource -isnot [System.Data.DataTable]) { return }
+    if ($e.RowIndex -lt 1 -or $script:Tab -ne 'TV' -or $s.DataSource -isnot [System.Data.DataTable]) { return }
     $col = switch ([string]$cboGroup.SelectedItem) { 'Show' { 'Show' } 'Season' { 'Season' } default { '' } }
     if (-not $col -or -not ([string]$s.DataSource.DefaultView.Sort).StartsWith("[$col]")) { return }
     $a = $s.Rows[$e.RowIndex - 1].Cells[$col].Value; $b = $s.Rows[$e.RowIndex].Cells[$col].Value
@@ -5287,6 +5342,9 @@ function Complete-Scan {
         }
         $script:ScanResults = $results
         $script:HasTv = (@($results | Where-Object { [string]$_.Show }).Count -gt 0)
+        $nTv = @($results | Where-Object { [string]$_.Show }).Count
+        $script:TabCounts = @{ Movies = ($results.Count - $nTv); TV = $nTv }
+        if ($script:TabCounts[$script:Tab] -eq 0 -and $script:TabCounts[$(if ($script:Tab -eq 'TV') { 'Movies' } else { 'TV' })] -gt 0) { $script:Tab = $(if ($script:Tab -eq 'TV') { 'Movies' } else { 'TV' }); $tabMovies.Invalidate(); $tabTv.Invalidate() }
         $cancelled = [bool]$s.Cancel
         if ($results.Count -eq 0 -and -not $cancelled) {
             $lblStatus.Text = 'Nothing found.'

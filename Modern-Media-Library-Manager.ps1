@@ -3550,22 +3550,29 @@ function Show-RecordDetail {
 
 function Update-DetailList {
     param([string]$Filter = '')
-    $listFiles.BeginUpdate()
-    $listFiles.Items.Clear()
-    $items = @()
+    # Built from lists and one AddRange: adding 50,000+ episodes one at a time (or growing an array with +=) takes minutes.
+    $items  = New-Object 'System.Collections.Generic.List[object]'
+    $labels = New-Object 'System.Collections.Generic.List[object]'
+    $needle = $Filter.ToLowerInvariant()
+    $scoped = ($null -ne $script:ScopeIds)
     foreach ($r in (Get-OrderedResults)) {
-        if ($null -ne $script:ScopeIds -and -not $script:ScopeIds.Contains((Get-RecordId $r))) { continue }
-        if ($Filter) {
+        if ($scoped -and -not $script:ScopeIds.Contains((Get-RecordId $r))) { continue }
+        if ($needle) {
             $hay = ('{0} {1} {2} {3} {4}' -f $r.Title, $r.FileName, $r.Genre, $r.Studio, $r.Cast).ToLowerInvariant()
-            if (-not $hay.Contains($Filter.ToLowerInvariant())) { continue }
+            if (-not $hay.Contains($needle)) { continue }
         }
         $label = [string]$r.Title
         if ($r.Year -gt 0) { $label = "$label ($($r.Year))" }
-        [void]$listFiles.Items.Add($label)
-        $items += $r
+        $labels.Add($label)
+        $items.Add($r)
     }
-    $script:DetailItems = $items
-    $listFiles.EndUpdate()
+    $script:DetailItems = $items.ToArray()
+    $listFiles.BeginUpdate()
+    try {
+        $listFiles.Items.Clear()
+        if ($labels.Count -gt 0) { $listFiles.Items.AddRange($labels.ToArray()) }
+    }
+    finally { $listFiles.EndUpdate() }
 }
 
 function Get-LikeEscaped {

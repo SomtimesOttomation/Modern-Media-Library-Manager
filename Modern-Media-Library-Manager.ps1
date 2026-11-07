@@ -1463,6 +1463,7 @@ function Invoke-PlexScan {
 
     # 4) posters + optional FEL/MEL probe, then put everything back in library order ----------
     $out = New-Object System.Collections.Generic.List[object]
+    $posterSeen = @{}
     $n = 0
     Set-ScanPhase -Lo $postLo -Hi 1.0
     foreach ($s in $stubs) {
@@ -1470,12 +1471,18 @@ function Invoke-PlexScan {
         $n++
         $rec = $byKey[$s.Key]
         if ($null -eq $rec) { continue }
-        if (($n % 5) -eq 0 -or $n -eq $stubs.Count) { Set-UiProgress -Text ("Fetching posters: {0} of {1}" -f $n, $stubs.Count) -Value $n -Max $stubs.Count }
+        if (($n % 5) -eq 0 -or $n -eq $stubs.Count) { Set-UiProgress -Text ("Posters: {0} of {1} titles ({2} distinct images)" -f $n, $stubs.Count, $posterSeen.Count) -Value $n -Max $stubs.Count }
 
-        if (-not $rec.PosterPath -or -not (Test-Path -LiteralPath $rec.PosterPath)) {
-            $poster = Save-PlexPoster -BaseUrl $BaseUrl -Token $Token -ThumbPath ([string]$rec.PlexThumb)
-            $rec.PosterPath = $poster
-            $rec.HasPoster  = [bool]$poster
+        # one poster per distinct image: every episode of a show shares its show's poster, so it is checked / fetched once
+        $th = [string]$rec.PlexThumb
+        if ($th -and $posterSeen.ContainsKey($th)) { $rec.PosterPath = $posterSeen[$th]; $rec.HasPoster = [bool]$posterSeen[$th] }
+        else {
+            if (-not $rec.PosterPath -or -not (Test-Path -LiteralPath $rec.PosterPath)) {
+                $poster = [string](@(Save-PlexPoster -BaseUrl $BaseUrl -Token $Token -ThumbPath $th) | Select-Object -Last 1)
+                $rec.PosterPath = $poster
+                $rec.HasPoster  = [bool]$poster
+            }
+            if ($th) { $posterSeen[$th] = [string]$rec.PosterPath }
         }
         if ($DetectFel -and $rec.DVLayer -eq 'Dual layer' -and $rec.FullPath -and (Test-Path -LiteralPath $rec.FullPath -ErrorAction SilentlyContinue)) {
             $layer = Get-DolbyVisionLayerType -Path $rec.FullPath -DurationSec ([int]([double]$rec.RuntimeMin * 60))
@@ -2367,7 +2374,7 @@ function ConvertTo-DataTable {
         [void]$t.Columns.Add((New-Object System.Data.DataColumn($f.Name, $script:TypeMap[$f.Type])))
     }
     $fields = @($script:Fields); $nf = $fields.Count
-    $names  = New-Object string[] $nf; $types = New-Object 'type[]' $nf
+    $names  = New-Object string[] $nf; $types = New-Object 'System.Type[]' $nf
     for ($i = 0; $i -lt $nf; $i++) { $names[$i] = $fields[$i].Name; $types[$i] = $script:TypeMap[$fields[$i].Type] }
     $t.BeginLoadData()
     foreach ($r in $Records) {
@@ -3955,9 +3962,14 @@ function Set-LibraryTab {
     $script:Tab = $Name
     $tabMovies.Invalidate(); $tabTv.Invalidate()
     $btnScan.Text = $(if ($Name -eq 'TV') { 'Scan TV Shows' } else { 'Scan Movies' })
-    Set-GridTable
-    if ($grid.DataSource -is [System.Data.DataTable]) { Update-Filter; $grid.ClearSelection() }
-    Set-View ([string]$script:TabView[$Name])
+    try {
+        Set-GridTable
+        if ($grid.DataSource -is [System.Data.DataTable]) { Update-Filter; $grid.ClearSelection() }
+        Set-View ([string]$script:TabView[$Name])
+    }
+    catch {
+        [Windows.Forms.MessageBox]::Show(("Could not switch tabs:`n{0}`n`n{1}" -f $_, $_.InvocationInfo.PositionMessage), 'Modern Media Library Manager', 'OK', 'Error') | Out-Null
+    }
     if ($script:CurrentView -eq 'dashboard' -and $script:ScanResults.Count -gt 0 -and -not $script:Scanning) { Show-DashboardView }
 }
 $tabMovies.Add_Click({ Set-LibraryTab 'Movies' })
@@ -5646,12 +5658,17 @@ function Complete-Scan {
         if ($results.Count -gt 0) {
             try { Set-SourceLabels -Records $(if ($script:ScanMode -eq 'Scrape') { $results } else { $fresh }) } catch { }          # measured labels first, then fetched / typed-in values on top
             try { Merge-MetaStore -Records $(if ($script:ScanMode -eq 'Scrape') { $results } else { $fresh }) -Path $script:MetaStorePath } catch { }
-            $mov = New-Object 'System.Collections.Generic.List[object]'; $tvr = New-Object 'System.Collections.Generic.List[object]'
-            foreach ($r0 in $results) { if ([string]$r0.Show) { $tvr.Add($r0) } else { $mov.Add($r0) } }
-            $script:MovieTable = ConvertTo-DataTable -Records $mov.ToArray()
-            Build-TvTree -Records $tvr.ToArray()
-            $grid.DataSource = $null
-            Set-GridTable            # this tab's table, remembered visibility/widths
+            try {
+                $mov = New-Object 'System.Collections.Generic.List[object]'; $tvr = New-Object 'System.Collections.Generic.List[object]'
+                foreach ($r0 in $results) { if ([string]$r0.Show) { $tvr.Add($r0) } else { $mov.Add($r0) } }
+                $script:MovieTable = ConvertTo-DataTable -Records $mov.ToArray()
+                Build-TvTree -Records $tvr.ToArray()
+                $grid.DataSource = $null
+                Set-GridTable            # this tab's table, remembered visibility/widths
+            }
+            catch {
+                [Windows.Forms.MessageBox]::Show(("Could not show the results:`n{0}`n`n{1}" -f $_, $_.InvocationInfo.PositionMessage), 'Modern Media Library Manager', 'OK', 'Error') | Out-Null
+            }
             try { Update-CollectionScope; $script:OrderApplied = $false; Set-CollectionOrder } catch { }          # the active collection is re-evaluated against this scan
             $grid.ClearSelection()
             Update-Filter

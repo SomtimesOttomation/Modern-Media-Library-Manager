@@ -3258,12 +3258,25 @@ $script:SortChoices = [ordered]@{
     'Box Office Worldwide'  = '[BoxOfficeWorldwide] DESC, [Title] ASC'
     'Runtime'               = '[RuntimeMin] DESC, [Title] ASC'
 }
-$lblSort = New-Label 'Sort by:' 968 47 $script:cMuted $script:fontBase
-$lblSort.Anchor = 'Top,Right'
+$lblSort = New-Object Windows.Forms.Label
+$lblSort.Text = 'Sort by:'; $lblSort.AutoSize = $false; $lblSort.TextAlign = 'MiddleRight'
+$lblSort.Location = New-Object Drawing.Point(950, 43); $lblSort.Size = New-Object Drawing.Size(76, 26); $lblSort.Anchor = 'Top,Right'
+$lblSort.ForeColor = $script:cMuted; $lblSort.BackColor = [Drawing.Color]::Transparent; $lblSort.Font = $script:fontBase
 $cboSort = New-Object Windows.Forms.ComboBox
-$cboSort.DropDownStyle = 'DropDownList'; $cboSort.FlatStyle = 'Flat'
+$cboSort.DropDownStyle = 'DropDownList'; $cboSort.FlatStyle = 'Flat'; $cboSort.TabStop = $false
 $cboSort.Location = New-Object Drawing.Point(1036, 43); $cboSort.Size = New-Object Drawing.Size(220, 28); $cboSort.Anchor = 'Top,Right'
-$cboSort.BackColor = $script:cPanel2; $cboSort.ForeColor = $script:cText
+$cboSort.BackColor = $script:cPanel2; $cboSort.ForeColor = $script:cText; $cboSort.Font = $script:fontBase
+# drawn by us so the chosen sort is always readable on the dark theme (the stock flat list can paint it as an empty highlight)
+$cboSort.DrawMode = 'OwnerDrawFixed'; $cboSort.ItemHeight = 20
+$cboSort.Add_DrawItem({
+    param($s, $e)
+    if ($e.Index -lt 0) { return }
+    $sel = (($e.State -band [Windows.Forms.DrawItemState]::Selected) -ne 0) -and (($e.State -band [Windows.Forms.DrawItemState]::ComboBoxEdit) -eq 0)
+    $bg = New-Object Drawing.SolidBrush($(if ($sel) { $script:cAccent } else { $script:cPanel2 }))
+    $e.Graphics.FillRectangle($bg, $e.Bounds); $bg.Dispose()
+    $r = New-Object Drawing.Rectangle(($e.Bounds.X + 6), $e.Bounds.Y, ($e.Bounds.Width - 6), $e.Bounds.Height)
+    [Windows.Forms.TextRenderer]::DrawText($e.Graphics, [string]$s.Items[$e.Index], $s.Font, $r, $script:cText, ([Windows.Forms.TextFormatFlags]::VerticalCenter -bor [Windows.Forms.TextFormatFlags]::Left -bor [Windows.Forms.TextFormatFlags]::EndEllipsis))
+})
 foreach ($k in $script:SortChoices.Keys) { [void]$cboSort.Items.Add($k) }
 $cboSort.SelectedIndex = 0
 $lblCollInfo.ForeColor = $script:cMuted; $lblCollInfo.BackColor = [Drawing.Color]::Transparent; $lblCollInfo.Font = $script:fontSmall

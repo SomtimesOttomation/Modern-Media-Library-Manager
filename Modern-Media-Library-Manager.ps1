@@ -68,6 +68,7 @@ $script:Scanning        = $false            # a scan is running (it owns one tab
 $script:ScanTab         = ''
 $script:EmptyText       = $null
 $script:DetailStale     = $true
+$script:CardReturn      = $null             # view to go back to when a card opened from the posters is closed
 $script:TabView         = @{ Movies = 'grid'; TV = 'poster' }   # each tab remembers its own view; TV opens on posters
 $script:MovieTable      = $null             # grid table for the Movies tab (TV has no WinForms grid: its views are tv.html in the embedded browser)
 $script:TvRecords       = @()               # this scan's episodes
@@ -2573,6 +2574,10 @@ function Show-DashboardPane {
                     $sender.CoreWebView2.add_WebMessageReceived({
                         param($s2, $e2)
                         try { $m = $e2.TryGetWebMessageAsString() } catch { return }
+                        if ($m -eq 'cardclosed') {          # a card opened from the posters was closed: back to the posters
+                            if ($script:CardReturn) { $v = $script:CardReturn; $script:CardReturn = $null; Set-View $v }
+                            return
+                        }
                         if ($m -and $m.StartsWith('tvview|')) {
                             $v = $m.Substring(7)
                             if ($script:Tab -eq 'TV' -and ($v -eq 'grid' -or $v -eq 'poster') -and $script:CurrentView -ne $v) { Set-View $v }
@@ -4234,16 +4239,16 @@ $posterCanvas.Add_MouseMove({
         $tip.SetToolTip($posterCanvas, $txt)
     }
 })
-$posterCanvas.Add_MouseDoubleClick({
+$posterCanvas.Add_MouseClick({
     param($s, $e)
+    # Clicking a poster opens that title's card, the same card as the dashboard's View Library (with Export Card to PNG).
+    # Closing the card comes back to the posters.
+    if ($e.Button -ne [Windows.Forms.MouseButtons]::Left) { return }
     $i = Get-PosterIndexAt $e.X $e.Y
     if ($i -lt 0) { return }
-    $path = $script:PosterItems[$i].FullPath
-    $txtFilter.Text = ''
-    Update-DetailList; $script:DetailStale = $false
-    for ($k = 0; $k -lt $script:DetailItems.Count; $k++) {
-        if ($script:DetailItems[$k].FullPath -eq $path) { Set-View 'detail'; $listFiles.SelectedIndex = $k; break }
-    }
+    $it = $script:PosterItems[$i]
+    $script:CardReturn = 'poster'
+    Show-DashboardView -Card $(if ($it.FullPath) { 'p:' + $it.FullPath } else { 't:' + $it.Title + '|' + $it.Year })
 })
 $posterCanvas.Add_Paint({
     param($s, $e)
@@ -5671,6 +5676,8 @@ function Test-DashboardReady {
 function Show-DashboardView {
     # Builds the dashboard (only if the scan changed) and shows it inside the window.
     # Falls back to the default browser if the embedded WebView2 cannot start.
+    # -Card opens one title's card straight away ('p:<full path>' or 't:<title>|<year>').
+    param([string]$Card = '')
     if ($script:Scanning) {
         [Windows.Forms.MessageBox]::Show('The dashboard is available when the scan has finished.', 'Dashboard', 'OK', 'Information') | Out-Null; return
     }
@@ -5683,6 +5690,7 @@ function Show-DashboardView {
             $script:DashboardStale = $false
         }
         $url = ([Uri]$script:LiveDashboard).AbsoluteUri + '?t=' + [DateTime]::Now.Ticks
+        if ($Card) { $url += '#card=' + [Uri]::EscapeDataString($Card) }
 
         if (Initialize-WebView2) {
             $script:WebShowing = 'dash'

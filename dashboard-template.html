@@ -718,7 +718,13 @@ function scoreCards(r){
   return (has(rating) ? spec('Ratings', rating) : '') + (has(money) ? spec('Box office', money) : '')
     || '<div class="spec"><h4>Ratings &amp; box office</h4><div class="sub">None yet. Use Fetch info, or Edit info to type them in.</div></div>';
 }
+let fromApp = false;   // the card was opened from the app's poster view; closing it returns there
 function closeModal(){
+  if (fromApp && !backToWall){
+    fromApp = false; $('#modal').hidden = true; document.body.style.overflow = '';
+    if (window.chrome && window.chrome.webview) { try { window.chrome.webview.postMessage('cardclosed'); } catch (e) { } }
+    return;
+  }
   if (backToWall){ openWall(true); return; }       // closing a title sheet that was opened from the collection popup returns to the popup
   wallOpen = false;
   $('#modal').hidden = true; document.body.style.overflow = '';
@@ -812,6 +818,16 @@ $('#viewwall').textContent = META.collection ? 'View Collection' : 'View Library
 if (META.dateOrder){ sortBy = 'release'; $('#sort').value = 'release'; }      // a collection kept in release order opens that way
 psort = sortBy;
 buildKpis(); buildChartShells(); update();
+/* #card=p:<full path> or #card=t:<title>|<year> (from the app's poster view) opens that title's card */
+(function(){
+  const m = /^#card=(.*)$/.exec(location.hash); if (!m) return;
+  let key = ''; try { key = decodeURIComponent(m[1]); } catch (e) { return; }
+  let i = -1;
+  if (key.startsWith('p:')) { const p = key.slice(2); i = base.findIndex(r => r.FullPath === p); }
+  if (i < 0) { const tt = key.slice(2).split('|'); i = base.findIndex(r => String(r.Title) === tt[0] && String(r.Year || 0) === String(tt[1] || 0)); }
+  history.replaceState(null, '', location.pathname + location.search);
+  if (i >= 0) { fromApp = true; openModal(i); }
+})();
 })();
 </script>
 </body>

@@ -19,6 +19,7 @@
     Folder layout (keep these together):
         Modern-Media-Library-Manager.ps1  this script
         dashboard-template.html    dashboard page the script fills with your data
+        tv-template.html           TV Shows page (posters and the show / season / episode grid)
         lib\                       WebView2 DLLs - created automatically on first use of the Dashboard view
                                    (or copy Microsoft.Web.WebView2.Core.dll, ...WinForms.dll and WebView2Loader.dll in yourself)
         Run-ModernMediaLibraryManager.cmd  optional double-click launcher
@@ -53,6 +54,7 @@ $script:CollectionsPath = Join-Path $script:AppData 'collections.json'         #
 $script:DataFolder      = Join-Path $script:AppData 'datasets'                 # IMDb ratings file
 $script:InformFolder     = Join-Path $script:AppData 'Inform'                       # full MediaInfo text per file (source-clue research)
 $script:LiveFolder      = Join-Path $script:AppData 'Dashboard'                    # dashboard shown inside the app
+$script:SnapshotFolder  = Join-Path $script:AppData 'Library'                      # last scan of each tab (movies.mmls / tv.mmls), loaded at start
 $script:LiveDashboard   = Join-Path $script:LiveFolder 'index.html'
 $script:Culture         = [Globalization.CultureInfo]::InvariantCulture
 
@@ -60,6 +62,23 @@ $script:Culture         = [Globalization.CultureInfo]::InvariantCulture
 $script:DashboardStale  = $true      # set after every scan so the dashboard is rebuilt on demand
 $script:DashboardUrl    = ''
 $script:CurrentView     = 'grid'
+$script:Tab             = 'Movies'          # library tab: 'Movies' (default) or 'TV'
+$script:TabCounts       = @{ Movies = 0; TV = 0 }
+$script:Scanning        = $false            # a scan is running (it owns one tab; the other tab stays usable)
+$script:ScanTab         = ''
+$script:EmptyText       = $null
+$script:DetailStale     = $true
+$script:CardReturn      = $null             # view to go back to when a card opened from the posters is closed
+$script:TabView         = @{ Movies = 'grid'; TV = 'poster' }   # each tab remembers its own view; TV opens on posters
+$script:MovieTable      = $null             # grid table for the Movies tab (TV has no WinForms grid: its views are tv.html in the embedded browser)
+$script:TvRecords       = @()               # this scan's episodes
+$script:TvPageStale     = $true             # tvdata.js needs writing again
+$script:TvPageTicks     = 0                 # cache-buster for tv.html after a rewrite
+$script:WebShowing      = ''                # what the embedded browser shows: 'tv:<ticks>' or 'dash'
+$script:TvTemplatePath  = Join-Path $script:AppRoot 'tv-template.html'
+$script:TvFromDisk      = $false            # the TV page is showing last session's tvdata.js while the TV records load
+$script:TvLoad          = $null             # background load of tv.mmls: @{ Ps; Async }
+$script:SnapJobs        = New-Object System.Collections.ArrayList     # background snapshot saves still running
 $script:WebView2Ready   = $false
 $script:WebView2Failed  = $false
 $script:WebView2Error   = ''
@@ -71,7 +90,7 @@ $script:AudioExtensions = @('aac','ac3','dts','dtshd','dtshr','dtsma','eac3','fl
 $script:PosterNames     = @('poster','folder','cover','movie','thumb')     # besides "<filename>-poster"
 $script:ImageExtensions = @('jpg','jpeg','png','bmp')
 
-foreach ($dir in @($script:CacheFolder, $script:ThumbFolder, $script:LiveFolder)) {
+foreach ($dir in @($script:CacheFolder, $script:ThumbFolder, $script:LiveFolder, $script:SnapshotFolder)) {
     if (-not (Test-Path -LiteralPath $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
 }
 
@@ -991,7 +1010,7 @@ function Get-PlexStubs {
         }
         $start += $nodes.Count
         if (-not $t) { break }                                           # no paging info: one page is all there is
-        Set-UiProgress -Text ("Listing {0}: {1} of {2}" -f $Section.Title, [math]::Min($start, $total), $total)
+        Set-UiProgress -Text ("Listing {0}: {1} of {2}" -f $Section.Title, [math]::Min($start, $total), $total) -Value ([math]::Min($start, $total)) -Max $total
     }
     $stubs
 }
@@ -1386,7 +1405,7 @@ function ConvertFrom-PlexVideo {
 }
 
 function Invoke-PlexScan {
-    param([string]$BaseUrl, [string]$Token, [bool]$Movies, [bool]$Shows, [bool]$Rebuild, [bool]$DetectFel)
+    param([string]$BaseUrl, [string]$Token, [bool]$Movies, [bool]$Shows, [bool]$Rebuild, [bool]$DetectFel, [hashtable]$Prior = @{})
 
     Set-UiProgress -Text 'Connecting to Plex...'
     $sections = @(Get-PlexSections -BaseUrl $BaseUrl -Token $Token | Where-Object {
@@ -1395,6 +1414,7 @@ function Invoke-PlexScan {
 
     # 1) list every item (cheap) ---------------------------------------------------------
     $stubs = New-Object System.Collections.Generic.List[object]
+    Set-ScanPhase -Lo 0.0 -Hi 0.05
     foreach ($sec in $sections) {
         foreach ($s in @(Get-PlexStubs -BaseUrl $BaseUrl -Token $Token -Section $sec)) { $stubs.Add($s) }
     }
@@ -1404,7 +1424,17 @@ function Invoke-PlexScan {
     # 2) reuse cached records whose Plex 'updatedAt' has not changed ------------------------
     $byKey = @{}
     $todo  = New-Object System.Collections.Generic.List[object]
+    Set-ScanPhase -Lo 0.05 -Hi 0.10
+    $chk = 0
     foreach ($s in $stubs) {
+        $chk++
+        if (($chk % 250) -eq 0) {
+            if (Test-ScanCancelled) { break }
+            Set-UiProgress -Text ("Checking for changes: {0} of {1}" -f $chk, $stubs.Count) -Value $chk -Max $stubs.Count
+        }
+        # unchanged since the last scan (same Plex 'updatedAt'): reuse the record we already have
+        $p0 = $Prior[[string]$s.Key]
+        if ($null -ne $p0 -and [string]$p0.PlexUpdated -eq [string]$s.Updated) { $byKey[$s.Key] = $p0; continue }
         $ck = Join-Path $script:CacheFolder ((Get-StringHash ('plex|{0}|{1}|{2}|{3}|rt2' -f $BaseUrl.ToLowerInvariant(), $s.Key, $s.Updated, $script:CacheVersion)) + '.json')
         $s | Add-Member -NotePropertyName CacheFile -NotePropertyValue $ck -Force
         if ($Rebuild) { Remove-Item -LiteralPath $ck -Force -ErrorAction SilentlyContinue }
@@ -1418,11 +1448,11 @@ function Invoke-PlexScan {
     # 3) fetch full details for the rest, in batches ----------------------------------------
     $showCache = @{}
     $done = $stubs.Count - $todo.Count
-    $postLo = if ($todo.Count -gt 0) { 0.8 } else { 0.0 }       # the overall bar: details 0-80 %, posters 80-100 % (all of it when everything was cached)
-    Set-ScanPhase -Lo 0.0 -Hi $postLo
+    $postLo = if ($todo.Count -gt 0) { 0.8 } else { 0.10 }       # the overall bar: details 0-80 %, posters 80-100 % (all of it when everything was cached)
+    Set-ScanPhase -Lo 0.10 -Hi $postLo
     for ($i = 0; $i -lt $todo.Count; $i += 25) {
         if (Test-ScanCancelled) { break }
-        $batch = @($todo | Select-Object -Skip $i -First 25)
+        $batch = @($todo.GetRange($i, [Math]::Min(25, $todo.Count - $i)))      # (Select-Object -Skip re-walks the whole list every time, which crawls on tens of thousands of episodes)
         Set-UiProgress -Text ("Reading Plex metadata: {0} of {1}" -f ($done + 1), $stubs.Count) -Value $done -Max $stubs.Count
         $map = Get-PlexMetadataMap -BaseUrl $BaseUrl -Token $Token -Keys @($batch | ForEach-Object { $_.Key })
         foreach ($s in $batch) {
@@ -1444,6 +1474,7 @@ function Invoke-PlexScan {
 
     # 4) posters + optional FEL/MEL probe, then put everything back in library order ----------
     $out = New-Object System.Collections.Generic.List[object]
+    $posterSeen = @{}
     $n = 0
     Set-ScanPhase -Lo $postLo -Hi 1.0
     foreach ($s in $stubs) {
@@ -1451,12 +1482,22 @@ function Invoke-PlexScan {
         $n++
         $rec = $byKey[$s.Key]
         if ($null -eq $rec) { continue }
-        if (($n % 5) -eq 0 -or $n -eq $stubs.Count) { Set-UiProgress -Text ("Fetching posters: {0} of {1}" -f $n, $stubs.Count) -Value $n -Max $stubs.Count }
+        if ([string]$rec.PlexUpdated -ne [string]$s.Updated) {          # remembered so the next scan can tell what changed
+            if ($null -ne $rec.PSObject.Properties['PlexUpdated']) { $rec.PlexUpdated = $s.Updated }
+            else { $rec.PSObject.Properties.Add((New-Object Management.Automation.PSNoteProperty('PlexUpdated', [string]$s.Updated))) }
+        }
+        if (($n % 5) -eq 0 -or $n -eq $stubs.Count) { Set-UiProgress -Text ("Posters: {0} of {1} titles ({2} distinct images)" -f $n, $stubs.Count, $posterSeen.Count) -Value $n -Max $stubs.Count }
 
-        if (-not $rec.PosterPath -or -not (Test-Path -LiteralPath $rec.PosterPath)) {
-            $poster = Save-PlexPoster -BaseUrl $BaseUrl -Token $Token -ThumbPath ([string]$rec.PlexThumb)
-            $rec.PosterPath = $poster
-            $rec.HasPoster  = [bool]$poster
+        # one poster per distinct image: every episode of a show shares its show's poster, so it is checked / fetched once
+        $th = [string]$rec.PlexThumb
+        if ($th -and $posterSeen.ContainsKey($th)) { $rec.PosterPath = $posterSeen[$th]; $rec.HasPoster = [bool]$posterSeen[$th] }
+        else {
+            if (-not $rec.PosterPath -or -not (Test-Path -LiteralPath $rec.PosterPath)) {
+                $poster = [string](@(Save-PlexPoster -BaseUrl $BaseUrl -Token $Token -ThumbPath $th) | Select-Object -Last 1)
+                $rec.PosterPath = $poster
+                $rec.HasPoster  = [bool]$poster
+            }
+            if ($th) { $posterSeen[$th] = [string]$rec.PosterPath }
         }
         if ($DetectFel -and $rec.DVLayer -eq 'Dual layer' -and $rec.FullPath -and (Test-Path -LiteralPath $rec.FullPath -ErrorAction SilentlyContinue)) {
             $layer = Get-DolbyVisionLayerType -Path $rec.FullPath -DurationSec ([int]([double]$rec.RuntimeMin * 60))
@@ -2146,8 +2187,6 @@ function Update-SettingsFromUi {
     $s = $script:Settings
     if ($script:CurrentSource -eq 'Plex') { $s['PlexUrl'] = $txtFolder.Text.Trim() } else { $s['LastFolder'] = $txtFolder.Text.Trim() }
     $s['Source']       = if ($radPlex.Checked) { 'Plex' } else { 'Local' }
-    $s['PlexMovies']   = [bool]$chkMovies.Checked
-    $s['PlexShows']    = [bool]$chkShows.Checked
     $s['Video']        = [bool]$chkVideo.Checked
     $s['Audio']        = [bool]$chkAudio.Checked
     $s['EmbedPosters'] = [bool]$chkEmbed.Checked
@@ -2159,6 +2198,7 @@ function Update-SettingsFromUi {
     if ($grid.Columns.Count -gt 0) {
         $vis = @(); $hid = @(); $w = @{}
         foreach ($c in $grid.Columns) {
+            if ($c.Name.StartsWith('_')) { continue }
             if ($c.Visible) { $vis += $c.Name; $w[$c.Name] = [int]$c.Width } else { $hid += $c.Name }
         }
         foreach ($k in @($s['ColumnWidths'].Keys)) { if (-not $w.ContainsKey($k)) { $w[$k] = $s['ColumnWidths'][$k] } }
@@ -2177,6 +2217,7 @@ function Save-Settings {
     catch { }
 }
 
+$script:HasTv = $false
 function Set-GridColumnLayout {
     # Applies remembered visibility/widths. Columns the settings file has never seen (new fields) use their default.
     $vis    = @($script:Settings['VisibleColumns'])
@@ -2188,6 +2229,7 @@ function Set-GridColumnLayout {
         if     ($vis -contains $f.Name) { $col.Visible = $true }
         elseif ($hid -contains $f.Name) { $col.Visible = $false }
         else                            { $col.Visible = $f.Show }
+        if ($f.Name -eq 'Show' -or $f.Name -eq 'Season' -or $f.Name -eq 'Episode') { $col.Visible = (($script:Tab -eq 'TV') -and ($hid -notcontains $f.Name)) }      # TV-only columns
     }
     $grid.AutoResizeColumns('DisplayedCells')
     foreach ($c in $grid.Columns) {
@@ -2346,15 +2388,21 @@ function ConvertTo-DataTable {
     foreach ($f in $script:Fields) {
         [void]$t.Columns.Add((New-Object System.Data.DataColumn($f.Name, $script:TypeMap[$f.Type])))
     }
+    $fields = @($script:Fields); $nf = $fields.Count
+    $names  = New-Object string[] $nf; $types = New-Object 'System.Type[]' $nf
+    for ($i = 0; $i -lt $nf; $i++) { $names[$i] = $fields[$i].Name; $types[$i] = $script:TypeMap[$fields[$i].Type] }
+    $t.BeginLoadData()
     foreach ($r in $Records) {
-        $row = $t.NewRow()
-        foreach ($f in $script:Fields) {
-            $val = $r.($f.Name)
-            if ($null -eq $val) { $row[$f.Name] = [DBNull]::Value; continue }
-            try { $row[$f.Name] = [Convert]::ChangeType($val, $script:TypeMap[$f.Type]) } catch { $row[$f.Name] = [DBNull]::Value }
+        $arr = New-Object object[] $nf
+        for ($i = 0; $i -lt $nf; $i++) {
+            $val = $r.($names[$i])
+            if ($null -eq $val) { $arr[$i] = [DBNull]::Value }
+            elseif ($val -is $types[$i]) { $arr[$i] = $val }
+            else { try { $arr[$i] = [Convert]::ChangeType($val, $types[$i]) } catch { $arr[$i] = [DBNull]::Value } }
         }
-        [void]$t.Rows.Add($row)
+        [void]$t.Rows.Add($arr)
     }
+    $t.EndLoadData()
     , $t
 }
 #endregion
@@ -2482,8 +2530,8 @@ $script:WvMapped = $false
 function Get-DashboardNavUrl {
     # The live dashboard is opened through the mapped address when there is one; any other address is used as given.
     param([string]$Url)
-    $base = ([Uri]$script:LiveDashboard).AbsoluteUri
-    if ($script:WvMapped -and $Url.StartsWith($base)) { return ('https://mmlm.dashboard/' + [Uri]::EscapeDataString([IO.Path]::GetFileName($script:LiveDashboard)) + $Url.Substring($base.Length)) }
+    $base = ([Uri]((Split-Path -Parent $script:LiveDashboard).TrimEnd('\') + '\')).AbsoluteUri      # the live folder: index.html, tv.html, thumbs
+    if ($script:WvMapped -and $Url.StartsWith($base)) { return ('https://mmlm.dashboard/' + $Url.Substring($base.Length)) }
     $Url
 }
 
@@ -2526,6 +2574,15 @@ function Show-DashboardPane {
                     $sender.CoreWebView2.add_WebMessageReceived({
                         param($s2, $e2)
                         try { $m = $e2.TryGetWebMessageAsString() } catch { return }
+                        if ($m -eq 'cardclosed') {          # a card opened from the posters was closed: back to the posters
+                            if ($script:CardReturn) { $v = $script:CardReturn; $script:CardReturn = $null; Set-View $v }
+                            return
+                        }
+                        if ($m -and $m.StartsWith('tvview|')) {
+                            $v = $m.Substring(7)
+                            if ($script:Tab -eq 'TV' -and ($v -eq 'grid' -or $v -eq 'poster') -and $script:CurrentView -ne $v) { Set-View $v }
+                            return
+                        }
                         if ($m -and $m.StartsWith('savepng|')) {
                             $bits = $m.Split([char[]]@('|'), 3)
                             if ($bits.Count -eq 3) { Save-CardPng -Name $bits[1] -Base64 $bits[2] }
@@ -2791,6 +2848,44 @@ $btnGear.Padding = New-Object Windows.Forms.Padding(0)
 $btnGear.Location = New-Object Drawing.Point(1216, 18); $btnGear.Anchor = 'Top,Right'
 $header.Controls.AddRange(@($logo, $lblTitle, $lblSub, $btnGear))
 
+# ---- library tabs (Movies | TV Shows) above the header --------------------
+$tabBar = New-Object Windows.Forms.Panel
+$tabBar.Dock = 'Top'; $tabBar.Height = 40; $tabBar.Width = 1280; $tabBar.BackColor = $script:cBg
+function New-LibraryTab {
+    param([string]$Text, [string]$Key, [int]$X, [int]$W)
+    $t = New-Object Windows.Forms.Label
+    $t.Text = $Text; $t.Tag = $Key; $t.AutoSize = $false; $t.TextAlign = 'MiddleCenter'
+    $t.Location = New-Object Drawing.Point($X, 0); $t.Size = New-Object Drawing.Size($W, 40)
+    $t.Font = $script:fontBold; $t.Cursor = [Windows.Forms.Cursors]::Hand; $t.BackColor = [Drawing.Color]::Transparent
+    $t.Add_Paint({
+        param($s, $e)
+        $on = ([string]$s.Tag -eq $script:Tab)
+        $s.ForeColor = $(if ($on) { $script:cText } else { $script:cMuted })
+        if ($on) {
+            $br = New-Object Drawing.SolidBrush($script:cAccent)
+            $e.Graphics.FillRectangle($br, 10, $s.Height - 3, $s.Width - 20, 3)
+            $br.Dispose()
+        }
+    })
+    $t
+}
+$tabMovies = New-LibraryTab 'Movies' 'Movies' 14 90
+$tabTv     = New-LibraryTab 'TV Shows' 'TV' 104 100
+$tabBar.Controls.AddRange(@($tabMovies, $tabTv))
+function Update-TabLabels {
+    # The tab being scanned says so; widths follow the text.
+    $x = 14
+    foreach ($t in @($tabMovies, $tabTv)) {
+        $name = $(if ([string]$t.Tag -eq 'TV') { 'TV Shows' } else { 'Movies' })
+        $n = [int]$script:TabCounts[[string]$t.Tag]
+        $t.Text = $(if ($script:Scanning -and $script:ScanTab -eq [string]$t.Tag) { "$name (scanning...)" } elseif ($n -gt 0) { '{0} ({1:N0})' -f $name, $n } else { $name })
+        $w = [Windows.Forms.TextRenderer]::MeasureText($t.Text, $script:fontBold).Width + 40
+        $t.Location = New-Object Drawing.Point($x, 0); $t.Size = New-Object Drawing.Size($w, 40)
+        $x += $w + 4
+        $t.Invalidate()
+    }
+}
+
 # ---- control card ---------------------------------------------------------
 $controls = New-Object Windows.Forms.Panel
 # NOTE: every panel that hosts anchored children gets its real width BEFORE the children are added.
@@ -2827,8 +2922,6 @@ $btnWorkers.Location = New-Object Drawing.Point(1138, 8); $btnWorkers.Anchor = '
 $chkRebuild = New-FlatCheckBox 'Rebuild local cache' 24 82
 $chkVideo   = New-FlatCheckBox 'Video' 190 82 $true
 $chkAudio   = New-FlatCheckBox 'Audio' 262 82 $true
-$chkMovies  = New-FlatCheckBox 'Movies' 190 82 $true
-$chkShows   = New-FlatCheckBox 'TV Shows (coming soon)' 270 82 $false
 $chkEmbed   = New-FlatCheckBox 'Embed posters' 334 82
 $chkFel     = New-FlatCheckBox 'FEL / MEL probe' 470 82
 $tip = New-Object Windows.Forms.ToolTip
@@ -2839,7 +2932,7 @@ $tip.SetToolTip($btnGear, 'Settings')
 $tip.SetToolTip($radPlex, 'Read the library from your Plex server (fast: Plex has already analysed every file).')
 $tip.SetToolTip($radLocal, 'Scan a folder with MediaInfo (slower: every file is opened).')
 
-$btnScan     = New-FlatButton 'Scan Media' 130 'primary'
+$btnScan     = New-FlatButton 'Scan Movies' 130 'primary'
 $btnDash     = New-FlatButton 'Dashboard' 120 'primary'
 $btnSaveHtml = New-FlatButton 'Save HTML' 110 'secondary'
 $btnExport   = New-FlatButton 'Export CSV' 100 'secondary'
@@ -2850,13 +2943,11 @@ foreach ($b in @($btnScan, $btnDash, $btnSaveHtml, $btnExport, $btnCancel)) {
     $x -= ($b.Width + 8)
     $b.Location = New-Object Drawing.Point($x, 76); $b.Anchor = 'Top,Right'
 }
-$controls.Controls.AddRange(@($lblSource, $radPlex, $radLocal, $lblFolder, $txtFolder, $btnBrowse, $chkRebuild, $chkVideo, $chkAudio, $chkMovies, $chkShows, $chkEmbed, $chkFel, $lblPar, $nudPar, $btnWorkers, $btnScan, $btnDash, $btnSaveHtml, $btnExport, $btnCancel))
+$controls.Controls.AddRange(@($lblSource, $radPlex, $radLocal, $lblFolder, $txtFolder, $btnBrowse, $chkRebuild, $chkVideo, $chkAudio, $chkEmbed, $chkFel, $lblPar, $nudPar, $btnWorkers, $btnScan, $btnDash, $btnSaveHtml, $btnExport, $btnCancel))
 
 # remembered options (the cache-rebuild box is deliberately NOT remembered)
 $chkVideo.Checked  = [bool]$script:Settings['Video']
 $chkAudio.Checked  = [bool]$script:Settings['Audio']
-$chkMovies.Checked = [bool]$script:Settings['PlexMovies']
-$chkShows.Checked  = $false; $chkShows.Enabled = $false; $chkShows.Cursor = [Windows.Forms.Cursors]::Default     # greyed out until TV support is finished
 $chkEmbed.Checked  = [bool]$script:Settings['EmbedPosters']
 $chkFel.Checked    = [bool]$script:Settings['DetectFel']
 try { $nudPar.Value = [Math]::Max(1, [Math]::Min(12, [int]$script:Settings['Parallel'])) } catch { $nudPar.Value = 4 }
@@ -2969,7 +3060,7 @@ function Show-FetchDialog {
     $msg.AutoSize = $false; $msg.Location = New-Object Drawing.Point(24, 48); $msg.Size = New-Object Drawing.Size(452, 100)
     $msg.ForeColor = $script:cMuted; $msg.BackColor = [Drawing.Color]::Transparent; $msg.Font = $script:fontBase
     $omdb = if ($script:OmdbKey) { 'and OMDb (Rotten Tomatoes critic score, domestic box office)' } else { '(add an OMDb key under the gear button to also get Rotten Tomatoes and domestic box office)' }
-    $msg.Text = "The $Scope will be looked up on TMDB (year, genre, rating, studio, director, certification, worldwide box office), the IMDb ratings file $omdb.`nIt runs in the background and can be cancelled. Movies only for now; TV titles are skipped."
+    $msg.Text = "The $Scope will be looked up on TMDB (year, genre, rating, studio, director, certification, worldwide box office), the IMDb ratings file $omdb.`nIt runs in the background and can be cancelled. Movies only for now; TV episodes are skipped."
     $chk  = New-FlatCheckBox 'Replace existing values (otherwise only empty fields are filled)' 24 160
     $ok     = New-FlatButton 'Fetch' 100 'primary'
     $cancel = New-FlatButton 'Cancel' 100 'secondary'
@@ -3026,7 +3117,7 @@ function Update-OptionLayout {
     # reports $false for every child until the window itself is shown.
     param([bool]$Plex)
     $x = 24
-    $list = if ($Plex) { @($chkRebuild, $chkMovies, $chkShows, $chkEmbed, $chkFel) } else { @($chkRebuild, $chkVideo, $chkAudio, $chkEmbed, $chkFel) }
+    $list = if ($Plex) { @($chkRebuild, $chkEmbed, $chkFel) } else { @($chkRebuild, $chkVideo, $chkAudio, $chkEmbed, $chkFel) }
     foreach ($c in $list) {
         $c.Size     = $c.GetPreferredSize([Drawing.Size]::Empty)
         $c.Location = New-Object Drawing.Point($x, 82)
@@ -3043,7 +3134,6 @@ function Set-SourceMode {
     $txtFolder.Text   = if ($Plex) { [string]$script:Settings['PlexUrl'] } else { [string]$script:Settings['LastFolder'] }
     $btnBrowse.Text   = if ($Plex) { 'Token...' } else { 'Browse...' }
     $chkVideo.Visible = -not $Plex; $chkAudio.Visible = -not $Plex
-    $chkMovies.Visible = $Plex;     $chkShows.Visible = $Plex
     $lblPar.Visible = -not $Plex;   $nudPar.Visible = -not $Plex;   $btnWorkers.Visible = -not $Plex
     Update-OptionLayout -Plex $Plex
     $script:DashboardStale = $true
@@ -3052,7 +3142,7 @@ function Set-SourceMode {
 # ---- status bar -----------------------------------------------------------
 $statusBar = New-Object Windows.Forms.Panel
 $statusBar.Dock = 'Bottom'; $statusBar.Height = 76; $statusBar.Width = 1280; $statusBar.BackColor = $script:cPanel
-$lblStatus = New-Label 'Ready. Pick a source and click Scan Media.' 24 7 $script:cMuted $script:fontBase
+$lblStatus = New-Label 'Ready. Pick a source and click Scan.' 24 7 $script:cMuted $script:fontBase
 $progTrack = New-Object Windows.Forms.Panel
 $progTrack.Location = New-Object Drawing.Point(24, 30); $progTrack.Size = New-Object Drawing.Size(1000, 12)
 $progTrack.Anchor = 'Top,Left,Right'; $progTrack.BackColor = $script:cPanel2
@@ -3160,7 +3250,7 @@ $toolbar.Controls.Add($collBar)
 $lblEmpty = New-Object Windows.Forms.Label
 $lblEmpty.Dock = 'Fill'; $lblEmpty.TextAlign = 'MiddleCenter'; $lblEmpty.ForeColor = $script:cMuted
 $lblEmpty.Font = New-Object Drawing.Font('Segoe UI', 12)
-$lblEmpty.Text = "Pick a source (Plex server or a local folder), then click Scan Media.`r`nTick 'Rebuild local cache' to ignore previously saved results."
+$lblEmpty.Text = "Pick a source (Plex server or a local folder), then click Scan (it scans the tab you are on).`r`nTick 'Rebuild local cache' to ignore previously saved results."
 
 # grid view
 $gridHost = New-Object Windows.Forms.Panel
@@ -3297,29 +3387,42 @@ $form.Controls.Add($content)
 $form.Controls.Add($statusBar)
 $form.Controls.Add($controls)
 $form.Controls.Add($header)
+$form.Controls.Add($tabBar)             # added last, so it docks above the header
 #endregion
 
 #region ---------------------------------------------------------------- View helpers
 function Set-View {
     param([ValidateSet('grid', 'detail', 'poster', 'dashboard')][string]$View)
-    $hasData = $script:ScanResults.Count -gt 0
+    $scanHere = ($script:Scanning -and $script:Tab -eq $script:ScanTab)      # the tab being scanned shows a notice; the other tab works normally
+    $hasData = (($script:ScanResults.Count -gt 0) -or $script:TvFromDisk) -and -not $scanHere
     $script:CurrentView = $View
+    $script:TabView[$script:Tab] = $View
+    if ($scanHere) {
+        if ($null -eq $script:EmptyText) { $script:EmptyText = $lblEmpty.Text }
+        $lblEmpty.Text = "Scanning $(if ($script:Tab -eq 'TV') { 'TV Shows' } else { 'Movies' })...`r`nProgress is shown at the bottom of the window.`r`nThe other tab stays usable while this runs."
+    }
+    elseif ($null -ne $script:EmptyText) { $lblEmpty.Text = $script:EmptyText; $script:EmptyText = $null }
     $lblEmpty.Visible   = -not $hasData
-    $gridHost.Visible   = $hasData -and ($View -eq 'grid')
+    $tvPage = $hasData -and ($script:Tab -eq 'TV') -and ($View -eq 'grid' -or $View -eq 'poster')     # TV posters / grid are tv.html
+    if ($tvPage -and @($script:TvRecords).Count -eq 0 -and -not $script:TvFromDisk) { $tvPage = $false; $hasData = $false; $lblEmpty.Visible = $true }
+    $gridHost.Visible   = $hasData -and ($View -eq 'grid') -and -not $tvPage
     $detailHost.Visible = $hasData -and ($View -eq 'detail')
-    $posterHost.Visible = $hasData -and ($View -eq 'poster')
+    if ($hasData -and ($View -eq 'detail') -and $script:DetailStale) { Update-DetailList -Filter $txtFilter.Text.Trim(); $script:DetailStale = $false }
+    $posterHost.Visible = $hasData -and ($View -eq 'poster') -and -not $tvPage
     if ($posterHost.Visible) { Update-PosterList }
-    $dashHost.Visible   = $hasData -and ($View -eq 'dashboard')
+    $dashHost.Visible   = $hasData -and (($View -eq 'dashboard') -or $tvPage)
+    if ($tvPage) { Show-TvPage -View $(if ($View -eq 'grid') { 'grid' } else { 'posters' }) }
     # filter + column picker only make sense for the table views
-    $showFilter = $hasData -and ($View -ne 'dashboard')
+    $showFilter = $hasData -and ($View -ne 'dashboard') -and -not $tvPage          # the TV page has its own filter
     $lblFilter.Visible = $showFilter; $txtFilter.Visible = $showFilter; $lblCount.Visible = $showFilter
     if (-not $showFilter) { Hide-FilterSuggest $txtFilter }
-    $btnCols.Visible   = $hasData -and ($View -eq 'grid')
-    $btnFetch.Visible  = $hasData -and ($View -eq 'grid')
-    $btnEdit.Visible   = $hasData -and ($View -eq 'grid')
-    $collBar.Visible   = $hasData
-    $toolbar.Height    = $(if ($hasData) { 132 } else { 54 })          # the collection bar is the toolbar's second row
-    $btnCollAdd.Visible = $hasData -and ($View -eq 'grid')
+    $movieGrid = $hasData -and ($View -eq 'grid') -and ($script:Tab -ne 'TV')
+    $btnCols.Visible   = $movieGrid
+    $btnFetch.Visible  = $movieGrid
+    $btnEdit.Visible   = $movieGrid
+    $collBar.Visible   = $hasData -and ($script:Tab -ne 'TV')                     # collections are for movies for now
+    $toolbar.Height    = $(if ($collBar.Visible) { 132 } else { 54 })          # the collection bar is the toolbar's second row
+    $btnCollAdd.Visible = $movieGrid
     foreach ($pair in @(@($btnViewGrid, 'grid'), @($btnViewDetail, 'detail'), @($btnViewPoster, 'poster'), @($btnViewDash, 'dashboard'))) {
         $btn = $pair[0]
         if ($pair[1] -eq $View) {
@@ -3356,20 +3459,23 @@ function Update-PosterScroll {
 }
 
 function Update-PosterList {
-    # Same titles, same order as the grid (its filter, collection and sorting all carry over).
-    $list = New-Object System.Collections.Generic.List[object]
-    if ($grid.DataSource -is [System.Data.DataTable]) {
-        $view = $grid.DataSource.DefaultView
-        for ($i = 0; $i -lt $view.Count; $i++) {
-            $d = $view[$i]
-            $y = 0; if ($d['Year'] -isnot [DBNull]) { $y = [int]$d['Year'] }
-            $list.Add([pscustomobject]@{ Title = [string]$d['Title']; Year = $y; Path = [string]$d['PosterPath']; FullPath = [string]$d['FullPath'] })
+    try {
+        # Same titles, same order as the grid (its filter, collection and sorting all carry over).
+        $list = New-Object System.Collections.Generic.List[object]
+        if ($grid.DataSource -is [System.Data.DataTable]) {
+            $view = $grid.DataSource.DefaultView
+            for ($i = 0; $i -lt $view.Count; $i++) {
+                $d = $view[$i]
+                $y = 0; if ($d['Year'] -isnot [DBNull]) { $y = [int]$d['Year'] }
+                $list.Add([pscustomobject]@{ Title = [string]$d['Title']; Year = $y; Path = [string]$d['PosterPath']; FullPath = [string]$d['FullPath'] })
+            }
         }
+        $script:PosterItems = $list
+        $script:PosterHover = -1
+        $posterScroll.Value = 0
+        Update-PosterScroll
     }
-    $script:PosterItems = $list
-    $script:PosterHover = -1
-    $posterScroll.Value = 0
-    Update-PosterScroll
+    catch { Show-UiError 'Update-PosterList' $_ }
 }
 
 function Get-PosterImage {
@@ -3483,22 +3589,29 @@ function Show-RecordDetail {
 
 function Update-DetailList {
     param([string]$Filter = '')
-    $listFiles.BeginUpdate()
-    $listFiles.Items.Clear()
-    $items = @()
+    # Built from lists and one AddRange: adding 50,000+ episodes one at a time (or growing an array with +=) takes minutes.
+    $items  = New-Object 'System.Collections.Generic.List[object]'
+    $labels = New-Object 'System.Collections.Generic.List[object]'
+    $needle = $Filter.ToLowerInvariant()
+    $scoped = ($null -ne $script:ScopeIds)
     foreach ($r in (Get-OrderedResults)) {
-        if ($null -ne $script:ScopeIds -and -not $script:ScopeIds.Contains((Get-RecordId $r))) { continue }
-        if ($Filter) {
+        if ($scoped -and -not $script:ScopeIds.Contains((Get-RecordId $r))) { continue }
+        if ($needle) {
             $hay = ('{0} {1} {2} {3} {4}' -f $r.Title, $r.FileName, $r.Genre, $r.Studio, $r.Cast).ToLowerInvariant()
-            if (-not $hay.Contains($Filter.ToLowerInvariant())) { continue }
+            if (-not $hay.Contains($needle)) { continue }
         }
         $label = [string]$r.Title
         if ($r.Year -gt 0) { $label = "$label ($($r.Year))" }
-        [void]$listFiles.Items.Add($label)
-        $items += $r
+        $labels.Add($label)
+        $items.Add($r)
     }
-    $script:DetailItems = $items
-    $listFiles.EndUpdate()
+    $script:DetailItems = $items.ToArray()
+    $listFiles.BeginUpdate()
+    try {
+        $listFiles.Items.Clear()
+        if ($labels.Count -gt 0) { $listFiles.Items.AddRange($labels.ToArray()) }
+    }
+    finally { $listFiles.EndUpdate() }
 }
 
 function Get-LikeEscaped {
@@ -3600,13 +3713,23 @@ function Get-DateOrdered {
     @($Records | Sort-Object @{ Expression = { if ([int]$_.Year -gt 0) { [int]$_.Year } else { 9999 } } }, @{ Expression = { [string]$_.ReleaseDate } }, @{ Expression = { [string]$_.Title } })
 }
 
+function Get-TabRecords {
+    # Only the records that belong to the active tab: TV rows have a Show name, movies do not.
+    $tv = ($script:Tab -eq 'TV')
+    $out = New-Object 'System.Collections.Generic.List[object]'
+    foreach ($r in $script:ScanResults) { if ([bool][string]$r.Show -eq $tv) { $out.Add($r) } }
+    $out.ToArray()
+}
+
 function Get-OrderedResults {
-    if (Test-ActiveByDate) { return (Get-DateOrdered $script:ScanResults) }
-    @($script:ScanResults)
+    $recs = @(Get-TabRecords)
+    if (Test-ActiveByDate) { return (Get-DateOrdered $recs) }
+    $recs
 }
 
 function Get-ScopedRecords {
-    $recs = @($script:ScanResults)
+    if ($script:Tab -eq 'TV') { return (Get-TvShowRecords) }
+    $recs = @(Get-TabRecords)
     if ($null -ne $script:ScopeIds) { $recs = @($recs | Where-Object { $script:ScopeIds.Contains((Get-RecordId $_)) }) }
     if (Test-ActiveByDate) { $recs = Get-DateOrdered $recs }
     $recs
@@ -3621,23 +3744,478 @@ function Set-CollectionOrder {
 }
 
 function Update-Filter {
-    $text = $txtFilter.Text.Trim()
-    if ($grid.DataSource -is [System.Data.DataTable]) {
-        $parts = @()
-        $fx = Get-FilterExpression $grid.DataSource $text
-        if ($fx) { $parts += ('(' + $fx + ')') }
-        $sx = Get-ScopeExpression
-        if ($sx) { $parts += $sx }
-        $grid.DataSource.DefaultView.RowFilter = ($parts -join ' AND ')
-        $total = if ($null -ne $script:ScopeIds) { $script:ScopeIds.Count } else { $script:ScanResults.Count }
-        $lblCount.Text = '{0} of {1} titles' -f $grid.DataSource.DefaultView.Count, $total
+    try {
+        $text = $txtFilter.Text.Trim()
+        if ($grid.DataSource -is [System.Data.DataTable]) {
+            $parts = @()
+            $fx = Get-FilterExpression $grid.DataSource $text
+            if ($fx) { $parts += ('(' + $fx + ')') }
+            $sx = Get-ScopeExpression
+            if ($sx) { $parts += $sx }
+            $grid.DataSource.DefaultView.RowFilter = ($parts -join ' AND ')
+            $total = if ($null -ne $script:ScopeIds) { $script:ScopeIds.Count } else { [int]$script:TabCounts[$script:Tab] }
+            $lblCount.Text = '{0} of {1} titles' -f $grid.DataSource.DefaultView.Count, $total
+        }
+        # the detail list is rebuilt only while it is on screen (with 50,000+ episodes it is not free)
+        if ($detailHost.Visible) { Update-DetailList -Filter $text; $script:DetailStale = $false } else { $script:DetailStale = $true }
+        if ($posterHost.Visible) { Update-PosterList }
     }
-    Update-DetailList -Filter $text
-    if ($posterHost.Visible) { Update-PosterList }
+    catch { Show-UiError 'Update-Filter' $_ }
 }
 #endregion
 
 #region ---------------------------------------------------------------- Events
+$script:UiErrShown = @{}
+function Show-UiError {
+    # A failure in a view is shown once per place (with the line), and every one is logged to %TEMP%\MMLM-errors.log.
+    param([string]$Where, $Err)
+    $msg = "{0}: {1}`n{2}" -f $Where, $Err, $Err.InvocationInfo.PositionMessage
+    try { Add-Content -LiteralPath (Join-Path $env:TEMP 'MMLM-errors.log') -Value ((Get-Date).ToString('s') + ' ' + $msg) } catch { }
+    if ($script:UiErrShown.ContainsKey($Where)) { return }
+    $script:UiErrShown[$Where] = $true
+    [Windows.Forms.MessageBox]::Show("Something went wrong in $Where (shown once; also logged to %TEMP%\MMLM-errors.log):`n`n$msg", 'Modern Media Library Manager', 'OK', 'Error') | Out-Null
+}
+
+$script:TvDataCs = @'
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Management.Automation;
+using System.IO;
+using System.Text;
+
+public static class MmlmTvData
+{
+    static object Get(PSObject o, string name)
+    {
+        PSPropertyInfo p = o.Properties[name];
+        if (p == null) return null;
+        object v = p.Value;
+        if (v is PSObject) v = ((PSObject)v).BaseObject;
+        return v;
+    }
+    static string Str(PSObject o, string name) { object v = Get(o, name); return v == null ? "" : Convert.ToString(v, CultureInfo.InvariantCulture); }
+    static double Num(PSObject o, string name)
+    {
+        object v = Get(o, name); if (v == null) return 0;
+        double d; return double.TryParse(Convert.ToString(v, CultureInfo.InvariantCulture), NumberStyles.Float, CultureInfo.InvariantCulture, out d) ? d : 0;
+    }
+    static void JStr(StringBuilder sb, string s)
+    {
+        if (string.IsNullOrEmpty(s)) { sb.Append("null"); return; }
+        sb.Append('"');
+        foreach (char c in s)
+        {
+            switch (c)
+            {
+                case '"': sb.Append("\\\""); break;
+                case '\\': sb.Append("\\\\"); break;
+                case '\n': sb.Append("\\n"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\t': sb.Append("\\t"); break;
+                case '<': sb.Append("\\u003c"); break;
+                default:
+                    if (c < 0x20 || c > 0x7e) sb.Append("\\u").Append(((int)c).ToString("x4")); else sb.Append(c);
+                    break;
+            }
+        }
+        sb.Append('"');
+    }
+    static void JNum(StringBuilder sb, double d) { sb.Append(d == 0 ? "0" : d.ToString("0.##", CultureInfo.InvariantCulture)); }
+
+    // Groups episode records by show and season and returns the show names in display order.
+    public static Dictionary<string, SortedDictionary<int, List<PSObject>>> Index(object[] records)
+    {
+        var idx = new Dictionary<string, SortedDictionary<int, List<PSObject>>>(StringComparer.Ordinal);
+        foreach (object r in records)
+        {
+            PSObject o = r as PSObject ?? PSObject.AsPSObject(r);
+            string show = Str(o, "Show");
+            if (show.Length == 0) continue;
+            SortedDictionary<int, List<PSObject>> seasons;
+            if (!idx.TryGetValue(show, out seasons)) { seasons = new SortedDictionary<int, List<PSObject>>(); idx[show] = seasons; }
+            int sn = (int)Num(o, "Season");
+            List<PSObject> list;
+            if (!seasons.TryGetValue(sn, out list)) { list = new List<PSObject>(); seasons[sn] = list; }
+            list.Add(o);
+        }
+        return idx;
+    }
+
+    public static string[] ShowOrder(Dictionary<string, SortedDictionary<int, List<PSObject>>> idx)
+    {
+        var names = new List<string>(idx.Keys);
+        names.Sort(StringComparer.OrdinalIgnoreCase);
+        return names.ToArray();
+    }
+
+    public static int MinYear(SortedDictionary<int, List<PSObject>> seasons)
+    {
+        int y = 0;
+        foreach (var kv in seasons) foreach (PSObject o in kv.Value) { int v = (int)Num(o, "Year"); if (v > 0 && (y == 0 || v < y)) y = v; }
+        return y;
+    }
+
+    public static PSObject FirstEpisode(SortedDictionary<int, List<PSObject>> seasons)
+    {
+        foreach (var kv in seasons) if (kv.Value.Count > 0) return kv.Value[0];
+        return null;
+    }
+
+    public static string BuildJs(Dictionary<string, SortedDictionary<int, List<PSObject>>> idx, IDictionary posters, string library, string generated)
+    {
+        var sb = new StringBuilder(8 * 1024 * 1024);
+        sb.Append("window.TVDATA={\"generated\":"); JStr(sb, generated);
+        sb.Append(",\"library\":"); JStr(sb, library);
+        sb.Append(",\"cols\":[\"e\",\"title\",\"year\",\"rating\",\"runtime\",\"res\",\"codec\",\"hdr\",\"audio\",\"size\",\"added\",\"file\"],\"shows\":[");
+        bool firstShow = true;
+        foreach (string show in ShowOrder(idx))
+        {
+            var seasons = idx[show];
+            PSObject f = FirstEpisode(seasons);
+            if (!firstShow) sb.Append(','); firstShow = false;
+            sb.Append("{\"n\":"); JStr(sb, show);
+            sb.Append(",\"p\":"); JStr(sb, posters != null && posters.Contains(show) ? Convert.ToString(posters[show]) : "");
+            sb.Append(",\"lib\":"); JStr(sb, Str(f, "Library"));
+            sb.Append(",\"genre\":"); JStr(sb, Str(f, "Genre"));
+            sb.Append(",\"studio\":"); JStr(sb, Str(f, "Studio"));
+            sb.Append(",\"cert\":"); JStr(sb, Str(f, "MPAARating"));
+            sb.Append(",\"seasons\":[");
+            bool firstSeason = true;
+            foreach (var kv in seasons)
+            {
+                if (!firstSeason) sb.Append(','); firstSeason = false;
+                sb.Append("{\"s\":").Append(kv.Key).Append(",\"eps\":[");
+                var eps = new List<PSObject>(kv.Value);
+                eps.Sort((a, b) => { int c = Num(a, "Episode").CompareTo(Num(b, "Episode")); return c != 0 ? c : string.CompareOrdinal(Str(a, "Title"), Str(b, "Title")); });
+                bool firstEp = true;
+                foreach (PSObject r in eps)
+                {
+                    if (!firstEp) sb.Append(','); firstEp = false;
+                    string t = Str(r, "Title");
+                    if (t.StartsWith(show + " - ", StringComparison.Ordinal)) t = t.Substring(show.Length + 3);
+                    string a1 = Str(r, "AudioFormat"), a2 = Str(r, "AudioLayout");
+                    string audio = (a1 + " " + a2).Trim();
+                    sb.Append('['); JNum(sb, Num(r, "Episode"));
+                    sb.Append(','); JStr(sb, t);
+                    sb.Append(','); JNum(sb, Num(r, "Year"));
+                    sb.Append(','); JNum(sb, Num(r, "Rating"));
+                    sb.Append(','); JNum(sb, Num(r, "RuntimeMin"));
+                    sb.Append(','); JStr(sb, Str(r, "ResolutionClass"));
+                    sb.Append(','); JStr(sb, Str(r, "VideoCodec"));
+                    sb.Append(','); JStr(sb, Str(r, "HDRType"));
+                    sb.Append(','); JStr(sb, audio);
+                    sb.Append(','); JNum(sb, Num(r, "FileSizeGB"));
+                    sb.Append(','); JStr(sb, Str(r, "Added"));
+                    sb.Append(','); JStr(sb, Str(r, "FileName"));
+                    sb.Append(']');
+                }
+                sb.Append("]}");
+            }
+            sb.Append("]}");
+        }
+        sb.Append("]};");
+        return sb.ToString();
+    }
+}
+public static class MmlmSnapshot
+{
+    // The library snapshot: every record of the last scan in one compact binary file, so the app opens on it without contacting Plex.
+    const int Magic = 0x31534D4D;   // "MMS1"
+    public static string LastMeta = "";
+
+    static void WriteInt(BinaryWriter w, int v) { uint u = (uint)v; while (u >= 0x80) { w.Write((byte)(u | 0x80)); u >>= 7; } w.Write((byte)u); }
+    static int ReadInt(BinaryReader r) { int v = 0, shift = 0; byte b; do { b = r.ReadByte(); v |= (b & 0x7F) << shift; shift += 7; } while ((b & 0x80) != 0); return v; }
+
+    static void WriteVal(BinaryWriter w, object v)
+    {
+        if (v is PSObject) v = ((PSObject)v).BaseObject;
+        if (v == null || v is DBNull) { w.Write((byte)0); return; }
+        if (v is string) { string s = (string)v; if (s.Length == 0) { w.Write((byte)8); return; } w.Write((byte)1); w.Write(s); return; }
+        if (v is int) { w.Write((byte)2); w.Write((int)v); return; }
+        if (v is long) { w.Write((byte)3); w.Write((long)v); return; }
+        if (v is double) { w.Write((byte)4); w.Write((double)v); return; }
+        if (v is float || v is decimal) { w.Write((byte)4); w.Write(Convert.ToDouble(v, CultureInfo.InvariantCulture)); return; }
+        if (v is bool) { w.Write((byte)5); w.Write((bool)v); return; }
+        if (v is DateTime) { w.Write((byte)6); w.Write(((DateTime)v).ToBinary()); return; }
+        if (v is Array) { Array a = (Array)v; w.Write((byte)7); WriteInt(w, a.Length); foreach (object x in a) WriteVal(w, x); return; }
+        if (v is short || v is byte) { w.Write((byte)2); w.Write(Convert.ToInt32(v)); return; }
+        w.Write((byte)1); w.Write(Convert.ToString(v, CultureInfo.InvariantCulture));
+    }
+    static object ReadVal(BinaryReader r)
+    {
+        byte t = r.ReadByte();
+        switch (t)
+        {
+            case 0: return null;
+            case 1: return r.ReadString();
+            case 2: return r.ReadInt32();
+            case 3: return r.ReadInt64();
+            case 4: return r.ReadDouble();
+            case 5: return r.ReadBoolean();
+            case 6: return DateTime.FromBinary(r.ReadInt64());
+            case 7: { int n = ReadInt(r); object[] a = new object[n]; for (int i = 0; i < n; i++) a[i] = ReadVal(r); return a; }
+            case 8: return "";
+            default: throw new InvalidDataException("Unknown value tag " + t);
+        }
+    }
+
+    public static void Save(object[] records, string path, string meta)
+    {
+        string tmp = path + ".tmp";
+        var names = new Dictionary<string, int>(StringComparer.Ordinal);
+        using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16))
+        using (var w = new BinaryWriter(fs, Encoding.UTF8))
+        {
+            w.Write(Magic); w.Write(meta ?? ""); WriteInt(w, records.Length);
+            foreach (object rec in records)
+            {
+                PSObject o = rec as PSObject ?? PSObject.AsPSObject(rec);
+                var props = new List<PSPropertyInfo>();
+                foreach (PSPropertyInfo p in o.Properties) if (p is PSNoteProperty) props.Add(p);
+                WriteInt(w, props.Count);
+                foreach (PSPropertyInfo p in props)
+                {
+                    int ix;
+                    if (names.TryGetValue(p.Name, out ix)) WriteInt(w, ix + 1);
+                    else { names[p.Name] = names.Count; WriteInt(w, 0); w.Write(p.Name); }
+                    WriteVal(w, p.Value);
+                }
+            }
+        }
+        if (File.Exists(path)) File.Delete(path);
+        File.Move(tmp, path);
+    }
+
+    public static object[] Load(string path)
+    {
+        var names = new List<string>();
+        using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16))
+        using (var r = new BinaryReader(fs, Encoding.UTF8))
+        {
+            if (r.ReadInt32() != Magic) throw new InvalidDataException("Not a library snapshot: " + path);
+            LastMeta = r.ReadString();
+            int n = ReadInt(r);
+            var outp = new object[n];
+            for (int i = 0; i < n; i++)
+            {
+                var o = new PSObject();
+                int pc = ReadInt(r);
+                for (int k = 0; k < pc; k++)
+                {
+                    int ix = ReadInt(r);
+                    string name;
+                    if (ix == 0) { name = r.ReadString(); names.Add(name); } else name = names[ix - 1];
+                    o.Properties.Add(new PSNoteProperty(name, ReadVal(r)));
+                }
+                outp[i] = o;
+            }
+            return outp;
+        }
+    }
+}
+
+'@
+function Initialize-TvData {
+    # Compiled once per session (a second or two); turns tens of thousands of episodes into the TV page's data quickly.
+    if (-not ('MmlmTvData' -as [type])) { Add-Type -TypeDefinition $script:TvDataCs -Language CSharp }
+}
+
+function Get-TvShowRecords {
+    # The dashboard on the TV tab: one card per show (a copy of its first episode, named after the show, earliest year).
+    if (@($script:TvRecords).Count -eq 0) { return @() }
+    Initialize-TvData
+    $idx = [MmlmTvData]::Index([object[]]$script:TvRecords)
+    $out = New-Object 'System.Collections.Generic.List[object]'
+    foreach ($show in [MmlmTvData]::ShowOrder($idx)) {
+        $first = [MmlmTvData]::FirstEpisode($idx[$show])
+        if ($null -eq $first) { continue }
+        $c = $first.PSObject.Copy()
+        $c.Title = $show
+        $y = [MmlmTvData]::MinYear($idx[$show])
+        if ($y -gt 0) { $c.Year = $y }
+        $out.Add($c)
+    }
+    $out.ToArray()
+}
+
+function Write-TvPage {
+    # tv.html + tvdata.js + show posters in the live dashboard folder. Returns $false when there is nothing to show.
+    if (@($script:TvRecords).Count -eq 0) { return $false }
+    if (-not (Test-Path -LiteralPath $script:TvTemplatePath)) { throw "The TV page needs tv-template.html next to this script.`nLooked for: $($script:TvTemplatePath)" }
+    Set-UiProgress -Text 'Preparing the TV page...'
+    Initialize-TvData
+    $idx = [MmlmTvData]::Index([object[]]$script:TvRecords)
+    $thumbDir = Join-Path $script:LiveFolder 'thumbs'
+    if (-not (Test-Path -LiteralPath $thumbDir)) { New-Item -Path $thumbDir -ItemType Directory -Force | Out-Null }
+    $posters = @{}
+    foreach ($show in $idx.Keys) {
+        $first = [MmlmTvData]::FirstEpisode($idx[$show])
+        $src = [string]$first.PosterPath
+        if (-not $src -or -not (Test-Path -LiteralPath $src)) { continue }
+        try {
+            # Plex posters are already small copies in the thumbnail folder; only other images need resizing
+            $thumb = $(if ($src.StartsWith($script:ThumbFolder, [StringComparison]::OrdinalIgnoreCase)) { $src } else { Get-PosterThumbnail -Source $src })
+            if ($thumb) {
+                $leaf = [IO.Path]::GetFileName($thumb)
+                $dest = Join-Path $thumbDir $leaf
+                if (-not (Test-Path -LiteralPath $dest)) { Copy-Item -LiteralPath $thumb -Destination $dest }
+                $posters[$show] = 'thumbs/' + $leaf
+            }
+        } catch { }
+    }
+    $js = [MmlmTvData]::BuildJs($idx, $posters, (Get-LibraryName), (Get-Date).ToString('yyyy-MM-dd HH:mm'))
+    [IO.File]::WriteAllText((Join-Path $script:LiveFolder 'tvdata.js'), $js, (New-Object Text.UTF8Encoding($false)))
+    Copy-Item -LiteralPath $script:TvTemplatePath -Destination (Join-Path $script:LiveFolder 'tv.html') -Force
+    $script:TvPageStale = $false
+    $script:TvPageTicks = [DateTime]::Now.Ticks
+    $true
+}
+
+
+function Get-SnapshotPath { param([string]$Which) Join-Path $script:SnapshotFolder ($(if ($Which -eq 'TV') { 'tv.mmls' } else { 'movies.mmls' })) }
+
+function Save-LibrarySnapshot {
+    # Writes one tab's records to its snapshot file on a background thread, so the window does not freeze on 50,000+ episodes.
+    param([string]$Which, [object[]]$Records)
+    try {
+        Initialize-TvData
+        $path = Get-SnapshotPath $Which
+        $meta = '{0}|{1}' -f $Records.Count, (Get-Date).ToString('yyyy-MM-dd HH:mm')
+        $ps = [powershell]::Create()
+        [void]$ps.AddScript({ param($r, $p, $m) [MmlmSnapshot]::Save($r, $p, $m) }).AddArgument($Records).AddArgument($path).AddArgument($meta)
+        [void]$script:SnapJobs.Add(@{ Ps = $ps; Async = $ps.BeginInvoke() })
+        $script:SnapTimer.Start()
+    }
+    catch { Show-UiError 'Save-LibrarySnapshot' $_ }
+}
+
+function Import-LibrarySnapshot {
+    # At start: movies load straight away; the TV page shows last session's page at once while the episodes load in the background.
+    try {
+        $mp = Get-SnapshotPath 'Movies'; $tp = Get-SnapshotPath 'TV'
+        $haveM = Test-Path -LiteralPath $mp; $haveT = Test-Path -LiteralPath $tp
+        if (-not $haveM -and -not $haveT) { return }
+        Initialize-TvData
+        $movies = @(); $when = ''
+        if ($haveM) {
+            $movies = @([MmlmSnapshot]::Load($mp)); $when = ([MmlmSnapshot]::LastMeta -split '\|')[-1]
+            try { Merge-MetaStore -Records $movies -Path $script:MetaStorePath } catch { }
+        }
+        $tvCount = 0
+        if ($haveT) {
+            $meta = ''
+            try { $fs = [IO.File]::OpenRead($tp); $br = New-Object IO.BinaryReader($fs, [Text.Encoding]::UTF8); [void]$br.ReadInt32(); $meta = $br.ReadString(); $br.Close() } catch { }
+            $tvCount = 0; [void][int]::TryParse(($meta -split '\|')[0], [ref]$tvCount)
+            if (-not $when) { $when = ($meta -split '\|')[-1] }
+            $js = Join-Path $script:LiveFolder 'tvdata.js'
+            if (Test-Path -LiteralPath $js) {
+                if (Test-Path -LiteralPath $script:TvTemplatePath) { Copy-Item -LiteralPath $script:TvTemplatePath -Destination (Join-Path $script:LiveFolder 'tv.html') -Force }
+                $script:TvFromDisk = $true; $script:TvPageStale = $false; $script:TvPageTicks = (Get-Item -LiteralPath $js).LastWriteTime.Ticks
+            }
+            $ps = [powershell]::Create()
+            [void]$ps.AddScript({ param($p) , [MmlmSnapshot]::Load($p) }).AddArgument($tp)
+            $script:TvLoad = @{ Ps = $ps; Async = $ps.BeginInvoke() }
+            $script:SnapTimer.Start()
+        }
+        $script:ScanResults = $movies
+        $script:TabCounts = @{ Movies = $movies.Count; TV = $tvCount }
+        $script:MovieTable = ConvertTo-DataTable -Records $movies
+        $grid.DataSource = $null
+        Set-GridTable
+        Update-Filter
+        Update-TabLabels
+        $lblStatus.Text = "Showing your last scan ($when)$(if ($haveT) { '; TV episodes are still loading' }). Scan checks Plex for changes."
+        Set-View ([string]$script:TabView[$script:Tab])
+    }
+    catch { Show-UiError 'Import-LibrarySnapshot' $_ }
+}
+
+function Receive-SnapshotWork {
+    # Timer tick: picks up the background TV load and finished saves.
+    if ($null -ne $script:TvLoad -and $script:TvLoad.Async.IsCompleted) {
+        $job = $script:TvLoad; $script:TvLoad = $null
+        try {
+            $tv = @($job.Ps.EndInvoke($job.Async) | ForEach-Object { $_ })
+            if ($job.Ps.HadErrors -or $tv.Count -eq 0) { throw ($(if ($job.Ps.Streams.Error.Count) { $job.Ps.Streams.Error[0] } else { 'The TV snapshot was empty.' })) }
+            $script:TvRecords = $tv
+            $script:ScanResults = @($script:ScanResults) + $tv
+            $script:HasTv = $true
+            $script:TabCounts = @{ Movies = [int]$script:TabCounts['Movies']; TV = $tv.Count }
+            Update-TabLabels
+            $lblStatus.Text = $lblStatus.Text -replace '; TV episodes are still loading', ''
+            if ($script:Tab -eq 'TV' -and $detailHost.Visible) { Update-DetailList -Filter $txtFilter.Text.Trim() }
+        }
+        catch {
+            $lblStatus.Text = 'Could not load the last TV scan; scan TV Shows again.'
+            try { Add-Content -LiteralPath (Join-Path $env:TEMP 'MMLM-errors.log') -Value ((Get-Date).ToString('s') + ' TV snapshot: ' + $_) } catch { }
+        }
+        finally { try { $job.Ps.Dispose() } catch { } }
+    }
+    foreach ($j in @($script:SnapJobs)) {
+        if (-not $j.Async.IsCompleted) { continue }
+        try { [void]$j.Ps.EndInvoke($j.Async) } catch { try { Add-Content -LiteralPath (Join-Path $env:TEMP 'MMLM-errors.log') -Value ((Get-Date).ToString('s') + ' snapshot save: ' + $_) } catch { } }
+        try { $j.Ps.Dispose() } catch { }
+        $script:SnapJobs.Remove($j)
+    }
+    if ($null -eq $script:TvLoad -and $script:SnapJobs.Count -eq 0) { $script:SnapTimer.Stop() }
+}
+$script:SnapTimer = New-Object Windows.Forms.Timer
+$script:SnapTimer.Interval = 400
+$script:SnapTimer.Add_Tick({ Receive-SnapshotWork })
+
+function Show-TvPage {
+    # Shows tv.html (posters or grid) in the embedded browser. Switching between the two only changes the page's #hash, so nothing reloads.
+    param([ValidateSet('posters', 'grid')][string]$View)
+    try {
+        if ($script:TvPageStale) { if (-not (Write-TvPage)) { return } }
+        $file = Join-Path $script:LiveFolder 'tv.html'
+        $url  = ([Uri]$file).AbsoluteUri + '?t=' + $script:TvPageTicks + '#' + $View
+        if (-not (Initialize-WebView2)) { Start-Process $url; return }
+        $tag = 'tv:' + $script:TvPageTicks
+        if ($script:WebShowing -eq $tag -and $null -ne $script:wv -and $null -ne $script:wv.CoreWebView2) {
+            [void]$script:wv.CoreWebView2.ExecuteScriptAsync("if (location.hash !== '#$View') location.hash = '#$View';")
+        }
+        else {
+            $script:WebShowing = $tag
+            Show-DashboardPane -Url $url
+        }
+        Set-UiProgress -Text 'TV page ready.'
+    }
+    catch { Show-UiError 'Show-TvPage' $_ }
+}
+
+function Set-GridTable {
+    try {
+        # Movies use the WinForms grid; the TV tab's grid and posters are tv.html, so the grid is left empty there.
+        # plain assignment on purpose: $( ) would unroll a DataTable into its rows and the grid would get an array of DataRows
+        if ($script:Tab -eq 'TV') { $want = $null } else { $want = $script:MovieTable }
+        if (-not [object]::ReferenceEquals($grid.DataSource, $want)) { $grid.DataSource = $want }
+        if ($null -ne $want) { Set-GridColumnLayout }
+    }
+    catch { Show-UiError 'Set-GridTable' $_ }
+}
+
+function Set-LibraryTab {
+    param([string]$Name)
+    if ($script:Tab -eq $Name) { return }
+    $script:Tab = $Name
+    $script:DashboardStale = $true            # the dashboard is built for one tab at a time
+    $tabMovies.Invalidate(); $tabTv.Invalidate()
+    $btnScan.Text = $(if ($Name -eq 'TV') { 'Scan TV Shows' } else { 'Scan Movies' })
+    try {
+        Set-GridTable
+        if ($grid.DataSource -is [System.Data.DataTable]) { Update-Filter; $grid.ClearSelection() }
+        Set-View ([string]$script:TabView[$Name])
+    }
+    catch {
+        [Windows.Forms.MessageBox]::Show(("Could not switch tabs:`n{0}`n`n{1}" -f $_, $_.InvocationInfo.PositionMessage), 'Modern Media Library Manager', 'OK', 'Error') | Out-Null
+    }
+    if ($script:CurrentView -eq 'dashboard' -and $script:ScanResults.Count -gt 0 -and -not $script:Scanning) { Show-DashboardView }
+}
+$tabMovies.Add_Click({ Set-LibraryTab 'Movies' })
+$tabTv.Add_Click({ Set-LibraryTab 'TV' })
 $btnViewGrid.Add_Click({ Set-View 'grid' })
 $btnViewDetail.Add_Click({ Set-View 'detail' })
 $btnViewPoster.Add_Click({ Set-View 'poster' })
@@ -3661,15 +4239,16 @@ $posterCanvas.Add_MouseMove({
         $tip.SetToolTip($posterCanvas, $txt)
     }
 })
-$posterCanvas.Add_MouseDoubleClick({
+$posterCanvas.Add_MouseClick({
     param($s, $e)
+    # Clicking a poster opens that title's card, the same card as the dashboard's View Library (with Export Card to PNG).
+    # Closing the card comes back to the posters.
+    if ($e.Button -ne [Windows.Forms.MouseButtons]::Left) { return }
     $i = Get-PosterIndexAt $e.X $e.Y
     if ($i -lt 0) { return }
-    $path = $script:PosterItems[$i].FullPath
-    $txtFilter.Text = ''
-    for ($k = 0; $k -lt $script:DetailItems.Count; $k++) {
-        if ($script:DetailItems[$k].FullPath -eq $path) { Set-View 'detail'; $listFiles.SelectedIndex = $k; break }
-    }
+    $it = $script:PosterItems[$i]
+    $script:CardReturn = 'poster'
+    Show-DashboardView -Card $(if ($it.FullPath) { 'p:' + $it.FullPath } else { 't:' + $it.Title + '|' + $it.Year })
 })
 $posterCanvas.Add_Paint({
     param($s, $e)
@@ -3719,7 +4298,12 @@ $grid.Add_CellFormatting({
     param($s, $e)
     if ($e.ColumnIndex -lt 0) { return }
     $cn = $s.Columns[$e.ColumnIndex].Name
-    if ($cn -eq 'RuntimeMin') {
+    if ($cn -eq 'Season' -or $cn -eq 'Episode') {
+        $isTv = $false; try { $isTv = [bool][string]$s.Rows[$e.RowIndex].Cells['Show'].Value } catch { }
+        $e.Value = if ($isTv) { [string]$e.Value } else { '' }
+        $e.FormattingApplied = $true
+    }
+    elseif ($cn -eq 'RuntimeMin') {
         $e.Value = Format-Runtime $e.Value
         $e.FormattingApplied = $true
     }
@@ -3912,6 +4496,7 @@ $grid.Add_CellDoubleClick({
     if ($e.RowIndex -lt 0) { return }
     $path = $grid.Rows[$e.RowIndex].Cells['FullPath'].Value
     $txtFilter.Text = ''
+    Update-DetailList; $script:DetailStale = $false
     for ($i = 0; $i -lt $script:DetailItems.Count; $i++) {
         if ($script:DetailItems[$i].FullPath -eq $path) { Set-View 'detail'; $listFiles.SelectedIndex = $i; break }
     }
@@ -3979,6 +4564,7 @@ $btnFetch.Add_Click({
     })
     $script:ScanUsePlex = $false
     $script:ScanMode    = 'Scrape'
+    $script:KeepRecords = @()
     $script:ScanWatch   = [Diagnostics.Stopwatch]::StartNew()
     $script:CancelAt    = $null
     $script:RateT = $null; $script:RateV = 0; $script:RateVal = $null
@@ -5090,6 +5676,11 @@ function Test-DashboardReady {
 function Show-DashboardView {
     # Builds the dashboard (only if the scan changed) and shows it inside the window.
     # Falls back to the default browser if the embedded WebView2 cannot start.
+    # -Card opens one title's card straight away ('p:<full path>' or 't:<title>|<year>').
+    param([string]$Card = '')
+    if ($script:Scanning) {
+        [Windows.Forms.MessageBox]::Show('The dashboard is available when the scan has finished.', 'Dashboard', 'OK', 'Information') | Out-Null; return
+    }
     if (-not (Test-DashboardReady)) { return }
 
     $btnDash.Enabled = $false; $btnScan.Enabled = $false; $btnSaveHtml.Enabled = $false
@@ -5099,8 +5690,10 @@ function Show-DashboardView {
             $script:DashboardStale = $false
         }
         $url = ([Uri]$script:LiveDashboard).AbsoluteUri + '?t=' + [DateTime]::Now.Ticks
+        if ($Card) { $url += '#card=' + [Uri]::EscapeDataString($Card) }
 
         if (Initialize-WebView2) {
+            $script:WebShowing = 'dash'
             Set-View 'dashboard'                       # make the host visible before the control is created
             Show-DashboardPane -Url $url
             Set-UiProgress -Text 'Dashboard ready.' -Value 1 -Max 1
@@ -5142,17 +5735,20 @@ $btnSaveHtml.Add_Click({
 })
 
 $btnScan.Add_Click({
+    if ($null -ne $script:TvLoad) {
+        [Windows.Forms.MessageBox]::Show('Your last TV scan is still loading (a few seconds). Try again once the status bar says it is done.', 'Scan', 'OK', 'Information') | Out-Null; return
+    }
     $usePlex = [bool]$radPlex.Checked
     $folder  = $txtFolder.Text.Trim()
 
     if ($usePlex) {
-        if (-not $chkMovies.Checked -and -not $chkShows.Checked) {
-            [Windows.Forms.MessageBox]::Show('Select Movies and/or TV Shows.', 'Modern Media Library Manager', 'OK', 'Warning') | Out-Null; return
-        }
         if (-not (Confirm-PlexToken -BaseUrl $folder)) { return }
         $folder = $txtFolder.Text.Trim()           # the connect dialog may have changed the address
     }
     else {
+        if ($script:Tab -eq 'TV') {
+            [Windows.Forms.MessageBox]::Show('TV Shows are scanned from Plex for now. Switch the source to Plex server, or use the Movies tab for a local folder.', 'Modern Media Library Manager', 'OK', 'Information') | Out-Null; return
+        }
         if ([string]::IsNullOrWhiteSpace($folder)) {
             [Windows.Forms.MessageBox]::Show('Please choose a folder to scan (a UNC path such as \\server\share\Movies works).', 'Modern Media Library Manager', 'OK', 'Warning') | Out-Null; return
         }
@@ -5188,17 +5784,20 @@ $btnScan.Add_Click({
 
     $btnScan.Enabled = $false; $btnBrowse.Enabled = $false; $btnDash.Enabled = $false; $btnSaveHtml.Enabled = $false; $btnExport.Enabled = $false; $btnCancel.Enabled = $true; $btnFetch.Enabled = $false
     Set-OverallProgress -Fraction 0.0
-    $script:ScanResults = @()
+    # A scan covers the active tab only; the other tab's titles are kept and put back when the scan finishes.
+    $scopeTv = ($usePlex -and $script:Tab -eq 'TV')
+    $script:KeepRecords = @($script:ScanResults | Where-Object { ([bool][string]$_.Show) -ne $scopeTv })     # the other tab's titles stay on screen
     $script:DashboardStale = $true
-    $grid.DataSource = $null
-    $lblCount.Text = ''
     $lblStatus.Text = 'Starting...'
 
     try {
         if ($usePlex) {
+            # what this tab had last time, by Plex key: unchanged items are reused without reading anything from disk
+            $prior = @{}
+            if (-not $chkRebuild.Checked) { foreach ($r0 in $script:ScanResults) { if (([bool][string]$r0.Show) -eq $scopeTv -and $r0.PlexKey -and $r0.PlexUpdated) { $prior[[string]$r0.PlexKey] = $r0 } } }
             Start-ScanWorker -Mode 'Plex' -ScanArgs @{
-                BaseUrl = $folder; Token = $script:PlexToken; Movies = [bool]$chkMovies.Checked; Shows = [bool]$chkShows.Checked
-                Rebuild = [bool]$chkRebuild.Checked; DetectFel = [bool]$chkFel.Checked }
+                BaseUrl = $folder; Token = $script:PlexToken; Movies = ($script:Tab -eq 'Movies'); Shows = ($script:Tab -eq 'TV')
+                Rebuild = [bool]$chkRebuild.Checked; DetectFel = [bool]$chkFel.Checked; Prior = $prior }
         }
         else {
             Start-ScanWorker -Mode 'Folder' -ScanArgs @{
@@ -5206,6 +5805,8 @@ $btnScan.Add_Click({
                 Rebuild = [bool]$chkRebuild.Checked; DetectFel = [bool]$chkFel.Checked; Parallel = [int]$nudPar.Value }
         }
         $script:ScanTimer.Start()
+        $script:Scanning = $true; $script:ScanTab = $(if ($scopeTv) { 'TV' } else { 'Movies' })
+        Update-TabLabels; Set-View $script:CurrentView
     }
     catch {
         [Windows.Forms.MessageBox]::Show("Could not start the scan:`n$_", 'Modern Media Library Manager', 'OK', 'Error') | Out-Null
@@ -5217,6 +5818,9 @@ function Complete-Scan {
     # Runs on the UI thread once the background worker has finished (or was abandoned after Cancel).
     param([bool]$Abandoned = $false)
     $script:ScanTimer.Stop()
+    $script:Scanning = $false
+    if ($null -ne $script:EmptyText) { $lblEmpty.Text = $script:EmptyText; $script:EmptyText = $null }
+    Update-TabLabels
     $s  = $script:Sync
     $ps = $script:ScanPs
     $results = @()
@@ -5243,19 +5847,41 @@ function Complete-Scan {
             [Windows.Forms.MessageBox]::Show("The scan could not finish:`n$msg", $title, 'OK', 'Error') | Out-Null
             return
         }
+        $scanned = $results.Count
+        $fresh   = @($results)                                    # just this scan's records
+        if ($script:ScanMode -ne 'Scrape') { $results = $fresh + @($script:KeepRecords) }
         $script:ScanResults = $results
+        $nTv = 0; foreach ($r0 in $results) { if ([string]$r0.Show) { $nTv++ } }
+        $script:HasTv = ($nTv -gt 0)
+        $script:TabCounts = @{ Movies = ($results.Count - $nTv); TV = $nTv }
+        # if the tab you are looking at has nothing but the other one does (for example a TV scan finished while you were on an empty Movies tab), go there
+        if ($script:TabCounts[$script:Tab] -eq 0 -and $script:TabCounts[$(if ($script:Tab -eq 'TV') { 'Movies' } else { 'TV' })] -gt 0) { $script:Tab = $(if ($script:Tab -eq 'TV') { 'Movies' } else { 'TV' }) }
+        $btnScan.Text = $(if ($script:Tab -eq 'TV') { 'Scan TV Shows' } else { 'Scan Movies' })
+        Update-TabLabels
         $cancelled = [bool]$s.Cancel
         if ($results.Count -eq 0 -and -not $cancelled) {
             $lblStatus.Text = 'Nothing found.'
-            $lblEmpty.Text = if ($script:ScanUsePlex) { 'Plex returned no movies or episodes for that selection.' } else { 'No matching media files were found in that folder.' }
+            $lblEmpty.Text = if ($script:ScanUsePlex) { 'Plex returned nothing for that selection.' } else { 'No matching media files were found in that folder.' }
             return
         }
         if ($results.Count -gt 0) {
-            try { Set-SourceLabels -Records $results } catch { }          # measured labels first, then fetched / typed-in values on top
-            try { Merge-MetaStore -Records $results -Path $script:MetaStorePath } catch { }
-            $table = ConvertTo-DataTable -Records $results
-            $grid.DataSource = $table
-            Set-GridColumnLayout     # remembered visibility/widths; brand-new fields fall back to their default
+            try { Set-SourceLabels -Records $(if ($script:ScanMode -eq 'Scrape') { $results } else { $fresh }) } catch { }          # measured labels first, then fetched / typed-in values on top
+            try { Merge-MetaStore -Records $(if ($script:ScanMode -eq 'Scrape') { $results } else { $fresh }) -Path $script:MetaStorePath } catch { }
+            try {
+                $mov = New-Object 'System.Collections.Generic.List[object]'; $tvr = New-Object 'System.Collections.Generic.List[object]'
+                foreach ($r0 in $results) { if ([string]$r0.Show) { $tvr.Add($r0) } else { $mov.Add($r0) } }
+                $script:MovieTable = ConvertTo-DataTable -Records $mov.ToArray()
+                $script:TvRecords = $tvr.ToArray(); $script:TvPageStale = $true; $script:WebShowing = ''; $script:TvFromDisk = $false
+                if (-not [bool]$s.Cancel) {           # a finished scan (or fetch) becomes what the app opens on next time
+                    if ($script:ScanMode -eq 'Scrape' -or $script:ScanTab -ne 'TV') { Save-LibrarySnapshot -Which 'Movies' -Records $mov.ToArray() }
+                    if ($script:ScanMode -ne 'Scrape' -and $script:ScanTab -eq 'TV') { Save-LibrarySnapshot -Which 'TV' -Records $tvr.ToArray() }
+                }
+                $grid.DataSource = $null
+                Set-GridTable            # this tab's table, remembered visibility/widths
+            }
+            catch {
+                [Windows.Forms.MessageBox]::Show(("Could not show the results:`n{0}`n`n{1}" -f $_, $_.InvocationInfo.PositionMessage), 'Modern Media Library Manager', 'OK', 'Error') | Out-Null
+            }
             try { Update-CollectionScope; $script:OrderApplied = $false; Set-CollectionOrder } catch { }          # the active collection is re-evaluated against this scan
             $grid.ClearSelection()
             Update-Filter
@@ -5263,7 +5889,7 @@ function Complete-Scan {
         $state = if ($cancelled) { 'Cancelled' } else { 'Done' }
         $total = [int]$s.Total
         $took  = ' in {0:N0}s' -f $script:ScanWatch.Elapsed.TotalSeconds
-        $lblStatus.Text = "$state. $($results.Count) of $total item(s) processed$took."
+        $lblStatus.Text = "$state. $scanned of $total item(s) processed$took."
         if ($script:ScanMode -eq 'Scrape') {
             $lblStatus.Text = "$state. $([string]$s.Summary)"
             $script:FetchDetails = @($s.Details)
@@ -5276,7 +5902,7 @@ function Complete-Scan {
     }
     finally {
         $btnScan.Enabled = $true; $btnBrowse.Enabled = $true; $btnDash.Enabled = $true; $btnSaveHtml.Enabled = $true; $btnExport.Enabled = $true; $btnCancel.Enabled = $false; $btnFetch.Enabled = $true
-        Set-View 'grid'
+        Set-View ([string]$script:TabView[$script:Tab])
     }
 }
 
@@ -5336,6 +5962,7 @@ $form.Add_Shown({
     if ($radPlex.Checked -and -not $script:PlexToken) {
         [void](Show-PlexTokenDialog -BaseUrl $txtFolder.Text.Trim())
     }
+    Import-LibrarySnapshot          # open on the last scan of each tab, without contacting Plex
     # Started by the updater: pick up where the old version left off (the cache makes this quick).
     if ($env:MMLM_RESUME -eq '1') {
         $env:MMLM_RESUME = ''
@@ -5699,7 +6326,7 @@ try {
     $root = Join-Path $x 'Modern-Media-Library-Manager'
     $ps1 = Join-Path $root 'Modern-Media-Library-Manager.ps1'
     if (-not (Test-Path -LiteralPath $ps1)) { throw 'The zip does not contain the app script.' }
-    foreach ($n in @('Modern-Media-Library-Manager.ps1', 'dashboard-template.html', 'Run-ModernMediaLibraryManager.cmd')) {
+    foreach ($n in @('Modern-Media-Library-Manager.ps1', 'dashboard-template.html', 'tv-template.html', 'Run-ModernMediaLibraryManager.cmd')) {
         if ($sums.ContainsKey($n)) { if ((Get-Sha (Join-Path $root $n)) -ne $sums[$n]) { throw "The file $n does not match its published checksum." } }
     }
     Set-Prog 100 'Checking the new files...'

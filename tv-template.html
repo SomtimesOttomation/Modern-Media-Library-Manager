@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TV Shows</title>
+<style>
+  :root {
+    --bg: #0b0e1a; --panel: #131830; --panel2: #1a2040; --line: #232b4d;
+    --text: #e8ebf7; --muted: #8b93b5; --accent: #6c8cff; --accent2: #b06cff;
+    --row: 30px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 13px/1.35 "Segoe UI", system-ui, -apple-system, sans-serif; overflow: hidden; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  .app { display: flex; flex-direction: column; height: 100%; }
+
+  /* top bar */
+  .bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  .bar h1 { margin: 0; font-size: 17px; font-weight: 600; }
+  .bar .sub { color: var(--muted); font-size: 12px; }
+  .grow { flex: 1; }
+  .search { width: 280px; max-width: 100%; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel2); color: var(--text); font: inherit; }
+  .search:focus { outline: none; border-color: var(--accent); }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .seg button { background: var(--panel2); border: 0; padding: 6px 14px; color: var(--muted); }
+  .seg button.on { background: var(--accent); color: #fff; }
+  .btn { background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; }
+  .btn:hover, .seg button:hover:not(.on) { color: var(--text); }
+  .count { color: var(--muted); font-size: 12px; min-width: 150px; }
+
+  /* poster wall */
+  .wall { flex: 1; overflow-y: auto; padding: 20px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 18px 16px; }
+  .tile { cursor: pointer; min-width: 0; }
+  .tile .img { position: relative; width: 100%; aspect-ratio: 2 / 3; border-radius: 8px; overflow: hidden; background: var(--panel2);
+    border: 1px solid var(--line); transition: transform .12s ease, border-color .12s ease; }
+  .tile:hover .img { transform: translateY(-2px); border-color: var(--accent); }
+  .tile img { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; object-fit: cover; display: block; }
+  .tile .ph { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 10px; text-align: center;
+    font-size: 15px; font-weight: 600; color: var(--muted); background: linear-gradient(160deg, #1d2550, #121733); }
+  .tile .name { margin-top: 7px; font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tile .meta { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* tree grid */
+  .gridwrap { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow-x: auto; }
+  .gcols { display: grid; grid-template-columns: minmax(300px, 1fr) 160px 108px 64px 90px 86px 72px 110px 120px 96px 104px; min-width: 1340px; }
+  .ghead { position: sticky; top: 0; background: var(--panel); border-bottom: 1px solid var(--line); color: var(--muted); font-weight: 600; font-size: 12px; }
+  .ghead > div { padding: 8px 10px; white-space: nowrap; }
+  .ghead .tog { color: var(--accent); cursor: pointer; user-select: none; }
+  .ghead .tog:hover { text-decoration: underline; }
+  .gbody { flex: 1; overflow-y: auto; overflow-x: hidden; position: relative; min-width: 1340px; }
+  .gspace { position: relative; }
+  .grow-r { position: absolute; left: 0; right: 0; height: var(--row); border-bottom: 1px solid rgba(35,43,77,.55); }
+  .grow-r > div { padding: 0 10px; line-height: var(--row); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .grow-r:hover { background: rgba(108,140,255,.07); }
+  .grow-r.l0 { background: var(--panel); font-weight: 600; }
+  .grow-r.l0:hover { background: #18203f; }
+  .grow-r.l1 { color: #cfd5ee; }
+  .grow-r.l2 { color: #b9c0de; }
+  .grow-r .t0 { padding-left: 10px; cursor: pointer; }
+  .grow-r .t1 { padding-left: 34px; cursor: pointer; }
+  .grow-r .t2 { padding-left: 58px; }
+  .grow-r .tg { color: var(--muted); cursor: pointer; user-select: none; }
+  .grow-r .tg .ar { display: inline-block; width: 14px; color: var(--text); }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .chip { display: inline-block; padding: 0 6px; border-radius: 4px; line-height: 18px; font-size: 11px; background: var(--panel2); border: 1px solid var(--line); }
+  .chip.k4 { color: #a8d35a; border-color: #3c5a1e; }
+  .chip.dv { color: #c9a6ff; border-color: #4a2f78; }
+  .chip.hdr { color: #f2c94c; border-color: #5c4a14; }
+  .empty { padding: 40px; text-align: center; color: var(--muted); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <div>
+      <h1 id="title">TV Shows</h1>
+      <div class="sub" id="sub"></div>
+    </div>
+    <div class="grow"></div>
+    <input class="search" id="q" type="search" placeholder="Filter shows and episodes..." autocomplete="off">
+    <span class="count" id="count"></span>
+    <button class="btn" id="expand" hidden>Expand all</button>
+    <div class="seg" id="seg"><button data-v="posters">Posters</button><button data-v="grid">Grid</button></div>
+  </div>
+
+  <div class="wall" id="wall"><div class="tiles" id="tiles"></div><div class="empty" id="wallEmpty" hidden>Nothing matches the filter.</div></div>
+
+  <div class="gridwrap" id="gridwrap" hidden>
+    <div class="gcols ghead" id="ghead">
+      <div>Title</div><div class="tog" id="hTog" title="Open or close every show">Expand all</div>
+      <div>Year</div><div class="num">Rating</div><div class="num">Runtime</div><div>Resolution</div><div>Codec</div><div>HDR</div><div>Audio</div><div class="num">Size</div><div>Added</div>
+    </div>
+    <div class="gbody" id="gbody"><div class="gspace" id="gspace"></div></div>
+  </div>
+</div>
+
+<script src="tvdata.js"></script>
+<script>
+(function () {
+  'use strict';
+  var D = window.TVDATA || { shows: [], generated: '', library: '' };
+  var ROW = 30;
+  var embedded = !!(window.chrome && window.chrome.webview);
+  var $ = function (id) { return document.getElementById(id); };
+
+  // ---------- prepare: per-show and per-season summaries -------------------------------------
+  function mode(counts) { var best = '', n = 0; for (var k in counts) if (counts[k] > n) { n = counts[k]; best = k; } return best; }
+  function bump(o, k) { if (k) o[k] = (o[k] || 0) + 1; }
+  function summarise(eps) {
+    var s = { n: eps.length, y0: 0, y1: 0, rSum: 0, rN: 0, run: 0, size: 0, added: '', res: {}, codec: {}, hdr: {}, audio: {} };
+    for (var i = 0; i < eps.length; i++) {
+      var e = eps[i];
+      if (e[2]) { if (!s.y0 || e[2] < s.y0) s.y0 = e[2]; if (e[2] > s.y1) s.y1 = e[2]; }
+      if (e[3]) { s.rSum += e[3]; s.rN++; }
+      s.run += e[4] || 0; s.size += e[9] || 0;
+      if (e[10] && e[10] > s.added) s.added = e[10];
+      bump(s.res, e[5]); bump(s.codec, e[6]); bump(s.hdr, e[7]); bump(s.audio, e[8]);
+    }
+    s.rating = s.rN ? s.rSum / s.rN : 0;
+    s.topRes = mode(s.res); s.topCodec = mode(s.codec); s.topHdr = mode(s.hdr); s.topAudio = mode(s.audio);
+    return s;
+  }
+  var totalEps = 0;
+  D.shows.forEach(function (sh) {
+    var all = [];
+    sh.seasons.forEach(function (se) { se.sum = summarise(se.eps); all = all.concat(se.eps); se.show = sh; });
+    sh.sum = summarise(all);
+    totalEps += all.length;
+    sh.hay = [sh.n, sh.genre, sh.studio, sh.cert, sh.lib].join(' ').toLowerCase();
+  });
+
+  // ---------- state ------------------------------------------------------------------------------
+  var openShows = {}, openSeasons = {};     // show name -> true ; show + '|' + season -> true
+  var view = 'posters', filterText = '', match = null;   // match: null (no filter) or { shows: {name: {all, seasons: {s: [eps]}}} }
+
+  function seasonLabel(n) { return n === 0 ? 'Specials' : 'Season ' + n; }
+  function years(s) { return !s.y0 ? '' : (s.y0 === s.y1 ? String(s.y0) : s.y0 + '\u2013' + s.y1); }
+  function fmtRating(r) { return r ? r.toFixed(1) : ''; }
+  function fmtRun(min, total) {
+    if (!min) return '';
+    if (!total) return Math.round(min) + 'm';
+    var h = Math.floor(min / 60), m = Math.round(min % 60);
+    return h + 'h ' + (m < 10 ? '0' : '') + m + 'm';
+  }
+  function fmtSize(gb) { if (!gb) return ''; return gb >= 1000 ? (gb / 1000).toFixed(2) + ' TB' : gb.toFixed(1) + ' GB'; }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function chipRes(r) { return r ? '<span class="chip' + (r === '4K' ? ' k4' : '') + '">' + esc(r) + '</span>' : ''; }
+  function chipHdr(h) { if (!h) return ''; var c = /dolby|dv/i.test(h) ? ' dv' : ' hdr'; return '<span class="chip' + c + '">' + esc(h) + '</span>'; }
+
+  // ---------- filtering --------------------------------------------------------------------------
+  function applyFilter() {
+    var terms = filterText.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!terms.length) { match = null; return; }
+    var hasAll = function (hay) { for (var i = 0; i < terms.length; i++) if (hay.indexOf(terms[i]) < 0) return false; return true; };
+    match = { shows: {} };
+    D.shows.forEach(function (sh) {
+      if (hasAll(sh.hay)) { match.shows[sh.n] = { all: true }; return; }
+      var hit = null;
+      sh.seasons.forEach(function (se) {
+        var eps = se.eps.filter(function (e) {
+          var hay = (sh.n + ' ' + seasonLabel(se.s) + ' ' + e[1] + ' ' + (e[5] || '') + ' ' + (e[6] || '') + ' ' + (e[7] || '') + ' ' + (e[8] || '') + ' ' + (e[11] || '')).toLowerCase();
+          return hasAll(hay);
+        });
+        if (eps.length) { hit = hit || { all: false, seasons: {} }; hit.seasons[se.s] = eps; }
+      });
+      if (hit) match.shows[sh.n] = hit;
+    });
+  }
+  function visibleShows() { return match ? D.shows.filter(function (sh) { return match.shows[sh.n]; }) : D.shows; }
+
+  // ---------- poster wall ------------------------------------------------------------------------
+  function renderWall() {
+    var shows = visibleShows(), html = [];
+    for (var i = 0; i < shows.length; i++) {
+      var sh = shows[i], s = sh.sum, ns = sh.seasons.length;
+      var img = sh.p ? '<img loading="lazy" src="' + esc(sh.p) + '" alt="" onerror="this.remove()">' : '';
+      html.push('<div class="tile" data-show="' + i + '" title="' + esc(sh.n) + '"><div class="img"><div class="ph">' + esc(sh.n) + '</div>' + img + '</div>' +
+        '<div class="name">' + esc(sh.n) + '</div><div class="meta">' + [years(s), ns + (ns === 1 ? ' season' : ' seasons'), s.n + ' ep'].filter(Boolean).join(' \u00B7 ') + '</div></div>');
+    }
+    $('tiles').innerHTML = html.join('');
+    $('tiles').onclick = function (ev) {
+      var t = ev.target.closest('.tile'); if (!t) return;
+      openShow(shows[+t.getAttribute('data-show')].n);
+    };
+    $('wallEmpty').hidden = shows.length > 0;
+  }
+
+  // ---------- tree grid (virtual rows) -----------------------------------------------------------
+  var rows = [];
+  function flatten() {
+    rows = [];
+    visibleShows().forEach(function (sh) {
+      var m = match ? match.shows[sh.n] : null;
+      var forced = m && !m.all;                       // matched through its episodes: show only the matching ones
+      var showOpen = forced || !!openShows[sh.n];
+      rows.push({ l: 0, sh: sh, open: showOpen });
+      if (!showOpen) return;
+      sh.seasons.forEach(function (se) {
+        if (forced && !m.seasons[se.s]) return;
+        var key = sh.n + '|' + se.s;
+        var seOpen = forced || !!openSeasons[key];
+        rows.push({ l: 1, sh: sh, se: se, open: seOpen, key: key });
+        if (!seOpen) return;
+        var eps = forced ? m.seasons[se.s] : se.eps;
+        for (var i = 0; i < eps.length; i++) rows.push({ l: 2, sh: sh, se: se, ep: eps[i] });
+      });
+    });
+    $('gspace').style.height = (rows.length * ROW) + 'px';
+    updateToggleLabels();
+    paintRows(true);
+  }
+  function rowHtml(r, top) {
+    var c, cls = 'gcols grow-r l' + r.l;
+    if (r.l === 0) {
+      var s = r.sh.sum, ns = r.sh.seasons.length;
+      c = ['<div class="t0" data-act="toggle">' + esc(r.sh.n) + '</div>',
+           '<div class="tg" data-act="toggle"><span class="ar">' + (r.open ? '\u25BE' : '\u25B8') + '</span>' + ns + (ns === 1 ? ' season' : ' seasons') + ', ' + s.n + ' ep</div>',
+           '<div>' + years(s) + '</div>', '<div class="num">' + fmtRating(s.rating) + '</div>', '<div class="num">' + fmtRun(s.run, true) + '</div>',
+           '<div>' + chipRes(s.topRes) + '</div>', '<div>' + esc(s.topCodec) + '</div>', '<div>' + chipHdr(s.topHdr) + '</div>', '<div>' + esc(s.topAudio) + '</div>',
+           '<div class="num">' + fmtSize(s.size) + '</div>', '<div>' + esc(s.added) + '</div>'];
+    } else if (r.l === 1) {
+      var t = r.se.sum;
+      c = ['<div class="t1" data-act="toggle">' + seasonLabel(r.se.s) + '</div>',
+           '<div class="tg" data-act="toggle"><span class="ar">' + (r.open ? '\u25BE' : '\u25B8') + '</span>' + t.n + (t.n === 1 ? ' episode' : ' episodes') + '</div>',
+           '<div>' + years(t) + '</div>', '<div class="num">' + fmtRating(t.rating) + '</div>', '<div class="num">' + fmtRun(t.run, true) + '</div>',
+           '<div>' + chipRes(t.topRes) + '</div>', '<div>' + esc(t.topCodec) + '</div>', '<div>' + chipHdr(t.topHdr) + '</div>', '<div>' + esc(t.topAudio) + '</div>',
+           '<div class="num">' + fmtSize(t.size) + '</div>', '<div>' + esc(t.added) + '</div>'];
+    } else {
+      var e = r.ep;
+      c = ['<div class="t2" title="' + esc(e[11] || '') + '">' + esc(e[1]) + '</div>', '<div></div>',
+           '<div>' + (e[2] || '') + '</div>', '<div class="num">' + fmtRating(e[3]) + '</div>', '<div class="num">' + fmtRun(e[4], false) + '</div>',
+           '<div>' + chipRes(e[5]) + '</div>', '<div>' + esc(e[6]) + '</div>', '<div>' + chipHdr(e[7]) + '</div>', '<div>' + esc(e[8]) + '</div>',
+           '<div class="num">' + fmtSize(e[9]) + '</div>', '<div>' + esc(e[10]) + '</div>'];
+    }
+    return '<div class="' + cls + '" style="top:' + top + 'px" data-i="' + r.i + '">' + c.join('') + '</div>';
+  }
+  var painted = [-1, -1];
+  function paintRows(force) {
+    var body = $('gbody');
+    var first = Math.max(0, Math.floor(body.scrollTop / ROW) - 15);
+    var last = Math.min(rows.length, Math.ceil((body.scrollTop + body.clientHeight) / ROW) + 15);
+    if (!force && first === painted[0] && last === painted[1]) return;
+    painted = [first, last];
+    var html = [];
+    for (var i = first; i < last; i++) { rows[i].i = i; html.push(rowHtml(rows[i], i * ROW)); }
+    $('gspace').innerHTML = html.join('') || (rows.length ? '' : '<div class="empty">Nothing matches the filter.</div>');
+  }
+  var raf = 0;
+  $('gbody').addEventListener('scroll', function () { if (!raf) raf = requestAnimationFrame(function () { raf = 0; paintRows(false); }); });
+  window.addEventListener('resize', function () { if (view === 'grid') paintRows(true); });
+  $('gspace').addEventListener('click', function (ev) {
+    var cell = ev.target.closest('[data-act="toggle"]'); if (!cell) return;
+    var r = rows[+cell.parentNode.getAttribute('data-i')]; if (!r) return;
+    if (match && match.shows[r.sh.n] && !match.shows[r.sh.n].all) return;   // filtered through episodes: the tree is fixed open
+    if (r.l === 0) { if (openShows[r.sh.n]) delete openShows[r.sh.n]; else openShows[r.sh.n] = true; }
+    else if (r.l === 1) { if (openSeasons[r.key]) delete openSeasons[r.key]; else openSeasons[r.key] = true; }
+    flatten();
+  });
+
+  function anyOpen() { for (var k in openShows) return true; return false; }
+  function updateToggleLabels() {
+    var t = anyOpen() ? 'Collapse all' : 'Expand all';
+    $('hTog').textContent = t; $('expand').textContent = t;
+  }
+  function toggleAll() {
+    // Expand all opens every show to its seasons; Collapse all closes shows and seasons.
+    if (anyOpen()) { openShows = {}; openSeasons = {}; }
+    else { D.shows.forEach(function (sh) { openShows[sh.n] = true; }); }
+    flatten();
+  }
+  $('hTog').onclick = toggleAll; $('expand').onclick = toggleAll;
+
+  function openShow(name) {
+    openShows[name] = true;
+    setView('grid', true);
+    flatten();
+    for (var i = 0; i < rows.length; i++) if (rows[i].l === 0 && rows[i].sh.n === name) { $('gbody').scrollTop = i * ROW; break; }
+    paintRows(true);
+  }
+
+  // ---------- view switching, counts -------------------------------------------------------------
+  function setCount() {
+    var shows = visibleShows();
+    $('count').textContent = match ? shows.length + ' of ' + D.shows.length + ' shows match' : '';
+  }
+  function setView(v, tell) {
+    view = v === 'grid' ? 'grid' : 'posters';
+    $('wall').hidden = view !== 'posters';
+    $('gridwrap').hidden = view !== 'grid';
+    $('expand').hidden = view !== 'grid';
+    Array.prototype.forEach.call($('seg').children, function (b) { b.classList.toggle('on', b.getAttribute('data-v') === view); });
+    if (location.hash !== '#' + view) history.replaceState(null, '', '#' + view);
+    if (view === 'grid') flatten(); else renderWall();
+    if (tell && embedded) { try { window.chrome.webview.postMessage('tvview|' + (view === 'grid' ? 'grid' : 'poster')); } catch (e) { } }
+  }
+  $('seg').onclick = function (ev) { var b = ev.target.closest('button'); if (b) setView(b.getAttribute('data-v'), true); };
+  window.addEventListener('hashchange', function () { var v = location.hash.replace('#', ''); if (v === 'grid' || v === 'posters') setView(v, false); });
+
+  var qTimer = 0;
+  $('q').addEventListener('input', function () {
+    clearTimeout(qTimer);
+    qTimer = setTimeout(function () { filterText = $('q').value.trim(); applyFilter(); setCount(); $('gbody').scrollTop = 0; if (view === 'grid') flatten(); else renderWall(); }, 150);
+  });
+
+  $('title').textContent = 'TV Shows';
+  $('sub').textContent = D.shows.length.toLocaleString() + ' shows \u00B7 ' + totalEps.toLocaleString() + ' episodes' + (D.generated ? ' \u00B7 scanned ' + D.generated : '');
+  setView(location.hash === '#grid' ? 'grid' : 'posters', false);
+})();
+</script>
+</body>
+</html>

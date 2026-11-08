@@ -37,12 +37,12 @@ The launcher starts PowerShell with `-ExecutionPolicy Bypass` for that one proce
 - **Online info.** Fetch year, genre, ratings, studio, director, certification, Rotten Tomatoes critic score and box office from TMDB, the IMDb ratings file and OMDb.
 - **Edit info.** Type in what no free source offers (Rotten Tomatoes audience score, CinemaScore, opening weekends, all-time box office) or correct anything else. Your values always win and survive rescans.
 - **Fast and responsive.** Scans run in the background, read several files in parallel, resume from a per-file cache and show a rainbow progress bar for the current step plus an overall bar, each with an ETA.
-- **Views and export.** Grid, detail view, poster view (a wall of posters with title and year), dashboard (embedded WebView2, with a browser fallback), CSV export and saved HTML. Open a title card in the dashboard and click **Export Card to PNG** to save the whole card as an image.
+- **Views and export.** Grid, detail view, poster view (a wall of posters with title and year; click one to open its card), dashboard (embedded WebView2, with a browser fallback), CSV export and saved HTML. Open a title card in the dashboard and click **Export Card to PNG** to save the whole card as an image.
 - **Filtering.** Free text, or `field:value` terms such as `source:unknown` or `resolution:2160p`. Number columns take ranges and comparisons (`year:1980-1989`, `rating:>=7.5`), and several terms combine to narrow further. As you type, a drop-down suggests field names and the values that actually exist in your library (with counts); Down and Enter pick one.
 - **Collections.** Your own named title lists, either Static (you add titles) or Dynamic (a saved filter plus an optional sort and limit, so a "top 10" works). Pick one and the grid, detail view, dashboard and exports show only its titles, and the dashboard takes the collection's name as its title. See [Collections](#collections).
 - **Remembers** your source, options, window size and column layout.
 
-TV shows are not supported yet; the option is visible but disabled.
+Two tabs above the header, **Movies** (default) and **TV Shows**, split the library; **Scan** scans the tab you are on and keeps the other tab's titles. TV Shows (Plex only for now) opens on a poster wall with one tile per show; click a show to open it in the grid. The TV grid is Show > Season > Episode, collapsed by default: click a show or season (or the arrow column next to Title) to open it, or **Expand all / Collapse all**. The TV page has its own filter, which searches show names and every episode. Missing-episode detection is not included yet. The app opens on the last scan of each tab without contacting Plex; **Scan** then asks Plex only for the details of items that changed (tick **Rebuild local cache** for a full re-read).
 
 ## Collections
 
@@ -65,7 +65,7 @@ Collections work with both Plex and local scans. They are matched by IMDb or TMD
 
 ## Getting started
 
-1. Keep `Modern-Media-Library-Manager.ps1`, `dashboard-template.html` and `Run-ModernMediaLibraryManager.cmd` together in one folder.
+1. Keep `Modern-Media-Library-Manager.ps1`, `dashboard-template.html`, `tv-template.html` and `Run-ModernMediaLibraryManager.cmd` together in one folder.
 2. If Windows blocked the download, run once in PowerShell: `Get-ChildItem . -Recurse | Unblock-File`
 3. Double-click `Run-ModernMediaLibraryManager.cmd`. It starts PowerShell in the mode WinForms needs.
 4. Pick a source, then click **Scan Media**.

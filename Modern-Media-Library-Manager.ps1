@@ -4018,8 +4018,22 @@ public static class MmlmSnapshot
 
 '@
 function Initialize-TvData {
-    # Compiled once per session (a second or two); turns tens of thousands of episodes into the TV page's data quickly.
-    if (-not ('MmlmTvData' -as [type])) { Add-Type -TypeDefinition $script:TvDataCs -Language CSharp }
+    # The small C# helper (TV page data + library snapshot). Compiling it takes a second or two, so the compiled
+    # DLL is kept in the app's data folder and later starts just load it. A new version of the code gets a new file name.
+    if ('MmlmTvData' -as [type]) { return }
+    $dir = Join-Path $script:AppData 'Helper'
+    $dll = Join-Path $dir ('MmlmHelper-' + (Get-StringHash ($script:TvDataCs + '|' + $PSVersionTable.PSVersion.Major)).Substring(0, 12) + '.dll')
+    try {
+        if (-not (Test-Path -LiteralPath $dll)) {
+            if (-not (Test-Path -LiteralPath $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
+            Add-Type -TypeDefinition $script:TvDataCs -Language CSharp -OutputAssembly $dll -OutputType Library -ErrorAction Stop
+        }
+        if (-not ('MmlmTvData' -as [type])) { Add-Type -Path $dll -ErrorAction Stop }
+    }
+    catch {
+        Remove-Item -LiteralPath $dll -Force -ErrorAction SilentlyContinue        # a half-written file must not be reused
+        if (-not ('MmlmTvData' -as [type])) { Add-Type -TypeDefinition $script:TvDataCs -Language CSharp }
+    }
 }
 
 function Get-TvShowRecords {
@@ -5962,7 +5976,12 @@ $form.Add_Shown({
     if ($radPlex.Checked -and -not $script:PlexToken) {
         [void](Show-PlexTokenDialog -BaseUrl $txtFolder.Text.Trim())
     }
-    Import-LibrarySnapshot          # open on the last scan of each tab, without contacting Plex
+    # Open on the last scan of each tab (no Plex calls). Started just after the window has painted, so it never shows up blank.
+    $lblStatus.Text = 'Loading your last scan...'
+    $script:StartTimer = New-Object Windows.Forms.Timer
+    $script:StartTimer.Interval = 60
+    $script:StartTimer.Add_Tick({ $script:StartTimer.Stop(); $form.Cursor = [Windows.Forms.Cursors]::AppStarting; try { Import-LibrarySnapshot } finally { $form.Cursor = [Windows.Forms.Cursors]::Default } })
+    $script:StartTimer.Start()
     # Started by the updater: pick up where the old version left off (the cache makes this quick).
     if ($env:MMLM_RESUME -eq '1') {
         $env:MMLM_RESUME = ''

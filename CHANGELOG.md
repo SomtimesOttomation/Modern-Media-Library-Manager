@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.3.1
+
+**Bug/Fix**
+- Sort by dropdown showed an empty highlight instead of the chosen sort; its label no longer overlaps it.
+
 ## 0.3.0
 
 **Feature**

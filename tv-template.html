@@ -29,6 +29,7 @@
   .btn { background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; }
   .btn:hover, .seg button:hover:not(.on) { color: var(--text); }
   .count { color: var(--muted); font-size: 12px; min-width: 150px; }
+  .sortsel { width: auto; cursor: pointer; }
 
   /* poster wall */
   .wall { flex: 1; overflow-y: auto; padding: 20px; }
@@ -83,6 +84,10 @@
     <div class="grow"></div>
     <input class="search" id="q" type="search" placeholder="Filter shows and episodes..." autocomplete="off">
     <span class="count" id="count"></span>
+    <select class="search sortsel" id="sort" title="Sort shows">
+      <option value="title">Title</option><option value="aired">First aired (newest)</option><option value="added">Date added (newest)</option>
+      <option value="genre">Genre</option><option value="seasons">Seasons (most)</option>
+    </select>
     <button class="btn" id="expand" hidden>Expand all</button>
     <div class="seg" id="seg"><button data-v="posters">Posters</button><button data-v="grid">Grid</button></div>
   </div>
@@ -111,13 +116,14 @@
   function mode(counts) { var best = '', n = 0; for (var k in counts) if (counts[k] > n) { n = counts[k]; best = k; } return best; }
   function bump(o, k) { if (k) o[k] = (o[k] || 0) + 1; }
   function summarise(eps) {
-    var s = { n: eps.length, y0: 0, y1: 0, rSum: 0, rN: 0, run: 0, size: 0, added: '', res: {}, codec: {}, hdr: {}, audio: {} };
+    var s = { n: eps.length, y0: 0, y1: 0, rSum: 0, rN: 0, run: 0, size: 0, added: '', aired: '', res: {}, codec: {}, hdr: {}, audio: {} };
     for (var i = 0; i < eps.length; i++) {
       var e = eps[i];
       if (e[2]) { if (!s.y0 || e[2] < s.y0) s.y0 = e[2]; if (e[2] > s.y1) s.y1 = e[2]; }
       if (e[3]) { s.rSum += e[3]; s.rN++; }
       s.run += e[4] || 0; s.size += e[9] || 0;
       if (e[10] && e[10] > s.added) s.added = e[10];
+      if (e[11] && (!s.aired || e[11] < s.aired)) s.aired = e[11];
       bump(s.res, e[5]); bump(s.codec, e[6]); bump(s.hdr, e[7]); bump(s.audio, e[8]);
     }
     s.rating = s.rN ? s.rSum / s.rN : 0;
@@ -162,7 +168,7 @@
       var hit = null;
       sh.seasons.forEach(function (se) {
         var eps = se.eps.filter(function (e) {
-          var hay = (sh.n + ' ' + seasonLabel(se.s) + ' ' + e[1] + ' ' + (e[5] || '') + ' ' + (e[6] || '') + ' ' + (e[7] || '') + ' ' + (e[8] || '') + ' ' + (e[11] || '')).toLowerCase();
+          var hay = (sh.n + ' ' + seasonLabel(se.s) + ' ' + e[1] + ' ' + (e[5] || '') + ' ' + (e[6] || '') + ' ' + (e[7] || '') + ' ' + (e[8] || '')).toLowerCase();
           return hasAll(hay);
         });
         if (eps.length) { hit = hit || { all: false, seasons: {} }; hit.seasons[se.s] = eps; }
@@ -170,7 +176,21 @@
       if (hit) match.shows[sh.n] = hit;
     });
   }
-  function visibleShows() { return match ? D.shows.filter(function (sh) { return match.shows[sh.n]; }) : D.shows; }
+  // ---------- sorting ------------------------------------------------------------------------------
+  var sortBy = 'title';
+  try { sortBy = localStorage.getItem('tvSort') || 'title'; } catch (e) { }
+  var byTitle = function (a, b) { return a.n.toLowerCase() < b.n.toLowerCase() ? -1 : a.n.toLowerCase() > b.n.toLowerCase() ? 1 : 0; };
+  var firstGenre = function (sh) { return String(sh.genre || '').split(/[,;]/)[0].trim().toLowerCase() || '\uffff'; };
+  var SORTS = {
+    title: byTitle,
+    aired: function (a, b) { var x = a.sum.aired || '', y = b.sum.aired || ''; return x === y ? byTitle(a, b) : (!x ? 1 : !y ? -1 : (x < y ? 1 : -1)); },
+    added: function (a, b) { var x = a.sum.added || '', y = b.sum.added || ''; return x === y ? byTitle(a, b) : (!x ? 1 : !y ? -1 : (x < y ? 1 : -1)); },
+    genre: function (a, b) { var x = firstGenre(a), y = firstGenre(b); return x === y ? byTitle(a, b) : (x < y ? -1 : 1); },
+    seasons: function (a, b) { return b.seasons.length - a.seasons.length || byTitle(a, b); }
+  };
+  var sorted = D.shows.slice();
+  function applySort() { sorted = D.shows.slice().sort(SORTS[sortBy] || SORTS.title); }
+  function visibleShows() { return match ? sorted.filter(function (sh) { return match.shows[sh.n]; }) : sorted; }
 
   // ---------- poster wall ------------------------------------------------------------------------
   function renderWall() {
@@ -231,7 +251,7 @@
            '<div class="num">' + fmtSize(t.size) + '</div>', '<div>' + esc(t.added) + '</div>'];
     } else {
       var e = r.ep;
-      c = ['<div class="t2" title="' + esc(e[11] || '') + '">' + esc(e[1]) + '</div>', '<div></div>',
+      c = ['<div class="t2">' + esc(e[1]) + '</div>', '<div></div>',
            '<div>' + (e[2] || '') + '</div>', '<div class="num">' + fmtRating(e[3]) + '</div>', '<div class="num">' + fmtRun(e[4], false) + '</div>',
            '<div>' + chipRes(e[5]) + '</div>', '<div>' + esc(e[6]) + '</div>', '<div>' + chipHdr(e[7]) + '</div>', '<div>' + esc(e[8]) + '</div>',
            '<div class="num">' + fmtSize(e[9]) + '</div>', '<div>' + esc(e[10]) + '</div>'];
@@ -306,6 +326,12 @@
     qTimer = setTimeout(function () { filterText = $('q').value.trim(); applyFilter(); setCount(); $('gbody').scrollTop = 0; if (view === 'grid') flatten(); else renderWall(); }, 150);
   });
 
+  applySort();
+  $('sort').value = sortBy;
+  $('sort').addEventListener('change', function () {
+    sortBy = $('sort').value; try { localStorage.setItem('tvSort', sortBy); } catch (e) { }
+    applySort(); $('gbody').scrollTop = 0; $('wall').scrollTop = 0; if (view === 'grid') flatten(); else renderWall();
+  });
   $('title').textContent = 'TV Shows';
   $('sub').textContent = D.shows.length.toLocaleString() + ' shows \u00B7 ' + totalEps.toLocaleString() + ' episodes' + (D.generated ? ' \u00B7 scanned ' + D.generated : '');
   setView(location.hash === '#grid' ? 'grid' : 'posters', false);

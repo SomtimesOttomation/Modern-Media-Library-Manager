@@ -34,10 +34,10 @@ The launcher starts PowerShell with `-ExecutionPolicy Bypass` for that one proce
 - **Two sources.** A local or UNC folder (MediaInfo, plus `.nfo` and poster files beside each movie) or a Plex server.
 - **Technical detail per file.** Resolution, video and audio codecs, bit rates, HDR and Dolby Vision profile, subtitles, chapters, runtime and more, with an optional FEL/MEL probe for dual-layer Dolby Vision.
 - **A plain-language source label for every movie.** Remux, web release, encode, DVD and so on, worked out from the file itself. See [How source labels are decided](#how-source-labels-are-decided).
-- **Online info.** Fetch year, genre, ratings, studio, director, certification, Rotten Tomatoes critic score and box office from TMDB, the IMDb ratings file and OMDb.
+- **Online info.** Fetch year, genre, ratings, studio, director, certification, Rotten Tomatoes critic score, Metacritic Metascore and box office from TMDB, the IMDb ratings file and OMDb.
 - **Edit info.** Type in what no free source offers (Rotten Tomatoes audience score, CinemaScore, opening weekends, all-time box office) or correct anything else. Your values always win and survive rescans.
 - **Fast and responsive.** Scans run in the background, read several files in parallel, resume from a per-file cache and show a rainbow progress bar for the current step plus an overall bar, each with an ETA.
-- **Views and export.** Grid, detail view, poster view (a wall of posters with title and year; click one to open its card), dashboard (embedded WebView2, with a browser fallback), CSV export and saved HTML. Open a title card in the dashboard and click **Export Card to PNG** to save the whole card as an image.
+- **Views and export.** Grid, detail view, poster view (a wall of posters with title and year; click one to open its card), dashboard (embedded WebView2, with a browser fallback), CSV export and saved HTML. Open a title card in the dashboard and click **Export Card to PNG** to save the whole card as an image. Movies have a **Sort by** list (date added, release date, title, RT critics, Metacritic, box office, runtime); the TV Shows page sorts by title, first aired, date added, genre or seasons. File and folder paths are never shown.
 - **Filtering.** Free text, or `field:value` terms such as `source:unknown` or `resolution:2160p`. Number columns take ranges and comparisons (`year:1980-1989`, `rating:>=7.5`), and several terms combine to narrow further. As you type, a drop-down suggests field names and the values that actually exist in your library (with counts); Down and Enter pick one.
 - **Collections.** Your own named title lists, either Static (you add titles) or Dynamic (a saved filter plus an optional sort and limit, so a "top 10" works). Pick one and the grid, detail view, dashboard and exports show only its titles, and the dashboard takes the collection's name as its title. See [Collections](#collections).
 - **Remembers** your source, options, window size and column layout.
@@ -109,7 +109,7 @@ Click the gear button, then paste your keys under **Online lookups**. They are s
 | --- | --- | --- |
 | [TMDB](https://www.themoviedb.org/settings/api) | free key (required) | year, genre, certification, studio, director, worldwide box office |
 | [IMDb ratings file](https://developer.imdb.com/non-commercial-datasets/) | none | rating and votes (downloaded weekly) |
-| [OMDb](https://www.omdbapi.com/apikey.aspx) | free key (optional, 1,000 requests a day) | Rotten Tomatoes critic score, domestic box office |
+| [OMDb](https://www.omdbapi.com/apikey.aspx) | free key (optional, 1,000 requests a day) | Rotten Tomatoes critic score, Metacritic Metascore, domestic box office |
 
 In **Plex scans**, the Rotten Tomatoes critic and audience scores are read straight from Plex when your server has them, with no key needed. For local scans there is no free, permitted source for the audience score, CinemaScore or opening-weekend figures, so Fetch info leaves those empty. Fill them in with **Edit info**.
 

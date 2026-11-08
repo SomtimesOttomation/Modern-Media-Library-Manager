@@ -636,7 +636,7 @@ function openModal(i){
         ${spec('Audio', [['Format', r.AudioFormat], ['Immersive', r.ObjectAudio], ['Channels', r.AudioLayout], ['Bitrate', num(r.AudioBitRateKbps)>0 ? r.AudioBitRateKbps+' kbps' : ''],
           ['Languages', r.AudioLanguages], ['Tracks', num(r.AudioTracks)]])}
         ${spec('Subtitles', [['Tracks', num(r.SubtitleTracks)], ['Languages', r.SubtitleLanguages], ['Formats', r.SubtitleFormats]])}
-        ${spec('File', [['Container', r.Container], ['Size', fmtSize(num(r.FileSizeGB))], ['Source', r.Source], ['Added', r.Added], ['Path', r.FullPath]])}
+        ${spec('File', [['Container', r.Container], ['Size', fmtSize(num(r.FileSizeGB))], ['Source', r.Source], ['Added', r.Added]])}
         ${spec('People & Studio', [['Director', r.Director], ['Cast', r.Cast], ['Studio', r.Studio], ['Country', r.Country], ['Collection', r.Collection], ['IMDB', r.IMDBID], ['TMDB', r.TMDBID]])}
         ${compat}
       </div>
@@ -707,11 +707,17 @@ async function exportCard(btn){
 /* Ratings and box office, under the poster. Only the rows that have a value are shown. */
 const TOMATO = '<svg class="rti" viewBox="0 0 16 16" aria-label="Fresh"><circle cx="8" cy="9.2" r="6.4" fill="#E63428"/><path d="M8 5 4.8 2.2 8 3.2 11.4 1.4 10 5z" fill="#46AA46"/></svg>';
 const SPLAT  = '<svg class="rti" viewBox="0 0 16 16" aria-label="Rotten"><g fill="#70A82C"><ellipse cx="8" cy="10" rx="6.6" ry="4.4"/><circle cx="8" cy="6" r="4"/><circle cx="2.4" cy="12.6" r="2.2"/><circle cx="13.6" cy="12" r="2.2"/><circle cx="12.6" cy="4" r="1.5"/></g></svg>';
+/* Metacritic's colours: green 61-100, yellow 40-60, red 0-39, with the score on the square */
+function mc(x){
+  const n = Math.round(num(x)); if (!(n > 0)) return '';
+  const c = n >= 61 ? ['#66cc33', '#fff'] : n >= 40 ? ['#ffcc33', '#222'] : ['#ff0000', '#fff'];
+  return { html: `<span style="display:inline-block;min-width:30px;padding:2px 0;text-align:center;font-weight:700;border-radius:3px;background:${c[0]};color:${c[1]}">${n}</span>` };
+}
 function scoreCards(r){
   const rt = x => num(x) > 0 ? { html: (num(x) >= 60 ? TOMATO : SPLAT) + Math.round(num(x)) + '%' } : '';
   const rlabel = r.RatingSource === 'IMDb' ? 'IMDB Rating' : r.RatingSource === 'TMDB' ? 'TMDB Rating' : 'Rating';
   const rating = [[rlabel, num(r.Rating) > 0 ? num(r.Rating).toFixed(1) + (num(r.Votes) > 0 ? '  (' + fmtInt(num(r.Votes)) + ' votes)' : '') : ''],
-    ['RT Critics', rt(r.RTCritic)], ['RT Audience', rt(r.RTAudience)], ['CinemaScore', r.CinemaScore]];
+    ['RT Critics', rt(r.RTCritic)], ['RT Audience', rt(r.RTAudience)], ['Metacritic', mc(r.Metascore)], ['CinemaScore', r.CinemaScore]];
   const money = [['Domestic (all-time)', fmtMoney(r.BoxOfficeDomestic)], ['Worldwide (all-time)', fmtMoney(r.BoxOfficeWorldwide)],
     ['Opening, domestic', fmtMoney(r.OpeningDomestic)], ['Opening, worldwide', fmtMoney(r.OpeningWorldwide)]];
   const has = rows => rows.some(x => x[1]);
@@ -823,7 +829,7 @@ buildKpis(); buildChartShells(); update();
   const m = /^#card=(.*)$/.exec(location.hash); if (!m) return;
   let key = ''; try { key = decodeURIComponent(m[1]); } catch (e) { return; }
   let i = -1;
-  if (key.startsWith('p:')) { const p = key.slice(2); i = base.findIndex(r => r.FullPath === p); }
+  if (key.startsWith('k:')) { const k = key.slice(2); i = base.findIndex(r => r.Key === k); }
   if (i < 0) { const tt = key.slice(2).split('|'); i = base.findIndex(r => String(r.Title) === tt[0] && String(r.Year || 0) === String(tt[1] || 0)); }
   history.replaceState(null, '', location.pathname + location.search);
   if (i >= 0) { fromApp = true; openModal(i); }

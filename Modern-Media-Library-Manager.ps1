@@ -137,7 +137,7 @@ $script:FieldDefs = @(
     'PlexThumb|string|Library|0',       'MetaSources|string|Library|0',
 
     # Scores and money (filled by Fetch info or typed by hand; whole US dollars)
-    'RTCritic|int|Ratings|1',          'RTAudience|int|Ratings|1',         'CinemaScore|string|Ratings|1',   'RatingSource|string|Ratings|0',
+    'RTCritic|int|Ratings|1',          'RTAudience|int|Ratings|1',         'Metascore|int|Ratings|1',        'CinemaScore|string|Ratings|1',   'RatingSource|string|Ratings|0',
     'BoxOfficeDomestic|double|Box office|1', 'BoxOfficeWorldwide|double|Box office|1',
     'OpeningDomestic|double|Box office|0',   'OpeningWorldwide|double|Box office|0',
 
@@ -1818,7 +1818,7 @@ function Invoke-MetadataScrape {
                 if ($m.Rating -gt 0) { $got['Rating'] = @{ Value = [double]$m.Rating; Source = 'IMDb' }; $got['Votes'] = @{ Value = [int]$m.Votes; Source = 'IMDb' } }
             }
 
-            # ---- OMDb: Rotten Tomatoes critic score, domestic box office ---------------------
+            # ---- OMDb: Rotten Tomatoes critic score, Metacritic Metascore, domestic box office ---------------------
             if (-not $omdbOff -and -not $omdbLimit -and $imdbId) {
                 $o = Invoke-JsonGet -Url ('https://www.omdbapi.com/?apikey=' + [Uri]::EscapeDataString($OmdbKey) + '&i=' + $imdbId)
                 if ($o) {
@@ -1826,6 +1826,7 @@ function Invoke-MetadataScrape {
                     elseif ($o.Response -eq 'True') {
                         $rt = @($o.Ratings | Where-Object { $_.Source -eq 'Rotten Tomatoes' }) | Select-Object -First 1
                         if ($rt -and ([string]$rt.Value) -match '^(\d+)%') { $got['RTCritic'] = @{ Value = [int]$Matches[1]; Source = 'OMDb' } }
+                        if (([string]$o.Metascore) -match '^\d+$' -and [int]$o.Metascore -gt 0) { $got['Metascore'] = @{ Value = [int]$o.Metascore; Source = 'OMDb' } }
                         $bo = [string]$o.BoxOffice
                         if ($bo -match '^\$([\d,]+)$') { $got['BoxOfficeDomestic'] = @{ Value = [double]($Matches[1] -replace ',', ''); Source = 'OMDb' } }
                     }
@@ -2218,6 +2219,8 @@ function Save-Settings {
 }
 
 $script:HasTv = $false
+# File locations are never shown (grid, detail view, dashboard card, saved HTML, CSV); the app still uses them internally.
+$script:HiddenFields = @('FullPath', 'Directory', 'PosterPath', 'InformFile')
 function Set-GridColumnLayout {
     # Applies remembered visibility/widths. Columns the settings file has never seen (new fields) use their default.
     $vis    = @($script:Settings['VisibleColumns'])
@@ -2230,6 +2233,7 @@ function Set-GridColumnLayout {
         elseif ($hid -contains $f.Name) { $col.Visible = $false }
         else                            { $col.Visible = $f.Show }
         if ($f.Name -eq 'Show' -or $f.Name -eq 'Season' -or $f.Name -eq 'Episode') { $col.Visible = (($script:Tab -eq 'TV') -and ($hid -notcontains $f.Name)) }      # TV-only columns
+        if ($script:HiddenFields -contains $f.Name) { $col.Visible = $false }
     }
     $grid.AutoResizeColumns('DisplayedCells')
     foreach ($c in $grid.Columns) {
@@ -2354,7 +2358,8 @@ function New-MediaDashboard {
         if (($i % 10) -eq 0 -or $i -eq $Records.Count) { Set-UiProgress -Text "Preparing dashboard: $i of $($Records.Count)" -Value $i -Max $Records.Count }
 
         $row = [ordered]@{}
-        foreach ($p in $r.PSObject.Properties) { if ($p.Name -ne 'PosterPath' -and $script:ClueNames -notcontains $p.Name) { $row[$p.Name] = $p.Value } }
+        foreach ($p in $r.PSObject.Properties) { if ($script:HiddenFields -notcontains $p.Name -and $script:ClueNames -notcontains $p.Name) { $row[$p.Name] = $p.Value } }
+        $row['Key'] = Get-CardKey (Get-RecordId $r)       # lets the app open this card without putting the file path in the page
         $row['Poster'] = ''
 
         if ($r.PosterPath -and (Test-Path -LiteralPath $r.PosterPath)) {
@@ -3003,7 +3008,7 @@ function Show-SettingsDialog {
     $lnk.Text = 'Get a free TMDB key'; $lnk.AutoSize = $true; $lnk.Location = New-Object Drawing.Point(24, 188)
     $lnk.LinkColor = $script:cAccent; $lnk.ActiveLinkColor = $script:cAccent2; $lnk.BackColor = [Drawing.Color]::Transparent
     $lnk.Add_LinkClicked({ Start-Process 'https://www.themoviedb.org/settings/api' })
-    $lbl2  = New-Label 'OMDb API key (optional: Rotten Tomatoes critic score and domestic box office; free tier is 1,000 requests a day)' 24 216 $script:cMuted $script:fontSmall
+    $lbl2  = New-Label 'OMDb API key (optional: Rotten Tomatoes, Metacritic and domestic box office; free tier is 1,000 requests a day)' 24 216 $script:cMuted $script:fontSmall
     $txtO  = New-Object Windows.Forms.TextBox
     $txtO.Location = New-Object Drawing.Point(24, 236); $txtO.Size = New-Object Drawing.Size(512, 26)
     $txtO.BackColor = $script:cPanel2; $txtO.ForeColor = $script:cText; $txtO.BorderStyle = 'FixedSingle'
@@ -3241,9 +3246,28 @@ $btnCollDel  = New-FlatButton 'Delete' 76 'secondary';           $btnCollDel.Loc
 $btnCollAdd  = New-FlatButton 'Add selected...' 130 'secondary'; $btnCollAdd.Location  = New-Object Drawing.Point(612, 8)
 $lblCollInfo = New-Object Windows.Forms.Label
 $lblCollInfo.AutoSize = $false; $lblCollInfo.AutoEllipsis = $true; $lblCollInfo.TextAlign = 'MiddleLeft'
-$lblCollInfo.Location = New-Object Drawing.Point(24, 48); $lblCollInfo.Size = New-Object Drawing.Size(1232, 22); $lblCollInfo.Anchor = 'Top,Left,Right'
+$lblCollInfo.Location = New-Object Drawing.Point(24, 48); $lblCollInfo.Size = New-Object Drawing.Size(920, 22); $lblCollInfo.Anchor = 'Top,Left,Right'
+# Sort By (Movies): right-hand end of the collection bar
+$script:SortChoices = [ordered]@{
+    'Title'                 = '[Title] ASC, [Year] ASC'
+    'Date Added'            = '[Added] DESC, [Title] ASC'
+    'Release Date'          = '[ReleaseDate] DESC, [Year] DESC, [Title] ASC'
+    'Rating (RT Critics)'   = '[RTCritic] DESC, [Title] ASC'
+    'Metacritic'            = '[Metascore] DESC, [Title] ASC'
+    'Box Office Domestic'   = '[BoxOfficeDomestic] DESC, [Title] ASC'
+    'Box Office Worldwide'  = '[BoxOfficeWorldwide] DESC, [Title] ASC'
+    'Runtime'               = '[RuntimeMin] DESC, [Title] ASC'
+}
+$lblSort = New-Label 'Sort by:' 968 47 $script:cMuted $script:fontBase
+$lblSort.Anchor = 'Top,Right'
+$cboSort = New-Object Windows.Forms.ComboBox
+$cboSort.DropDownStyle = 'DropDownList'; $cboSort.FlatStyle = 'Flat'
+$cboSort.Location = New-Object Drawing.Point(1036, 43); $cboSort.Size = New-Object Drawing.Size(220, 28); $cboSort.Anchor = 'Top,Right'
+$cboSort.BackColor = $script:cPanel2; $cboSort.ForeColor = $script:cText
+foreach ($k in $script:SortChoices.Keys) { [void]$cboSort.Items.Add($k) }
+$cboSort.SelectedIndex = 0
 $lblCollInfo.ForeColor = $script:cMuted; $lblCollInfo.BackColor = [Drawing.Color]::Transparent; $lblCollInfo.Font = $script:fontSmall
-$collBar.Controls.AddRange(@($lblColl, $cboColl, $btnCollNew, $btnCollEdit, $btnCollDel, $btnCollAdd, $lblCollInfo))
+$collBar.Controls.AddRange(@($lblColl, $cboColl, $btnCollNew, $btnCollEdit, $btnCollDel, $btnCollAdd, $lblCollInfo, $lblSort, $cboSort))
 $toolbar.Controls.Add($collBar)
 
 # empty-state message
@@ -3339,6 +3363,7 @@ $lblScores.Add_Paint({
             }
             $x += 20
         }
+        if ($it.MC -gt 0) { Draw-MetascoreBadge $g $it.MC $x ([int](($s.Height - 22) / 2)) 30 22; $x += 30 + 26; continue }
         $w = [Windows.Forms.TextRenderer]::MeasureText($g, $it.T, $script:fontBold, (New-Object Drawing.Size(2000, 24)), $flags).Width
         [Windows.Forms.TextRenderer]::DrawText($g, $it.T, $script:fontBold, (New-Object Drawing.Rectangle($x, 0, ($w + 4), $s.Height)), $script:cText, $flags)
         $x += $w + 26
@@ -3423,6 +3448,7 @@ function Set-View {
     $collBar.Visible   = $hasData -and ($script:Tab -ne 'TV')                     # collections are for movies for now
     $toolbar.Height    = $(if ($collBar.Visible) { 132 } else { 54 })          # the collection bar is the toolbar's second row
     $btnCollAdd.Visible = $movieGrid
+    $lblSort.Visible = $collBar.Visible -and ($View -eq 'grid' -or $View -eq 'poster'); $cboSort.Visible = $lblSort.Visible
     foreach ($pair in @(@($btnViewGrid, 'grid'), @($btnViewDetail, 'detail'), @($btnViewPoster, 'poster'), @($btnViewDash, 'dashboard'))) {
         $btn = $pair[0]
         if ($pair[1] -eq $View) {
@@ -3467,7 +3493,8 @@ function Update-PosterList {
             for ($i = 0; $i -lt $view.Count; $i++) {
                 $d = $view[$i]
                 $y = 0; if ($d['Year'] -isnot [DBNull]) { $y = [int]$d['Year'] }
-                $list.Add([pscustomobject]@{ Title = [string]$d['Title']; Year = $y; Path = [string]$d['PosterPath']; FullPath = [string]$d['FullPath'] })
+                $pk = [string]$d['PlexKey']; $id = $(if ($pk) { 'p:' + $pk } else { 'f:' + [string]$d['FullPath'] })
+                $list.Add([pscustomobject]@{ Title = [string]$d['Title']; Year = $y; Path = [string]$d['PosterPath']; FullPath = [string]$d['FullPath']; Key = (Get-CardKey $id) })
             }
         }
         $script:PosterItems = $list
@@ -3548,6 +3575,7 @@ function Show-RecordDetail {
     }
     if ($Record.RTCritic   -gt 0) { $sc += @{ L = 'RT Critics';  T = ('{0}%' -f $Record.RTCritic);   I = $(if ($Record.RTCritic   -ge 60) { 1 } else { 0 }) } }
     if ($Record.RTAudience -gt 0) { $sc += @{ L = 'RT Audience'; T = ('{0}%' -f $Record.RTAudience); I = $(if ($Record.RTAudience -ge 60) { 1 } else { 0 }) } }
+    if ($Record.Metascore -gt 0) { $sc += @{ L = 'Metacritic'; T = ''; I = -1; MC = [int]$Record.Metascore } }
     if ($Record.CinemaScore) { $sc += @{ L = 'CinemaScore'; T = [string]$Record.CinemaScore; I = -1 } }
     $mn = @()
     $v = Format-MoneyShort ([double]$Record.BoxOfficeDomestic);  if ($v) { $mn += "Domestic $v" }
@@ -3576,6 +3604,7 @@ function Show-RecordDetail {
         $row.DefaultCellStyle.ForeColor = $script:cAccent
         $row.DefaultCellStyle.Font = $script:fontBold
         foreach ($f in ($script:Fields | Where-Object { $_.Group -eq $group })) {
+            if ($script:HiddenFields -contains $f.Name) { continue }
             $val = $Record.($f.Name)
             if ($null -eq $val) { continue }
             if ($val -is [string]) { if ($val -eq '') { continue } }
@@ -3673,6 +3702,11 @@ function Get-UnionExpression {
     ($parts | ForEach-Object { '(' + (Get-FilterExpression $Table $_) + ')' }) -join ' OR '
 }
 
+function Get-CardKey {
+    param([string]$Id)
+    (Get-StringHash $Id).Substring(0, 16)
+}
+
 function Get-RecordId {
     # One stable id per scanned item: the Plex key, else the file path.
     param($Rec)
@@ -3740,7 +3774,7 @@ function Set-CollectionOrder {
     # Puts the grid in release order while a "by release date" collection is active; leaves your own column sorting alone otherwise.
     if ($grid.DataSource -isnot [System.Data.DataTable]) { return }
     if (Test-ActiveByDate) { $grid.DataSource.DefaultView.Sort = '[Year] ASC, [ReleaseDate] ASC'; $script:OrderApplied = $true }
-    elseif ($script:OrderApplied) { $grid.DataSource.DefaultView.Sort = ''; $script:OrderApplied = $false }
+    elseif ($script:OrderApplied) { $grid.DataSource.DefaultView.Sort = ''; $script:OrderApplied = $false; Set-MovieSort }
 }
 
 function Update-Filter {
@@ -3868,7 +3902,7 @@ public static class MmlmTvData
         var sb = new StringBuilder(8 * 1024 * 1024);
         sb.Append("window.TVDATA={\"generated\":"); JStr(sb, generated);
         sb.Append(",\"library\":"); JStr(sb, library);
-        sb.Append(",\"cols\":[\"e\",\"title\",\"year\",\"rating\",\"runtime\",\"res\",\"codec\",\"hdr\",\"audio\",\"size\",\"added\",\"file\"],\"shows\":[");
+        sb.Append(",\"cols\":[\"e\",\"title\",\"year\",\"rating\",\"runtime\",\"res\",\"codec\",\"hdr\",\"audio\",\"size\",\"added\",\"aired\"],\"shows\":[");
         bool firstShow = true;
         foreach (string show in ShowOrder(idx))
         {
@@ -3908,7 +3942,7 @@ public static class MmlmTvData
                     sb.Append(','); JStr(sb, audio);
                     sb.Append(','); JNum(sb, Num(r, "FileSizeGB"));
                     sb.Append(','); JStr(sb, Str(r, "Added"));
-                    sb.Append(','); JStr(sb, Str(r, "FileName"));
+                    sb.Append(','); JStr(sb, Str(r, "ReleaseDate"));
                     sb.Append(']');
                 }
                 sb.Append("]}");
@@ -4200,13 +4234,23 @@ function Show-TvPage {
     catch { Show-UiError 'Show-TvPage' $_ }
 }
 
+function Set-MovieSort {
+    # Applies the Sort By choice to the Movies grid (Poster view follows the grid's order). A date-ordered collection keeps its own order.
+    if ($null -eq $script:MovieTable -or -not [object]::ReferenceEquals($grid.DataSource, $script:MovieTable)) { return }
+    if (Test-ActiveByDate) { return }
+    $k = [string]$cboSort.SelectedItem
+    if (-not $script:SortChoices.Contains($k)) { $k = 'Title' }
+    $script:MovieTable.DefaultView.Sort = $script:SortChoices[$k]
+    if ($posterHost.Visible) { Update-PosterList }
+}
+
 function Set-GridTable {
     try {
         # Movies use the WinForms grid; the TV tab's grid and posters are tv.html, so the grid is left empty there.
         # plain assignment on purpose: $( ) would unroll a DataTable into its rows and the grid would get an array of DataRows
         if ($script:Tab -eq 'TV') { $want = $null } else { $want = $script:MovieTable }
         if (-not [object]::ReferenceEquals($grid.DataSource, $want)) { $grid.DataSource = $want }
-        if ($null -ne $want) { Set-GridColumnLayout }
+        if ($null -ne $want) { Set-GridColumnLayout; Set-MovieSort }
     }
     catch { Show-UiError 'Set-GridTable' $_ }
 }
@@ -4228,6 +4272,8 @@ function Set-LibraryTab {
     }
     if ($script:CurrentView -eq 'dashboard' -and $script:ScanResults.Count -gt 0 -and -not $script:Scanning) { Show-DashboardView }
 }
+$cboSort.Add_SelectedIndexChanged({ $script:Settings['SortBy'] = [string]$cboSort.SelectedItem; Set-MovieSort })
+if ($script:Settings['SortBy'] -and $cboSort.Items.Contains([string]$script:Settings['SortBy'])) { $cboSort.SelectedItem = [string]$script:Settings['SortBy'] }
 $tabMovies.Add_Click({ Set-LibraryTab 'Movies' })
 $tabTv.Add_Click({ Set-LibraryTab 'TV' })
 $btnViewGrid.Add_Click({ Set-View 'grid' })
@@ -4262,7 +4308,7 @@ $posterCanvas.Add_MouseClick({
     if ($i -lt 0) { return }
     $it = $script:PosterItems[$i]
     $script:CardReturn = 'poster'
-    Show-DashboardView -Card $(if ($it.FullPath) { 'p:' + $it.FullPath } else { 't:' + $it.Title + '|' + $it.Year })
+    Show-DashboardView -Card ('k:' + $it.Key)
 })
 $posterCanvas.Add_Paint({
     param($s, $e)
@@ -4331,13 +4377,44 @@ $grid.Add_CellFormatting({
         $e.Value = if ($v -gt 0) { "$v%" } else { '' }
         $e.FormattingApplied = $true
     }
+    elseif ($cn -eq 'Metascore') {
+        $v = 0; if ($e.Value -isnot [DBNull] -and $null -ne $e.Value) { $v = [int]$e.Value }
+        $e.Value = if ($v -gt 0) { "$v" } else { '' }
+        $e.FormattingApplied = $true
+    }
 })
+
+function Get-MetascoreColors {
+    # Metacritic's bands: green 61-100, yellow 40-60, red 0-39 (dark text on yellow, white on the others)
+    param([int]$Score)
+    if ($Score -ge 61) { return @((RGB 102 204 51), (RGB 255 255 255)) }
+    if ($Score -ge 40) { return @((RGB 255 204 51), (RGB 34 34 34)) }
+    @((RGB 255 0 0), (RGB 255 255 255))
+}
+
+function Draw-MetascoreBadge {
+    # A Metacritic-coloured square with the score on it.
+    param($G, [int]$Score, [int]$X, [int]$Y, [int]$W, [int]$H)
+    $c = Get-MetascoreColors $Score
+    $G.SmoothingMode = 'AntiAlias'
+    $br = New-Object Drawing.SolidBrush($c[0]); $G.FillRectangle($br, $X, $Y, $W, $H); $br.Dispose()
+    $f = New-Object Drawing.Font($script:fontBold.FontFamily, 9, [Drawing.FontStyle]::Bold)
+    [Windows.Forms.TextRenderer]::DrawText($G, [string]$Score, $f, (New-Object Drawing.Rectangle($X, $Y, $W, $H)), $c[1], ([Windows.Forms.TextFormatFlags]::HorizontalCenter -bor [Windows.Forms.TextFormatFlags]::VerticalCenter -bor [Windows.Forms.TextFormatFlags]::NoPadding))
+    $f.Dispose()
+}
 
 # Rotten Tomatoes style scores: a tomato (critics) or popcorn bucket (audience) drawn by us, fresh at 60 % and up, splat / spilled below.
 $grid.Add_CellPainting({
     param($s, $e)
     if ($e.RowIndex -lt 0 -or $e.ColumnIndex -lt 0) { return }
     $cn = $s.Columns[$e.ColumnIndex].Name
+    if ($cn -eq 'Metascore') {
+        $e.Handled = $true
+        $e.PaintBackground($e.ClipBounds, ($e.State -band [Windows.Forms.DataGridViewElementStates]::Selected) -ne 0)
+        $txt = [string]$e.FormattedValue
+        if ($txt) { Draw-MetascoreBadge $e.Graphics ([int]$txt) ($e.CellBounds.X + 8) ($e.CellBounds.Y + [int](($e.CellBounds.Height - 20) / 2)) 26 20 }
+        return
+    }
     if ($cn -ne 'RTCritic' -and $cn -ne 'RTAudience') { return }
     $e.Handled = $true
     $e.PaintBackground($e.ClipBounds, ($e.State -band [Windows.Forms.DataGridViewElementStates]::Selected) -ne 0)
@@ -4525,7 +4602,7 @@ $btnCols.Add_Click({
     $clb = New-Object Windows.Forms.CheckedListBox
     $clb.Dock = 'Fill'; $clb.CheckOnClick = $true; $clb.BorderStyle = 'None'
     $clb.BackColor = $script:cPanel; $clb.ForeColor = $script:cText; $clb.Font = $script:fontBase
-    foreach ($c in $grid.Columns) { [void]$clb.Items.Add($c.Name, $c.Visible) }
+    foreach ($c in $grid.Columns) { if ($script:HiddenFields -notcontains $c.Name) { [void]$clb.Items.Add($c.Name, $c.Visible) } }
     $ok = New-FlatButton 'Apply' 100 'primary'
     $ok.DialogResult = [Windows.Forms.DialogResult]::OK
     $reset = New-FlatButton 'Defaults' 100 'secondary'
@@ -4613,6 +4690,7 @@ $script:EditFields = @(
     @{ N = 'Source';            L = 'Source';                        K = 'source'; H = 'e.g. 4K Remux' },
     @{ N = 'RTCritic';          L = 'Rotten Tomatoes - critics';     K = 'int';    Min = 0; Max = 100; H = '% (0 - 100)' },
     @{ N = 'RTAudience';        L = 'Rotten Tomatoes - audience';    K = 'int';    Min = 0; Max = 100; H = '% (0 - 100)' },
+    @{ N = 'Metascore';         L = 'Metacritic Metascore';          K = 'int';    Min = 0; Max = 100; H = '0 - 100' },
     @{ N = 'CinemaScore';       L = 'CinemaScore';                   K = 'grade';  H = 'A+ to F' },
     @{ N = 'BoxOfficeDomestic'; L = 'All-time domestic';             K = 'money';  H = '$ or 12.5M' },
     @{ N = 'BoxOfficeWorldwide';L = 'All-time worldwide';            K = 'money';  H = '$ or 1.2B' },
@@ -5642,6 +5720,7 @@ $btnExport.Add_Click({
             $out = foreach ($drv in $view) {
                 $o = [ordered]@{}
                 foreach ($n in $names) {
+                    if ($script:HiddenFields -contains $n) { continue }
                     $v = $drv[$n]; if ($v -is [DBNull]) { $v = $null }
                     if ($n -eq 'RuntimeMin') { $o['Runtime'] = Format-Runtime $v } else { $o[$n] = $v }
                 }
@@ -5654,6 +5733,7 @@ $btnExport.Add_Click({
             $script:ScanResults | ForEach-Object {
                 $o = [ordered]@{}
                 foreach ($p in $_.PSObject.Properties) {
+                    if ($script:HiddenFields -contains $p.Name) { continue }
                     if ($p.Name -eq 'RuntimeMin') { $o['Runtime'] = Format-Runtime $p.Value } else { $o[$p.Name] = $p.Value }
                 }
                 [pscustomobject]$o
@@ -5690,7 +5770,7 @@ function Test-DashboardReady {
 function Show-DashboardView {
     # Builds the dashboard (only if the scan changed) and shows it inside the window.
     # Falls back to the default browser if the embedded WebView2 cannot start.
-    # -Card opens one title's card straight away ('p:<full path>' or 't:<title>|<year>').
+    # -Card opens one title's card straight away ('k:<card key>' or 't:<title>|<year>').
     param([string]$Card = '')
     if ($script:Scanning) {
         [Windows.Forms.MessageBox]::Show('The dashboard is available when the scan has finished.', 'Dashboard', 'OK', 'Information') | Out-Null; return

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.3.0
+
+**Feature**
+- Sort By for Movies (title, date added, release date, RT critics, Metacritic, box office, runtime) and for the TV Shows page (title, first aired, date added, genre, seasons).
+- Metacritic Metascore (from OMDb via Fetch info), shown as a green / yellow / red square with the score in the grid, detail view and dashboard card.
+
+**Bug/Fix**
+- Start-up freeze: the compiled helper is kept between launches and the last scan loads after the window has appeared.
+
+**Housekeeping**
+- File and folder paths are no longer shown in any view, the dashboard card, saved HTML or CSV export.
+
 ## 0.2.0
 
 **Feature**

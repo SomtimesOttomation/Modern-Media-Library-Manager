@@ -146,13 +146,15 @@ Writing `.nfo` sidecar files is not implemented. If it is added, it will be opt-
 
 ## Updating
 
-Click the version at the bottom right of the window. An update window opens and checks GitHub straight away, with a status line and progress bar. If there is a newer release it shows the release description (what changed). Nothing is downloaded until you click **Download update**. It then:
+Click the version at the bottom right of the window. An update window opens and checks GitHub straight away, with a status line and progress bar. If there is a newer release it shows the release description (what changed). Nothing is downloaded until you click **Download update**. The updater (`Update-MMLM.ps1`, the same design as the author's dash modules) then:
 
-1. downloads the release zip and its `SHA256SUMS.txt`, and checks the zip against that checksum (a mismatch discards it);
-2. unpacks it to a staging folder and checks the files inside, including that the new script is readable and carries the release's version number;
-3. waits for you to click **Restart to finish updating**. The app closes, the new files go in (the old ones are kept in `%LOCALAPPDATA%\Modern-Media-Library-Manager\Update\previous`), the new version starts and re-runs your last scan from the cache. If it fails to start, the old version is put back automatically.
+1. downloads `Modern-Media-Library-Manager-vX.Y.Z.zip` and its `.sha256`, and checks the zip against it (a mismatch discards it);
+2. unpacks it to a staging folder, refusing unsafe paths and oversized packages, and checks the files inside: the required files are there, `VERSION` matches the release and every script parses;
+3. waits for you to click **Restart now**. The app closes and `Apply-Update.ps1` backs up the current files, copies the new ones in and starts the new version. The new version confirms once its window is up and your library has loaded; if it does not within a minute, the old files are put back and the old version starts again. Either way the app tells you once what happened.
 
-If only the dashboard template changed, no restart is needed. Your settings, token, scan cache, collections and the `lib\` files are never touched. The checksum comes from the same release as the zip, so it proves the download is complete and intact; to prove who built it, use the attestation check in [Verify your download](#verify-your-download).
+**Drop-in updates.** When the repository is private, GitHub cannot be checked. Save the release zip (and its `.sha256`, if you have it) into the `updates` folder next to the script while the app is open: within a few seconds it offers to install it, with the same checks, backup and rollback. Installed zips move to `updates\applied`.
+
+Update checks only happen when you ask. Your settings, token, cache, library snapshot, collections and the `lib\` and `updates\` folders are never touched. The checksum comes from the same release as the zip, so it proves the download is complete and intact; to prove who built it, use the attestation check in [Verify your download](#verify-your-download).
 
 ## Network activity
 
@@ -164,7 +166,7 @@ The app connects only to the places below. Nothing is sent anywhere else, and th
 | **PowerShell Gallery** | First local-folder scan, if the `Get-MediaInfo` module is not installed | Installs the module for the current user (Windows PowerShell may also offer to install its NuGet provider) | Install it yourself first: `Install-Module Get-MediaInfo -Scope CurrentUser`; Plex scans do not need it |
 | **datasets.imdbws.com** | **Fetch info**, about once a week | Downloads IMDb's public ratings file. Nothing about your library is sent | Do not use **Fetch info** |
 | **themoviedb.org** and **omdbapi.com** | **Fetch info**, only if you pasted a key | Titles, years and IMDb or TMDB ids, plus your own key | Leave the keys empty |
-| **api.github.com** and **github.com** | Only when you click **Check for updates** (bottom right), and again if you then choose **Download update** | Asks for the latest release, then downloads its zip and checksum file. Nothing about you or your library is sent | Never click it |
+| **api.github.com** and **github.com** | Only when you click **Check for updates** (bottom right), and again if you then choose **Download update** | Asks for the latest release, then downloads its zip and `.sha256` checksum file. Nothing about you or your library is sent | Never click it |
 | **Your Plex server** | Plex scans | Read-only requests with your token, to the address you entered | Use a local-folder scan |
 
 Local-folder scans and the saved HTML dashboards make no connections of their own. Your files, paths and file names are never uploaded.

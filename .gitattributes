@@ -1,0 +1,11 @@
+# What goes into the release zip (git archive): everything except these.
+.github/          export-ignore
+.gitattributes    export-ignore
+.gitignore        export-ignore
+RELEASING.md      export-ignore
+lib/              export-ignore
+# Windows PowerShell 5.1 scripts keep Windows line endings
+*.ps1  text eol=crlf
+*.psm1 text eol=crlf
+*.cmd  text eol=crlf
+*.bat  text eol=crlf

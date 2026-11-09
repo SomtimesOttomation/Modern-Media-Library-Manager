@@ -1,6 +1,9 @@
 # Builds a release when you push a version tag (for example v1.2.0):
-#   - zips only the files an end user needs
-#   - writes SHA256SUMS.txt (the zip and each script)
+#   - checks the tag matches VERSION and $script:AppVersion, and that scripts are ASCII-only (Windows PowerShell 5.1)
+#   - zips the repository with git archive (.gitattributes leaves out .github, lib and the like), files inside one
+#     Modern-Media-Library-Manager folder, as Modern-Media-Library-Manager-vX.Y.Z.zip
+#   - writes Modern-Media-Library-Manager-vX.Y.Z.zip.sha256 (read by the updater from v0.4.0 on, and by drop-in updates)
+#   - writes SHA256SUMS.txt (the zip and each main file; read by the in-app updater of v0.3.1 and older)
 #   - records a GitHub build-provenance attestation for the zip
 #   - scans the zip on VirusTotal (needs the VT_API_KEY secret; skipped with a note if it is missing)
 #   - publishes the release with the hashes and the scan link in the notes
@@ -27,8 +30,16 @@ jobs:
       - name: Check the version number matches the tag
         run: |
           V="$(awk -F"'" '/^\$script:AppVersion/ { print $2; exit }' Modern-Media-Library-Manager.ps1)"
-          if [ "v${V}" != "${GITHUB_REF_NAME}" ]; then
-            echo "::error::AppVersion in the script is '${V}' but the tag is ${GITHUB_REF_NAME}. Change AppVersion, merge, and tag again."
+          F="$(tr -d '[:space:]' < VERSION)"
+          if [ "v${V}" != "${GITHUB_REF_NAME}" ] || [ "v${F}" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::The tag is ${GITHUB_REF_NAME} but VERSION says '${F}' and AppVersion in the script says '${V}'. Set both, merge, and tag again."
+            exit 1
+          fi
+
+      - name: Check scripts are ASCII-only
+        run: |
+          if grep -rIlP '[^\x00-\x7F]' --include='*.ps1' --include='*.psm1' --include='*.bat' --include='*.cmd' .; then
+            echo "::error::Non-ASCII characters found in the files listed above (Windows PowerShell 5.1 misreads them)."
             exit 1
           fi
 
@@ -40,16 +51,15 @@ jobs:
           set -euo pipefail
           STAGE="dist/stage/Modern-Media-Library-Manager"
           ZIP="dist/Modern-Media-Library-Manager-${GITHUB_REF_NAME}.zip"
-          mkdir -p "$STAGE/lib"
-          for f in Modern-Media-Library-Manager.ps1 dashboard-template.html tv-template.html Run-ModernMediaLibraryManager.cmd README.md LICENSE; do
-            cp "$f" "$STAGE/"
-          done
-          cp lib/README.txt "$STAGE/lib/"
-          (cd dist/stage && zip -qr -X "../$(basename "$ZIP")" Modern-Media-Library-Manager)
+          mkdir -p dist/stage
+          git archive --format=zip --prefix=Modern-Media-Library-Manager/ -o "$ZIP" HEAD
+          (cd dist/stage && unzip -q "../$(basename "$ZIP")")
+          (cd dist && sha256sum "$(basename "$ZIP")" > "$(basename "$ZIP").sha256")
           {
             (cd dist && sha256sum "$(basename "$ZIP")")
             (cd "$STAGE" && sha256sum Modern-Media-Library-Manager.ps1 dashboard-template.html tv-template.html Run-ModernMediaLibraryManager.cmd)
           } > dist/SHA256SUMS.txt
+          unzip -l "$ZIP" | tail -n 3
           echo "ZIP=$ZIP" >> "$GITHUB_ENV"
           cat dist/SHA256SUMS.txt
 
@@ -112,8 +122,8 @@ jobs:
             echo "The script is not code-signed. See the README sections \"Verify your download\" and \"Network activity\"."
           } > dist/notes.md
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "$ZIP" dist/SHA256SUMS.txt --clobber
+            gh release upload "$GITHUB_REF_NAME" "$ZIP" "$ZIP.sha256" dist/SHA256SUMS.txt --clobber
             gh release edit "$GITHUB_REF_NAME" --notes-file dist/notes.md
           else
-            gh release create "$GITHUB_REF_NAME" "$ZIP" dist/SHA256SUMS.txt --title "$GITHUB_REF_NAME" --notes-file dist/notes.md
+            gh release create "$GITHUB_REF_NAME" "$ZIP" "$ZIP.sha256" dist/SHA256SUMS.txt --title "$GITHUB_REF_NAME" --notes-file dist/notes.md
           fi

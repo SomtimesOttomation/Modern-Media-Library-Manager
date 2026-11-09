@@ -92,7 +92,7 @@ function Save-HostPlexSettings {
 }
 
 # The page's own settings (theme, view and sort per tab, grid columns), kept apart from the app's settings.json.
-$script:PageDefaults = [ordered]@{ theme = 'system'; updateCheck = $true; moviesView = 'posters'; tvView = 'posters'; moviesSort = 'added'; tvSort = 'title'; columns = @(); hideDupes = $false }
+$script:PageDefaults = [ordered]@{ theme = 'system'; updateCheck = $false; moviesView = 'posters'; tvView = 'posters'; moviesSort = 'added'; tvSort = 'title'; columns = @(); hideDupes = $false }
 function Read-PageSettings {
     $s = [ordered]@{}; foreach ($k in $script:PageDefaults.Keys) { $s[$k] = $script:PageDefaults[$k] }
     $p = Join-Path $script:AppData 'page-settings.json'
@@ -468,7 +468,7 @@ function Initialize-Dash {
     if ($Context.Root) { $script:Root = [string]$Context.Root }
     try { $script:Version = ([IO.File]::ReadAllText((Join-Path $script:Root 'VERSION'))).Trim() } catch { Write-HostLog 'version' $_ }
     $script:CacheDir = Join-Path $script:AppData 'Dashboard'          # served as https://mmlm.cache/ (pages, posters for the page)
-    $script:WebViewDataDir = Join-Path $script:AppData 'WebView2'
+    $script:WebViewDataDir = Join-Path $script:AppData 'WebView2Page'      # its own browser profile (the window app uses WebView2Data)
     foreach ($d in @($script:AppData, $script:CacheDir, $script:WebViewDataDir)) { if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null } }
     $script:Traffic = [hashtable]::Synchronized(@{ Requests = 0; Bytes = [long]0; Errors = 0; Halted = $false })
     $script:Out = New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]'
@@ -613,7 +613,7 @@ function Receive-DashEvents {
             Stop-HostScan
         }
         else {
-            $json = ConvertTo-PageJson @{ event = 'scan'; data = @{ running = $true; tab = $script:ScanTab; pct = (Get-ScanPct); text = [string]$s.Text } }
+            $json = ConvertTo-PageJson ([ordered]@{ event = 'scan'; data = @{ running = $true; tab = $script:ScanTab; pct = (Get-ScanPct); text = [string]$s.Text } })
             if ($json -ne $script:LastScanJson) { $script:LastScanJson = $json; $script:Out.Enqueue($json) }
         }
     }

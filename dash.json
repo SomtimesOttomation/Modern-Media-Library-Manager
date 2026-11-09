@@ -1,0 +1,24 @@
+{
+  "contract": 1,
+  "id": "mmlm",
+  "name": "Library",
+  "title": "Modern Media Library Manager",
+  "category": "Media",
+  "kind": "library",
+  "versionFile": "VERSION",
+  "icon": "ui/img/tab-icon.svg",
+  "backend": "modules/MMLM.Host.psm1",
+  "ui": "ui",
+  "entry": "index.html",
+  "standalone": "Start-MMLM.bat",
+  "dataSources": [
+    {
+      "name": "Your own Plex Media Server (only when you scan)",
+      "terms": "https://www.plex.tv/about/privacy-legal/plex-terms-of-service/"
+    },
+    {
+      "name": "GitHub releases (update check)",
+      "terms": "https://docs.github.com/en/site-policy/github-terms/github-terms-of-service"
+    }
+  ]
+}

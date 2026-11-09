@@ -1,5 +1,13 @@
 # A tiny stand-in for a Plex server (7 movies, 10 episodes in 2 shows) for headless tests. Token: tok. Port 32499.
 import http.server, urllib.parse, re
+
+import zlib, struct
+def _png(w=24, h=36, rgb=(90, 110, 200)):
+    raw = b''.join(b'\x00' + bytes(rgb) * w for _ in range(h))
+    chunk = lambda t, d: struct.pack('>I', len(d)) + t + d + struct.pack('>I', zlib.crc32(t + d) & 0xffffffff)
+    return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b'')
+POSTER = _png()   # a real (tiny) picture; browsers show it whatever the file name says
+
 MOV=[(str(100+i),f"Movie {i}",2000+i) for i in range(1,8)]
 EPS=[(str(1000+i),"Show A" if i<6 else "Show B","2" if i<6 else "3",1+(i%2),i) for i in range(1,11)]
 def video_movie(k,t,y):
@@ -34,6 +42,6 @@ class H(http.server.BaseHTTPRequestHandler):
                 if k in ('2','3'): out.append(f'<Directory ratingKey="{k}" type="show" title="Show {k}" year="2015" thumb="/library/metadata/{k}/thumb/2"><Genre tag="Comedy"/></Directory>')
             return self.send('<MediaContainer>'+''.join(out)+'</MediaContainer>')
         if p=='/photo/:/transcode':
-            return self.send(b'\xff\xd8\xff\xe0fakejpeg','image/jpeg')
+            return self.send(POSTER,'image/jpeg')
         self.send_response(404); self.end_headers()
 http.server.ThreadingHTTPServer(('127.0.0.1',32499),H).serve_forever()

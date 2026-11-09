@@ -1,0 +1,135 @@
+// TV Shows: a poster wall with one tile per show (default), or the grid: Show > Season > Episode, collapsed, with an
+// expand / collapse-all column to the right of Title. Click a show for its seasons and episodes, an episode for its card.
+import * as S from '../store.js';
+import { h } from '../util.js';
+import { esc, num, fmtSize, posterHtml, tileHtml, matchQuery, fillWall } from '../common.js';
+import { openCard, openShow, showSummary } from './card.js';
+import { vgrid } from './vgrid.js';
+import { stateBox, gridColumns, cellHtml, colLabel, chooseColumns } from './library.js';
+
+const byName = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+const firstGenre = (s) => (s.eps[0]._genres[0] || '￿').toLowerCase();
+export const TV_SORTS = [
+  ['title', 'Title', byName],
+  ['aired', 'First aired', (a, b) => (a.sum.firstAired === b.sum.firstAired ? byName(a, b) : !a.sum.firstAired ? 1 : !b.sum.firstAired ? -1 : b.sum.firstAired.localeCompare(a.sum.firstAired))],
+  ['added', 'Date added', (a, b) => b.sum.added.localeCompare(a.sum.added) || byName(a, b)],
+  ['genre', 'Genre', (a, b) => firstGenre(a).localeCompare(firstGenre(b)) || byName(a, b)],
+  ['seasons', 'Seasons', (a, b) => b.nSeasons - a.nSeasons || byName(a, b)],
+];
+
+// Shows built once per loaded library (not on every redraw).
+let cache = { rows: null, shows: [] };
+function shows(L) {
+  if (cache.rows === L.rows) return cache.shows;
+  const m = new Map();
+  for (const r of L.rows) { const k = r.Show || r.Title; if (!m.has(k)) m.set(k, []); m.get(k).push(r); }
+  const list = [...m.entries()].map(([name, eps]) => {
+    const sum = showSummary(eps);
+    return { name, eps, sum, nSeasons: sum.seasons.filter((x) => x[0] > 0).length || sum.seasons.length, poster: eps.find((e) => e.Poster) || eps[0] };
+  });
+  cache = { rows: L.rows, shows: list };
+  return list;
+}
+
+export function mount(ctx) {
+  const L = S.state.libs.tv;
+  let grid = null, stopWall = null;
+  const open = new Set();                 // expanded shows ('s:name') and seasons ('s:name|n')
+  const draw = () => {
+    stopWall?.(); stopWall = null; grid?.destroy(); grid = null;
+    const st = stateBox('tv', L, ctx.toast);
+    if (st) { ctx.el.replaceChildren(st); return; }
+    const s = S.state.settings, mode = s.tvView === 'grid' ? 'grid' : 'posters';
+    const all = shows(L);
+    const q = S.state.query;
+    let list = all;
+    let epFilter = null;
+    if (q) { const hit = new Set(matchQuery(L.rows, q)); epFilter = hit; list = all.filter((sh) => sh.eps.some((e) => hit.has(e))); }
+    const sortDef = TV_SORTS.find((x) => x[0] === s.tvSort) || TV_SORTS[0];
+    list = list.slice().sort(sortDef[2]);
+    const head = h('div', { class: 'lib-head' },
+      h('div', { class: 'lib-title' }, h('h1', null, 'TV Shows'),
+        h('small', null, `${list.length.toLocaleString()}${list.length !== all.length ? ' of ' + all.length.toLocaleString() : ''} shows · ${L.rows.length.toLocaleString()} episodes · ${fmtSize(L.rows.reduce((a, r) => a + num(r.FileSizeGB), 0))}`)),
+      h('div', { class: 'lib-tools' },
+        h('select', { 'aria-label': 'Sort by', title: 'Sort by', onchange: (e) => S.saveSettings({ tvSort: e.target.value }).then(draw) },
+          TV_SORTS.map(([k, label]) => h('option', { value: k, selected: k === sortDef[0] ? true : null }, `Sort: ${label}`))),
+        mode === 'grid' ? h('button', { class: 'btn', type: 'button', onclick: () => chooseColumns(L, draw) }, 'Columns') : null,
+        h('div', { class: 'seg', role: 'tablist', 'aria-label': 'View' }, [['posters', 'Posters'], ['grid', 'Grid']].map(([k, label]) =>
+          h('button', { type: 'button', class: mode === k ? 'active' : '', 'aria-selected': mode === k ? 'true' : 'false', onclick: () => S.saveSettings({ tvView: k }).then(draw) }, label)))));
+    const body = h('div');
+    ctx.el.replaceChildren(head, body);
+    if (!list.length) { body.append(h('div', { class: 'state' }, h('p', null, q ? `Nothing matches “${q}”.` : 'Nothing to show.'))); return; }
+    const byKey = new Map(list.map((sh) => [sh.name, sh]));
+    if (mode === 'posters') {
+      const wall = h('div', { class: 'wall' });
+      body.append(wall);
+      const years = (sh) => (!sh.sum.y0 ? '' : sh.sum.y0 === sh.sum.y1 ? String(sh.sum.y0) : `${sh.sum.y0}–${sh.sum.y1}`);
+      stopWall = fillWall(wall, list, (sh) => tileHtml({ key: sh.name, poster: posterHtml(sh.poster, sh.name), title: sh.name,
+        sub: [years(sh), `${sh.nSeasons} season${sh.nSeasons === 1 ? '' : 's'}`, `${sh.eps.length} ep.`].filter(Boolean).join(' · '), res: '', hdr: '', rating: 0 }));
+      wall.addEventListener('click', (e) => { const t = e.target.closest('.pc'); if (t) { const sh = byKey.get(t.dataset.k); if (sh) openShow(sh.name, sh.eps, ctx.toast); } });
+      return;
+    }
+    // grid: flatten the open parts of the tree
+    const cols = gridColumns(L);
+    const flat = () => {
+      const out = [];
+      for (const sh of list) {
+        out.push({ k: 'show', sh });
+        if (!open.has('s:' + sh.name)) continue;
+        for (const [n, eps] of sh.sum.seasons) {
+          const vis = epFilter ? eps.filter((e) => epFilter.has(e)) : eps;
+          if (!vis.length) continue;
+          out.push({ k: 'season', sh, n, eps: vis });
+          if (open.has(`s:${sh.name}|${n}`)) for (const e of vis) out.push({ k: 'ep', sh, e });
+        }
+      }
+      return out;
+    };
+    const anyOpen = () => open.size > 0;
+    const xHead = () => `<th><button class="xall" type="button" data-x="all" title="${anyOpen() ? 'Collapse every show' : 'Expand every show and season'}">${anyOpen() ? 'Collapse all' : 'Expand all'}</button></th>`;
+    const agg = (eps, c) => {
+      // show and season rows: totals where they make sense, the common value otherwise
+      if (c === 'FileSizeGB') return `<td class="num">${fmtSize(eps.reduce((a, e) => a + num(e.FileSizeGB), 0))}</td>`;
+      if (c === 'RuntimeMin') { const m = eps.reduce((a, e) => a + num(e.RuntimeMin), 0); return `<td class="num">${Math.floor(m / 60)}h ${String(Math.round(m % 60)).padStart(2, '0')}m</td>`; }
+      const vals = new Set(eps.map((e) => e[c]).filter((x) => x !== undefined && x !== '' && x !== null));
+      return vals.size === 1 ? cellHtml(eps[0], c, L) : vals.size > 1 ? '<td class="muted">mixed</td>' : '<td></td>';
+    };
+    grid = vgrid(body, {
+      // no sorting by column here: the tree keeps the Sort By order
+      head: () => ({ html: `<tr><th>Title</th>${xHead()}${cols.map((c) => `<th>${esc(colLabel(c))}</th>`).join('')}</tr>`, count: cols.length + 2 }),
+      rowHtml: (it, i) => {
+        if (it.k === 'show') {
+          const o = open.has('s:' + it.sh.name);
+          return `<tr class="show" data-i="${i}"><td class="ttl" title="${esc(it.sh.name)}"><span class="tw">${o ? '▾' : '▸'}</span>${esc(it.sh.name)}</td><td class="muted">${it.sh.nSeasons} season${it.sh.nSeasons === 1 ? '' : 's'} · ${it.sh.eps.length} ep.</td>${cols.map((c) => agg(it.sh.eps, c)).join('')}</tr>`;
+        }
+        if (it.k === 'season') {
+          const o = open.has(`s:${it.sh.name}|${it.n}`);
+          return `<tr class="season" data-i="${i}"><td class="ttl"><span class="tw">${o ? '▾' : '▸'}</span>${it.n === 0 ? 'Specials' : 'Season ' + it.n}</td><td class="muted">${it.eps.length} episode${it.eps.length === 1 ? '' : 's'}</td>${cols.map((c) => agg(it.eps, c)).join('')}</tr>`;
+        }
+        const e = it.e, t = String(e.Title).replace(/^.* - S\d+E\d+ - /, '');
+        return `<tr class="ep" data-i="${i}"><td class="ttl" title="${esc(t)}">E${String(num(e.Episode)).padStart(2, '0')} · ${esc(t)}</td><td></td>${cols.map((c) => cellHtml(e, c, L)).join('')}</tr>`;
+      },
+      onRow: (it) => {
+        if (it.k === 'ep') { openCard(it.e, ctx.toast); return; }
+        const key = it.k === 'show' ? 's:' + it.sh.name : `s:${it.sh.name}|${it.n}`;
+        if (open.has(key)) { open.delete(key); if (it.k === 'show') for (const k of [...open]) if (k.startsWith(key + '|')) open.delete(k); } else open.add(key);
+        grid.set(flat());
+      },
+      onHead: (c, e) => {
+        if (!e.target.closest('[data-x]')) return;
+        if (anyOpen()) open.clear(); else for (const sh of list) { open.add('s:' + sh.name); for (const [n] of sh.sum.seasons) open.add(`s:${sh.name}|${n}`); }
+        grid.set(flat());
+      },
+    });
+    grid.set(flat());
+  };
+  draw();
+  ctx.redraw = draw;
+  ctx.seen = { status: L.status, rows: L.rows };
+  return () => { stopWall?.(); grid?.destroy(); };
+}
+export function update(topics, ctx) {
+  const L = S.state.libs.tv, changed = ctx.seen && (ctx.seen.status !== L.status || ctx.seen.rows !== L.rows);
+  if (changed) ctx.seen = { status: L.status, rows: L.rows };
+  if (changed || topics.has('query') || (L.status !== 'ready' && (topics.has('plex') || topics.has('traffic') || topics.has('scan')))) ctx.redraw?.();
+}

@@ -17,11 +17,14 @@
     Scripts stay ASCII-only for Windows PowerShell 5.1.
 #>
 
+# One dash id; the lock, the app-data folder and the log are named from it.
+$script:DashId = 'mmlm'
+$script:AppName = 'Modern-Media-Library-Manager'
 $script:Ctx = $null
 $script:Root = Split-Path $PSScriptRoot
 $script:Mutex = $null
 $script:Version = '0.0.0'
-$script:AppData = Join-Path $env:LOCALAPPDATA 'Modern-Media-Library-Manager'
+$script:AppData = Join-Path $env:LOCALAPPDATA $script:AppName
 $script:CacheDir = ''
 $script:WebViewDataDir = ''
 $script:Settings = $null
@@ -30,7 +33,7 @@ $script:Sync = $null            # the running (or last) scan: progress, cancel, 
 $script:ScanPs = $null
 $script:ScanAsync = $null
 $script:ScanTab = ''
-$script:Out = $null             # JSON messages waiting for Receive-DashEvents
+$script:Out = $null             # the one event queue: every page event goes through it and Receive-DashEvents
 $script:LastScanJson = ''
 $script:Badge = 0               # titles new since the person last looked at the tab
 $script:Visible = $false
@@ -38,10 +41,25 @@ $script:Visible = $false
 # the data modules, by full path (an already loaded copy is reused)
 foreach ($m0 in @('MMLM.Library.psm1', 'MMLM.Plex.psm1', 'MMLM.Fetch.psm1')) { Import-Module (Join-Path $PSScriptRoot $m0) -DisableNameChecking }
 
+function Write-HostLog {
+    # failures go to %LOCALAPPDATA%\<app>\Logs\host.log instead of disappearing (kept under 1 MB)
+    param([string]$Where, $Err)
+    try {
+        $dir = Join-Path $script:AppData 'Logs'
+        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        $f = Join-Path $dir 'host.log'
+        if ((Test-Path -LiteralPath $f) -and (Get-Item -LiteralPath $f).Length -gt 1MB) { Move-Item -LiteralPath $f -Destination ($f + '.old') -Force }
+        $msg = $(if ($Err -is [Management.Automation.ErrorRecord]) { $Err.Exception.Message } else { [string]$Err })
+        [IO.File]::AppendAllText($f, ('{0} [{1}] {2}' -f (Get-Date).ToString('yyyy-MM-dd HH:mm:ss'), $Where, $msg) + [Environment]::NewLine)
+    } catch { }   # the log itself failing must never break the dash
+}
 function Send-Page { param([string]$Json) if ($script:Ctx -and $script:Ctx.Post) { & $script:Ctx.Post $Json } }
-function Reply { param($Id, [string]$DataJson = 'null') Send-Page ('{{"id":{0},"ok":true,"data":{1}}}' -f [int]$Id, $DataJson) }
-function ReplyError { param($Id, [string]$Message) Send-Page ('{{"id":{0},"ok":false,"error":{1}}}' -f [int]$Id, (ConvertTo-Json -InputObject $Message -Compress)) }
 function ConvertTo-PageJson { param($Object) ConvertTo-Json -InputObject $Object -Depth 6 -Compress }
+function Reply { param($Id, [string]$DataJson = 'null') Send-Page ('{"id":' + (ConvertTo-PageJson $Id) + ',"ok":true,"data":' + $DataJson + '}') }
+function ReplyError { param($Id, [string]$Message) Send-Page ('{"id":' + (ConvertTo-PageJson $Id) + ',"ok":false,"error":' + (ConvertTo-PageJson $Message) + '}') }
+# The traffic on/off event skips the queue (the dash contract wants it on the page at once); everything else is queued.
+function Send-HostEventNow { param([string]$Name, $Data) Send-Page (ConvertTo-PageJson ([ordered]@{ event = $Name; data = $Data })) }
+function Push-HostEvent { param([string]$Name, $Data) if ($script:Out) { $script:Out.Enqueue((ConvertTo-PageJson ([ordered]@{ event = $Name; data = $Data }))) } }
 
 function Get-HostModuleFiles {
     @('MMLM.Library.psm1', 'MMLM.Plex.psm1', 'MMLM.Fetch.psm1') | ForEach-Object { Join-Path (Join-Path $script:Root 'modules') $_ }
@@ -52,7 +70,7 @@ function Read-HostSettings {
     $p = Join-Path $script:AppData 'settings.json'
     $s = @{ PlexUrl = ''; PlexTokenProtected = '' }
     if (Test-Path -LiteralPath $p) {
-        try { $j = [IO.File]::ReadAllText($p) | ConvertFrom-Json; foreach ($k in 'PlexUrl', 'PlexTokenProtected') { if ($j.$k) { $s[$k] = [string]$j.$k } } } catch { }
+        try { $j = [IO.File]::ReadAllText($p) | ConvertFrom-Json; foreach ($k in 'PlexUrl', 'PlexTokenProtected') { if ($j.$k) { $s[$k] = [string]$j.$k } } } catch { Write-HostLog 'settings' $_ }
     }
     $s
 }
@@ -70,7 +88,7 @@ function Get-SnapshotCount {
         $parts = $meta -split '\|'
         $n = 0; [void][int]::TryParse($parts[0], [ref]$n)
         return @{ count = $n; when = [string]$parts[-1] }
-    } catch { return @{ count = 0; when = '' } }
+    } catch { Write-HostLog 'snapshot header' $_; return @{ count = 0; when = '' } }
 }
 
 # ---------------------------------------------------------------- the scan worker (one runspace per scan)
@@ -129,8 +147,9 @@ function Start-HostScan {
     $set = Read-HostSettings
     if (-not $set.PlexUrl) { throw 'No Plex server address is set yet.' }
     $token = ''
-    try { $token = Unprotect-MmlmPlexToken $set.PlexTokenProtected } catch { }
-    if ($env:MMLM_HOST_TEST_TOKEN) { $token = $env:MMLM_HOST_TEST_TOKEN }          # test hook (headless tests, no DPAPI)
+    try { $token = Unprotect-MmlmPlexToken $set.PlexTokenProtected } catch { Write-HostLog 'token' $_ }
+    # test hook for tests\Test-MmlmHost.ps1 only: honoured only when the host was started with Debug on
+    if ($script:Ctx.Debug -and $env:MMLM_HOST_TEST_TOKEN) { $token = $env:MMLM_HOST_TEST_TOKEN }
     if (-not $token) { throw 'No Plex token is saved yet.' }
     Stop-HostScan -Wait 0
     $script:Sync = [hashtable]::Synchronized(@{ Text = 'Starting...'; Value = 0; Max = 0; Cancel = $false; Done = $false; Error = $null; PhaseLo = 0.0; PhaseHi = 1.0; Count = 0; New = 0; Cancelled = $false })
@@ -158,11 +177,11 @@ function Stop-HostScan {
     if ($script:Sync -and -not $script:Sync.Done) {
         $script:Sync.Cancel = $true
         if ($Wait -gt 0) {
-            if (-not $script:ScanAsync.AsyncWaitHandle.WaitOne($Wait)) { try { [void]$script:ScanPs.BeginStop($null, $null) } catch { } }
+            if (-not $script:ScanAsync.AsyncWaitHandle.WaitOne($Wait)) { try { [void]$script:ScanPs.BeginStop($null, $null) } catch { Write-HostLog 'scan stop' $_ } }
         }
         else { return }
     }
-    try { $script:ScanPs.Dispose() } catch { }
+    try { $script:ScanPs.Dispose() } catch { Write-HostLog 'scan dispose' $_ }
     $script:ScanPs = $null; $script:ScanAsync = $null
 }
 
@@ -181,7 +200,8 @@ function Initialize-Dash {
     param([Parameter(Mandatory)]$Context)
     if ($script:Ctx) { return @{ Ok = $true; Reason = ''; CacheDir = $script:CacheDir; WebViewDataDir = $script:WebViewDataDir } }
     $created = $false
-    try { $m = New-Object System.Threading.Mutex($true, 'Local\DashHost-mmlm', [ref]$created) } catch { $m = $null }
+    # Local\ = one lock per Windows session. Windows frees it if the process dies. Release it from the same thread (Stop-Dash).
+    try { $m = New-Object System.Threading.Mutex($true, ('Local\DashHost-' + $script:DashId), [ref]$created) } catch { Write-HostLog 'lock' $_; $m = $null }
     if (-not $m -or -not $created) {
         if ($m) { $m.Dispose() }
         return @{ Ok = $false; Reason = 'locked'; CacheDir = ''; WebViewDataDir = '' }
@@ -189,7 +209,7 @@ function Initialize-Dash {
     $script:Mutex = $m
     $script:Ctx = $Context
     if ($Context.Root) { $script:Root = [string]$Context.Root }
-    try { $script:Version = ([IO.File]::ReadAllText((Join-Path $script:Root 'VERSION'))).Trim() } catch { }
+    try { $script:Version = ([IO.File]::ReadAllText((Join-Path $script:Root 'VERSION'))).Trim() } catch { Write-HostLog 'version' $_ }
     $script:CacheDir = Join-Path $script:AppData 'Dashboard'          # served as https://mmlm.cache/ (pages, posters for the page)
     $script:WebViewDataDir = Join-Path $script:AppData 'WebView2'
     foreach ($d in @($script:AppData, $script:CacheDir, $script:WebViewDataDir)) { if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null } }
@@ -204,7 +224,7 @@ function Initialize-Dash {
 
 function Get-HostFields {
     # The record field list, read from the main script's field table so the two never drift apart.
-    $main = Join-Path $script:Root 'Modern-Media-Library-Manager.ps1'
+    $main = Join-Path $script:Root ($script:AppName + '.ps1')
     $errs = $null; $tok = $null
     $ast = [Management.Automation.Language.Parser]::ParseFile($main, [ref]$tok, [ref]$errs)
     $a = $ast.Find({ param($x) $x -is [Management.Automation.Language.AssignmentStatementAst] -and $x.Left.Extent.Text -eq '$script:FieldDefs' }, $true)
@@ -227,42 +247,40 @@ function Suspend-DashWorker {
     $script:Visible = $false
 }
 
+# Page commands: name -> handler. Fetch = $true means it reaches Plex or the internet, so it is refused while traffic is paused.
+$script:Commands = [ordered]@{
+    'init'           = @{ Fetch = $false; Run = {
+            param($a)
+            ConvertTo-PageJson @{ version = $script:Version; movies = (Get-SnapshotCount 'movies'); tv = (Get-SnapshotCount 'tv'); stopped = [bool]$script:Traffic.Halted
+                scanning = [bool]($script:Sync -and -not $script:Sync.Done); scanTab = $script:ScanTab } } }
+    'scan.start'     = @{ Fetch = $true; Run = {
+            param($a)
+            $tab = [string]$a.tab
+            if ($tab -ne 'movies' -and $tab -ne 'tv') { throw "scan.start: tab must be 'movies' or 'tv'." }
+            Start-HostScan -Tab $tab -Rebuild ([bool]$a.rebuild); 'true' } }
+    'scan.cancel'    = @{ Fetch = $false; Run = { param($a) Stop-HostScan -Wait 0; 'true' } }
+    'summary.get'    = @{ Fetch = $false; Run = {
+            # answered from the cache file the last scan wrote: no network, no scanning
+            param($a)
+            $tab = $(if ([string]$a.tab -eq 'tv') { 'tv' } else { 'movies' })
+            $p = Join-Path $script:CacheDir ('summary-' + $tab + '.json')
+            if (Test-Path -LiteralPath $p) { [IO.File]::ReadAllText($p) } else { ConvertTo-PageJson @{ title = 'Recently added'; items = @(); updatedAt = $null } } } }
+    'traffic.get'    = @{ Fetch = $false; Run = { param($a) ConvertTo-PageJson @{ requests = [int]$script:Traffic.Requests; bytes = [long]$script:Traffic.Bytes; errors = [int]$script:Traffic.Errors; stopped = [bool]$script:Traffic.Halted } } }
+    'traffic.stop'   = @{ Fetch = $false; Run = { param($a) Stop-DashTraffic; 'true' } }
+    'traffic.resume' = @{ Fetch = $false; Run = { param($a) $script:Traffic.Halted = $false; Send-HostEventNow 'traffic' @{ stopped = $false }; 'true' } }
+}
+
 function Invoke-DashCommand {
     param([Parameter(Mandatory)]$Message)
     $id = $Message.id
-    $a = $Message.args
+    $name = [string]$Message.cmd
     try {
-        switch ([string]$Message.cmd) {
-            'init' {
-                $m = Get-SnapshotCount 'movies'; $t = Get-SnapshotCount 'tv'
-                Reply $id (ConvertTo-PageJson @{ version = $script:Version; movies = $m; tv = $t; stopped = [bool]$script:Traffic.Halted
-                    scanning = [bool]($script:Sync -and -not $script:Sync.Done); scanTab = $script:ScanTab })
-            }
-            'scan.start' {
-                $tab = [string]$a.tab
-                if ($tab -ne 'movies' -and $tab -ne 'tv') { throw "scan.start: tab must be 'movies' or 'tv'." }
-                Start-HostScan -Tab $tab -Rebuild ([bool]$a.rebuild)
-                Reply $id 'true'
-            }
-            'scan.cancel' { Stop-HostScan -Wait 0; Reply $id 'true' }
-            'summary.get' {
-                # answered from the cache file the last scan wrote: no network, no scanning
-                $tab = $(if ([string]$a.tab -eq 'tv') { 'tv' } else { 'movies' })
-                $p = Join-Path $script:CacheDir ('summary-' + $tab + '.json')
-                if (Test-Path -LiteralPath $p) { Reply $id ([IO.File]::ReadAllText($p)) }
-                else { Reply $id (ConvertTo-PageJson @{ title = 'Recently added'; items = @(); updatedAt = $null }) }
-            }
-            'traffic.get' { Reply $id (ConvertTo-PageJson @{ requests = [int]$script:Traffic.Requests; bytes = [long]$script:Traffic.Bytes; errors = [int]$script:Traffic.Errors; stopped = [bool]$script:Traffic.Halted }) }
-            'traffic.stop' { Stop-DashTraffic; Reply $id 'true' }
-            'traffic.resume' {
-                $script:Traffic.Halted = $false
-                Send-Page '{"event":"traffic","data":{"stopped":false}}'
-                Reply $id 'true'
-            }
-            default { ReplyError $id ('unknown command: ' + [string]$Message.cmd) }
-        }
+        $c = $script:Commands[$name]
+        if ($null -eq $c) { ReplyError $id ('unknown command: ' + $name); return }
+        if ($c.Fetch -and $script:Traffic.Halted) { ReplyError $id 'Traffic is paused. Resume it first.'; return }
+        Reply $id ([string](& $c.Run $Message.args))
     }
-    catch { ReplyError $id $_.Exception.Message }
+    catch { Write-HostLog ('command ' + $name) $_; ReplyError $id $_.Exception.Message }
 }
 
 function Receive-DashEvents {
@@ -274,16 +292,19 @@ function Receive-DashEvents {
         if ($s.Done) {
             $data = @{ running = $false; tab = $script:ScanTab; count = [int]$s.Count; new = [int]$s.New; cancelled = [bool]($s.Cancelled -or $s.Cancel); error = $s.Error }
             if (-not $data.cancelled -and -not $s.Error -and -not $script:Visible) { $script:Badge += [int]$s.New }
-            $out.Add((ConvertTo-PageJson @{ event = 'scan'; data = $data }))
+            Push-HostEvent 'scan' $data
             Stop-HostScan
         }
         else {
             $json = ConvertTo-PageJson @{ event = 'scan'; data = @{ running = $true; tab = $script:ScanTab; pct = (Get-ScanPct); text = [string]$s.Text } }
-            if ($json -ne $script:LastScanJson) { $script:LastScanJson = $json; $out.Add($json) }
+            if ($json -ne $script:LastScanJson) { $script:LastScanJson = $json; $script:Out.Enqueue($json) }
         }
     }
-    $msg = $null
-    while ($out.Count -lt 25 -and $script:Out.TryDequeue([ref]$msg)) { $out.Add($msg) }
+    # one drain for every event source; whatever is over the cap waits for the next call (callers wrap the result in @())
+    try {
+        $msg = $null
+        while ($out.Count -lt 25 -and $script:Out.TryDequeue([ref]$msg)) { $out.Add($msg) }
+    } catch { Write-HostLog 'events' $_ }
     return $out.ToArray()
 }
 
@@ -308,13 +329,17 @@ function Stop-DashTraffic {
     if (-not $script:Traffic) { return }
     $script:Traffic.Halted = $true
     Stop-HostScan -Wait 0
-    Send-Page '{"event":"traffic","data":{"stopped":true}}'
+    Send-HostEventNow 'traffic' @{ stopped = $true }
 }
 
 function Stop-Dash {
     <# Closing: cancel a scan (the last saved snapshot stays as it was) and release the host lock within 2 seconds. #>
-    try { Stop-HostScan -Wait 1500 } catch { }
-    try { if ($script:Mutex) { $script:Mutex.ReleaseMutex(); $script:Mutex.Dispose() } } catch { }
+    try { Stop-HostScan -Wait 1500 } catch { Write-HostLog 'close scan' $_ }
+    # ReleaseMutex throws if called from another thread than Initialize-Dash; Dispose runs regardless, so the handle never leaks
+    if ($script:Mutex) {
+        try { $script:Mutex.ReleaseMutex() } catch { Write-HostLog 'lock release' $_ }
+        finally { try { $script:Mutex.Dispose() } catch { Write-HostLog 'lock dispose' $_ } }
+    }
     $script:Mutex = $null
     $script:Ctx = $null
     $script:Out = $null
@@ -326,7 +351,7 @@ function Invoke-DashSync {
     param([ValidateSet('quick')][string]$Scope = 'quick')
     if (-not $script:Traffic -or $script:Traffic.Halted) { return $false }
     if ($script:ScanPs -and -not $script:Sync.Done) { return $false }
-    try { Start-HostScan -Tab 'movies'; return $true } catch { return $false }
+    try { Start-HostScan -Tab 'movies'; return $true } catch { Write-HostLog 'sync' $_; return $false }
 }
 
 Export-ModuleMember -Function Initialize-Dash, Start-DashWorker, Suspend-DashWorker, Invoke-DashCommand, Receive-DashEvents, Get-DashStatus, Stop-DashTraffic, Stop-Dash, Invoke-DashSync

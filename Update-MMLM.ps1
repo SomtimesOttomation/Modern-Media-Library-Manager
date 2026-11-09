@@ -167,7 +167,7 @@ function Test-Stage {
     if (-not (Test-Path $vf)) { throw 'The update package has no VERSION file.' }
     $pkgVer = ConvertTo-Ver ([IO.File]::ReadAllText($vf))
     if (-not $pkgVer) { throw 'The update package has an unreadable VERSION file.' }
-    foreach ($must in 'Modern-Media-Library-Manager.ps1', 'Run-ModernMediaLibraryManager.cmd', 'dashboard-template.html', 'tv-template.html', 'Update-MMLM.ps1', 'Apply-Update.ps1') {
+    foreach ($must in 'Modern-Media-Library-Manager.ps1', 'Run-ModernMediaLibraryManager.cmd', 'dashboard-template.html', 'tv-template.html', 'Update-MMLM.ps1', 'Apply-Update.ps1', 'src/Mmlm.Native.cs') {
         if (-not (Test-Path (Join-Path $StageDir $must))) { throw "The update package is missing $must." }
     }
     foreach ($f in @(Get-ChildItem -LiteralPath $StageDir -Recurse -File | Where-Object { @('.ps1', '.psm1') -contains $_.Extension.ToLowerInvariant() })) {

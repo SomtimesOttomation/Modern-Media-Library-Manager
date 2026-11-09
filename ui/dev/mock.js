@@ -102,6 +102,20 @@ export async function request(cmd, args = {}) {
       return true;
     }
     case 'scan.cancel': clearInterval(scanTimer); later(100, () => emit('scan', { running: false, tab: 'movies', count: 0, new: 0, cancelled: true, error: null })); return true;
+    case 'series.open': {
+      const eps = libs.tv.filter((r) => r.Show === args.show);
+      if (!eps.length) throw new Error('No such show');
+      const hue = (args.show.length * 47) % 360;
+      const still = (t, k) => poster(t, (hue + k * 13) % 360).replace('width="240" height="360"', 'width="400" height="225" viewBox="0 0 240 135" preserveAspectRatio="xMidYMid slice"');
+      const seasons = [...new Set(eps.map((e) => e.Season))].sort((a, b) => a - b);
+      return { key: '9', title: args.show, year: eps[0].Year, summary: 'A made-up show for the browser preview: a group of friends run a bar badly, for years.', studio: eps[0].Studio, rated: 'TV-MA', rating: '8.4',
+        genres: ['Comedy'], firstAired: eps[0].ReleaseDate, poster: '', fetchedAt: '2026-11-08 23:00',
+        seasons: seasons.map((n) => ({ key: 's' + n, index: n, title: `Season ${n}`, episodes: eps.filter((e) => e.Season === n).length, watched: eps.filter((e) => e.Season === n && e.ViewCount).length, poster: poster(`${args.show} S${n}`, (hue + n * 40) % 360) })),
+        episodes: eps.map((e) => ({ key: e.Rid, season: e.Season, index: e.Episode, title: `Chapter ${e.Episode}`, summary: 'Something happens.', aired: e.ReleaseDate, minutes: Math.round(e.RuntimeMin), watched: !!e.ViewCount, progress: e.ViewCount ? 0 : (e.Episode === 4 ? 40 : 0), thumb: still(`S${e.Season}E${e.Episode}`, e.Episode) })),
+        cast: ['Alex Hale', 'Sam Brandt', 'Jordan Pike', 'Robin Vale', 'Casey Moor', 'Drew Lin'].map((n, i) => ({ name: n, role: ['Charlie', 'Mac', 'Dee', 'Dennis', 'Frank', 'The Waitress'][i], photo: poster(n.split(' ')[0], (hue + i * 50) % 360) })),
+        related: libs.tv.filter((r) => r.Show !== args.show && r.Episode === 1 && r.Season === 1).slice(0, 8).map((r, i) => ({ key: 'r' + i, title: r.Show, year: r.Year, seasons: 2 + i, unwatched: i * 7, poster: r.Poster })) };
+    }
+    case 'image.data': return null;
     case 'collections.get': return collections;
     case 'collections.save': collections = args.collections; return collections;
     case 'summary.get': return { title: 'Recently added', items: [], updatedAt: null };

@@ -61,6 +61,17 @@ $file = [IO.File]::ReadAllText((Join-Path $data 'collections.json'))
 Check ($file -match 'D:\\\\Films\\\\Local.mkv' -and $file -match 'p:102' -and $file -match '"Type":\s*"rule"') 'saving from the page keeps the window app''s ids and format'
 [void](Cmd 3 'scan.start' @{ tab = 'tv' }); $e = Wait-Scan
 Check ($e -match '"count":10') 'TV scan finished with 10 episodes'
+$sr = Cmd 20 'series.open' @{ show = 'Show A'; ep = '1001' }
+Check ($sr -match '"loading":true') 'opening a show fetches it from Plex'
+$ev = ''; for ($k = 0; $k -lt 300 -and $ev -notmatch '"event":"series","data":\{"show":"Show A","running":false'; $k++) { $ev += (@(Receive-DashEvents) -join ''); Start-Sleep -Milliseconds 100 }
+Check ($ev -match '"running":false,"error":null') 'the show fetch finishes'
+$sr = Cmd 21 'series.open' @{ show = 'Show A'; ep = '1001' }
+$sd = ($sr | ConvertFrom-Json).data
+Check ($sd.seasons.Count -eq 2 -and $sd.episodes.Count -eq 5 -and $sd.cast.Count -eq 5 -and $sd.related.Count -eq 2) 'seasons, episodes, cast and related shows'
+Check ($sd.episodes[0].watched -eq $true -and $sd.episodes[4].watched -eq $false -and $sd.episodes[0].thumb -match '^series/img/') 'watched marks and episode stills'
+Check (Test-Path -LiteralPath (Join-Path $data ('Dashboard\' + ($sd.cast[0].photo -replace '/', '\')))) 'cast photos saved in the cache'
+Check ((Cmd 22 'image.data' @{ path = $sd.seasons[0].poster }) -match 'data:image/jpeg;base64') 'a season poster can be read for its colours'
+Check ((Cmd 23 'image.data' @{ path = '..\settings.json' }) -match '"ok":false') 'image.data only reads cached pictures'
 Start-DashWorker
 Check ($null -eq (Get-DashStatus).Badge.Count) 'badge clears when the tab is shown'
 [void](Cmd 4 'scan.start' @{ tab = 'movies'; rebuild = $true }); Start-Sleep -Milliseconds 150; Stop-DashTraffic; $e = Wait-Scan

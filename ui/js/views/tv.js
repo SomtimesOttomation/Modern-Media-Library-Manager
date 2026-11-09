@@ -5,6 +5,7 @@ import { h } from '../util.js';
 import { esc, num, fmtSize, posterHtml, tileHtml, searchRows, chipsHtml, fillWall, sortMenu } from '../common.js';
 import * as dashboard from './stats.js';
 import { collectionMenu } from './collections.js';
+import * as series from './series.js';
 import { openCard, openShow, showSummary } from './card.js';
 import { vgrid } from './vgrid.js';
 import { stateBox, gridColumns, cellHtml, colLabel, chooseColumns, viewSeg, viewMode } from './library.js';
@@ -34,6 +35,7 @@ function shows(L) {
 }
 
 export function mount(ctx) {
+  if (ctx.arg) { ctx.series = true; return series.mount(ctx); }        // #/tv/<show>: the series view
   const L = S.state.libs.tv;
   let grid = null, stopWall = null, stopDash = null;
   const open = new Set();                 // expanded shows ('s:name') and seasons ('s:name|n')
@@ -76,7 +78,7 @@ export function mount(ctx) {
       const years = (sh) => (!sh.sum.y0 ? '' : sh.sum.y0 === sh.sum.y1 ? String(sh.sum.y0) : `${sh.sum.y0}–${sh.sum.y1}`);
       stopWall = fillWall(wall, list, (sh) => tileHtml({ key: sh.name, poster: posterHtml(sh.poster, sh.name), title: sh.name,
         sub: [years(sh), `${sh.nSeasons} season${sh.nSeasons === 1 ? '' : 's'}`, `${sh.eps.length} ep.`].filter(Boolean).join(' · '), res: '', hdr: '', rating: 0 }));
-      wall.addEventListener('click', (e) => { const t = e.target.closest('.pc'); if (t) { const sh = byKey.get(t.dataset.k); if (sh) openShow(sh.name, sh.eps, ctx.toast); } });
+      wall.addEventListener('click', (e) => { const t = e.target.closest('.pc'); if (t) location.hash = `#/tv/${encodeURIComponent(t.dataset.k)}`; });
       return;
     }
     // grid: flatten the open parts of the tree
@@ -119,7 +121,8 @@ export function mount(ctx) {
         const e = it.e, t = String(e.Title).replace(/^.* - S\d+E\d+ - /, '');
         return `<tr class="ep" data-i="${i}"><td class="ttl" title="${esc(t)}">E${String(num(e.Episode)).padStart(2, '0')} · ${esc(t)}</td><td></td>${cols.map((c) => cellHtml(e, c, L)).join('')}</tr>`;
       },
-      onRow: (it) => {
+      onRow: (it, e) => {
+        if (e && e.target.closest('[data-open]')) return;
         if (it.k === 'ep') { openCard(it.e, ctx.toast); return; }
         const key = it.k === 'show' ? 's:' + it.sh.name : `s:${it.sh.name}|${it.n}`;
         if (open.has(key)) { open.delete(key); if (it.k === 'show') for (const k of [...open]) if (k.startsWith(key + '|')) open.delete(k); } else open.add(key);
@@ -139,6 +142,7 @@ export function mount(ctx) {
   return () => { stopWall?.(); grid?.destroy(); stopDash?.(); };
 }
 export function update(topics, ctx) {
+  if (ctx.series) { if (topics.has('library') || topics.has('traffic')) ctx.redraw?.(); return; }
   const L = S.state.libs.tv, changed = ctx.seen && (ctx.seen.status !== L.status || ctx.seen.rows !== L.rows);
   if (changed) ctx.seen = { status: L.status, rows: L.rows };
   if (changed || topics.has('query') || topics.has('collections') || (L.status !== 'ready' && (topics.has('plex') || topics.has('traffic') || topics.has('scan')))) ctx.redraw?.();

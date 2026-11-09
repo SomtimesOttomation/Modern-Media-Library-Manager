@@ -173,6 +173,33 @@ function Save-MmlmPlexPoster {
     ''
 }
 
+function Save-MmlmPlexImage {
+    # Any Plex image (poster, episode still, cast photo) resized by Plex's own image resizer and saved as <Folder>\<hash>.jpg.
+    # Returns the file name ('' when there is no image or Plex could not send it). Already saved = no request.
+    param([string]$BaseUrl, [string]$Token, [string]$ThumbPath, [int]$Width, [int]$Height, [string]$Folder)
+    if ([string]::IsNullOrWhiteSpace($ThumbPath)) { return '' }
+    $name = (Get-MmlmStringHash ($BaseUrl.ToLowerInvariant() + '|' + $ThumbPath + '|' + $Width + 'x' + $Height)).Substring(0, 24) + '.jpg'
+    $dest = Join-Path $Folder $name
+    if ((Test-Path -LiteralPath $dest) -and ((Get-Item -LiteralPath $dest).Length -gt 0)) { return $name }
+    $resp = $null
+    try {
+        Assert-MmlmTrafficAllowed
+        $req  = New-MmlmPlexRequest -BaseUrl $BaseUrl -Path '/photo/:/transcode' -Token $Token -Accept 'image/jpeg,image/*' `
+                    -Query @{ width = $Width; height = $Height; minSize = 1; upscale = 1; url = $ThumbPath }
+        $resp = $req.GetResponse()
+        $ms   = New-Object IO.MemoryStream
+        try {
+            $resp.GetResponseStream().CopyTo($ms)
+            Add-MmlmTraffic -Bytes $ms.Length
+            if ($ms.Length -gt 0) { [IO.File]::WriteAllBytes($dest, $ms.ToArray()); return $name }
+        }
+        finally { $ms.Dispose() }
+    }
+    catch { Add-MmlmTraffic -Failed }
+    finally { if ($resp) { $resp.Close() } }
+    ''
+}
+
 function Convert-MmlmPlexEpoch {
     param([string]$Seconds)
     $n = [long]0
@@ -620,6 +647,7 @@ Export-ModuleMember -Function @(
     'Get-MmlmPlexMetadataMap',
     'Get-MmlmPlexShowNode',
     'Save-MmlmPlexPoster',
+    'Save-MmlmPlexImage',
     'Convert-MmlmPlexEpoch',
     'Get-MmlmPlexTags',
     'Get-MmlmPlexRatings',

@@ -41,6 +41,7 @@ $script:Visible = $false
 $script:Exports = @{}
 $script:PageSettings = $null
 $script:UpdProc = $null
+$script:Series = $null
 
 # the data modules, by full path (an already loaded copy is reused)
 foreach ($m0 in @('MMLM.Library.psm1', 'MMLM.Plex.psm1', 'MMLM.Fetch.psm1')) { Import-Module (Join-Path $PSScriptRoot $m0) -DisableNameChecking }
@@ -444,6 +445,134 @@ function Watch-DropFolder {
     }
 }
 
+# ---------------------------------------------------------------- series view (one show's details from Plex, on demand)
+# Opening a show in the page asks your Plex server for what a scan does not keep: episode stills, summaries, watched
+# marks, cast and related shows. Saved in Dashboard\series (the page reads it from there); opening it again uses the
+# saved copy until you press Refresh. Counts as data traffic, so the pause switch stops it.
+$script:SeriesScript = {
+    param($ModuleFiles, $Ctx, $Job)
+    foreach ($m in $ModuleFiles) { Import-Module $m -DisableNameChecking }
+    Set-MmlmContext -Values $Ctx; Set-MmlmPlexContext -Values $Ctx
+    $S = $Ctx.Sync
+    $u = $Job.BaseUrl; $t = $Job.Token
+    $tag = { param($n, $c) @($n.SelectNodes($c) | ForEach-Object { $_.GetAttribute('tag') } | Where-Object { $_ }) }
+    $attr = { param($n, $a) [string]$n.GetAttribute($a) }
+    $int = { param($x) $v = 0; [void][int]::TryParse([string]$x, [ref]$v); $v }
+    try {
+        $S.Text = 'Finding the show on Plex...'
+        $showKey = [string]$Job.ShowKey
+        if (-not $showKey) {
+            $ep = (Get-MmlmPlexXml -BaseUrl $u -Path ('/library/metadata/' + $Job.EpKey) -Token $t).MediaContainer.SelectSingleNode('Video')
+            if ($null -eq $ep) { throw 'Plex no longer has this episode. Scan TV Shows again.' }
+            $showKey = $ep.GetAttribute('grandparentRatingKey')
+        }
+        $S.Text = 'Reading the show...'
+        $sx = (Get-MmlmPlexXml -BaseUrl $u -Path ('/library/metadata/' + $showKey) -Query @{ includeRelated = 1 } -Token $t).MediaContainer
+        $show = $sx.SelectSingleNode('Directory')
+        if ($null -eq $show) { throw 'Plex did not return the show.' }
+        $seasons = @((Get-MmlmPlexXml -BaseUrl $u -Path ('/library/metadata/' + $showKey + '/children') -Token $t).MediaContainer.SelectNodes('Directory') | Where-Object { $_.GetAttribute('type') -eq 'season' })
+        $S.Text = 'Reading the episodes...'
+        $eps = @((Get-MmlmPlexXml -BaseUrl $u -Path ('/library/metadata/' + $showKey + '/allLeaves') -Token $t).MediaContainer.SelectNodes('Video'))
+        $img = Join-Path $Job.CacheDir 'series\img'
+        if (-not (Test-Path -LiteralPath $img)) { New-Item -ItemType Directory -Path $img -Force | Out-Null }
+        $pic = { param($p, $w, $hgt) $f = Save-MmlmPlexImage -BaseUrl $u -Token $t -ThumbPath $p -Width $w -Height $hgt -Folder $img; if ($f) { 'series/img/' + $f } else { '' } }
+        # cast and related shows from the show page
+        $cast = @(foreach ($r in @($show.SelectNodes('Role') | Select-Object -First 30)) { [ordered]@{ name = & $attr $r 'tag'; role = & $attr $r 'role'; thumb = & $attr $r 'thumb' } })
+        $related = New-Object System.Collections.Generic.List[object]
+        foreach ($hub in @($sx.SelectNodes('Hub') + $show.SelectNodes('Related/Hub'))) {
+            foreach ($d in @($hub.SelectNodes('Directory'))) {
+                if ($related.Count -ge 24 -or (& $attr $d 'type') -ne 'show' -or (& $attr $d 'ratingKey') -eq $showKey) { continue }
+                if (@($related | Where-Object { $_.key -eq (& $attr $d 'ratingKey') }).Count) { continue }
+                $related.Add([ordered]@{ key = & $attr $d 'ratingKey'; title = & $attr $d 'title'; year = & $int (& $attr $d 'year'); seasons = & $int (& $attr $d 'childCount')
+                    unwatched = [Math]::Max(0, (& $int (& $attr $d 'leafCount')) - (& $int (& $attr $d 'viewedLeafCount'))); thumb = & $attr $d 'thumb' })
+            }
+        }
+        # images: posters first (they show at the top), then the episode stills, then faces
+        $total = 1 + $seasons.Count + $eps.Count + $cast.Count + $related.Count; $n = 0
+        $step = { $script:n++; $S.Pct = [int](100 * $script:n / [Math]::Max(1, $total)) }
+        $S.Text = 'Fetching pictures...'
+        $data = [ordered]@{
+            key = $showKey; title = & $attr $show 'title'; year = & $int (& $attr $show 'year'); summary = & $attr $show 'summary'; studio = & $attr $show 'studio'
+            rated = & $attr $show 'contentRating'; rating = & $attr $show 'rating'; audienceRating = & $attr $show 'audienceRating'; genres = @(& $tag $show 'Genre')
+            firstAired = & $attr $show 'originallyAvailableAt'; poster = (& $pic (& $attr $show 'thumb') 300 450); fetchedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm')
+        }
+        & $step
+        $data.seasons = @(foreach ($se in $seasons) {
+            if ($S.Cancel) { break }
+            $o = [ordered]@{ key = & $attr $se 'ratingKey'; index = & $int (& $attr $se 'index'); title = & $attr $se 'title'; episodes = & $int (& $attr $se 'leafCount')
+                watched = & $int (& $attr $se 'viewedLeafCount'); poster = (& $pic (& $attr $se 'thumb') 300 450) }
+            & $step; $o })
+        $data.episodes = @(foreach ($e in $eps) {
+            if ($S.Cancel) { break }
+            $o = [ordered]@{ key = & $attr $e 'ratingKey'; season = & $int (& $attr $e 'parentIndex'); index = & $int (& $attr $e 'index'); title = & $attr $e 'title'
+                summary = & $attr $e 'summary'; aired = & $attr $e 'originallyAvailableAt'; minutes = [int]((& $int (& $attr $e 'duration')) / 60000)
+                watched = ((& $int (& $attr $e 'viewCount')) -gt 0); progress = $(if ((& $int (& $attr $e 'duration')) -gt 0) { [int](100 * (& $int (& $attr $e 'viewOffset')) / (& $int (& $attr $e 'duration'))) } else { 0 })
+                thumb = (& $pic (& $attr $e 'thumb') 400 225) }
+            & $step; $o })
+        $data.cast = @(foreach ($c in $cast) { if ($S.Cancel) { break }; $c.photo = (& $pic $c.thumb 200 200); $c.Remove('thumb'); & $step; $c })
+        $data.related = @(foreach ($r in $related) { if ($S.Cancel) { break }; $r.poster = (& $pic $r.thumb 200 300); $r.Remove('thumb'); & $step; $r })
+        if ($S.Cancel) { $S.Cancelled = $true; return }
+        $dir = Join-Path $Job.CacheDir 'series'
+        $file = Join-Path $dir ($showKey + '.json')
+        [IO.File]::WriteAllText($file, (ConvertTo-Json -InputObject $data -Depth 6 -Compress), (New-Object Text.UTF8Encoding($false)))
+        $S.ShowKey = $showKey
+    }
+    catch { $S.Error = $_.Exception.Message }
+    finally { $S.Done = $true }
+}
+
+function Get-SeriesIndex {
+    # show name -> Plex show key, learnt on the first open (Library\series-index.json)
+    $p = Join-Path (Split-Path (Get-SnapshotFile 'tv')) 'series-index.json'
+    $o = @{}
+    if (Test-Path -LiteralPath $p) { try { foreach ($pr in ([IO.File]::ReadAllText($p) | ConvertFrom-Json).PSObject.Properties) { $o[$pr.Name] = [string]$pr.Value } } catch { Write-HostLog 'series index' $_ } }
+    $o
+}
+function Start-HostSeries {
+    param([string]$Show, [string]$EpKey, [bool]$Refresh)
+    if ($script:Series -and -not $script:Series.Sync.Done) {
+        if ($script:Series.Show -eq $Show) { return 'loading' }
+        $script:Series.Sync.Cancel = $true
+    }
+    $idx = Get-SeriesIndex
+    $key = [string]$idx[$Show]
+    if ($key -and -not $Refresh) {
+        $f = Join-Path $script:CacheDir ('series\' + $key + '.json')
+        if (Test-Path -LiteralPath $f) { return [IO.File]::ReadAllText($f) }
+    }
+    if ($script:Traffic.Halted) { throw 'Traffic is paused. Resume it first.' }
+    if (-not $EpKey -and -not $key) { throw 'This show was not scanned from Plex, so there is nothing more to fetch.' }
+    $set = Read-HostSettings
+    $token = ''
+    try { $token = Unprotect-MmlmPlexToken $set.PlexTokenProtected } catch { Write-HostLog 'token' $_ }
+    if ($script:Ctx.Debug -and $env:MMLM_HOST_TEST_TOKEN) { $token = $env:MMLM_HOST_TEST_TOKEN }
+    if (-not $set.PlexUrl -or -not $token) { throw 'Add your Plex server and token in Settings first.' }
+    $sync = [hashtable]::Synchronized(@{ Text = 'Starting...'; Pct = 0; Cancel = $false; Done = $false; Error = $null; Cancelled = $false; ShowKey = ''; Value = 0; Max = 0; PhaseLo = 0.0; PhaseHi = 1.0 })
+    $job = @{ BaseUrl = $set.PlexUrl; Token = $token; EpKey = $EpKey; ShowKey = $key; CacheDir = $script:CacheDir }
+    $ps = [powershell]::Create()
+    [void]$ps.AddScript($script:SeriesScript).AddArgument(@(Get-HostModuleFiles)).AddArgument((New-WorkerContext $sync)).AddArgument($job)
+    $script:Series = @{ Ps = $ps; Async = $ps.BeginInvoke(); Sync = $sync; Show = $Show; Last = '' }
+    'loading'
+}
+function Get-SeriesEvents {
+    $x = $script:Series
+    if (-not $x) { return }
+    $s = $x.Sync
+    if ($s.Done) {
+        $script:Series = $null
+        try { $x.Ps.Dispose() } catch { Write-HostLog 'series dispose' $_ }
+        if ($s.ShowKey) {
+            $idx = Get-SeriesIndex; $idx[$x.Show] = $s.ShowKey
+            try { [IO.File]::WriteAllText((Join-Path (Split-Path (Get-SnapshotFile 'tv')) 'series-index.json'), (ConvertTo-Json -InputObject $idx -Compress), (New-Object Text.UTF8Encoding($false))) } catch { Write-HostLog 'series index' $_ }
+        }
+        Push-HostEvent 'series' ([ordered]@{ show = $x.Show; running = $false; error = $s.Error; cancelled = [bool]$s.Cancelled })
+        return
+    }
+    $d = [ordered]@{ show = $x.Show; running = $true; pct = [int]$s.Pct; text = [string]$s.Text }
+    $j = ConvertTo-PageJson $d
+    if ($j -ne $x.Last) { $x.Last = $j; Push-HostEvent 'series' $d }
+}
+
 # ---------------------------------------------------------------- collections (the window app's collections.json, shared)
 # A file path never reaches the page: local ids ("f:<path>") go out as "h:<hash>" and come back through the id maps.
 function ConvertTo-PageId { param([string]$Id) if ($Id.StartsWith('f:')) { 'h:' + (Get-MmlmStringHash $Id.Substring(2)).Substring(0, 16) } else { $Id } }
@@ -623,6 +752,19 @@ $script:Commands = [ordered]@{
             $tok = ([string]$a.token).Trim()
             if ($tok) { Save-HostPlexSettings -Url $url -TokenProtected (Protect-MmlmPlexToken $tok) } else { Save-HostPlexSettings -Url $url -KeepToken }
             ConvertTo-PageJson (Get-PlexInfo) } }
+    'series.open'    = @{ Fetch = $false; Run = {
+            # the saved copy when there is one (no network); otherwise a Plex fetch starts and 'series' events follow
+            param($a)
+            $r = Start-HostSeries -Show ([string]$a.show) -EpKey ([string]$a.ep) -Refresh ([bool]$a.refresh)
+            if ($r -eq 'loading') { '{"loading":true}' } else { $r } } }
+    'image.data'     = @{ Fetch = $false; Run = {
+            # a cached picture as a data: URL, so the page can read its colours (series view background)
+            param($a)
+            $rel = ([string]$a.path) -replace '/', '\'
+            if ($rel -notmatch '^(series\\img|thumbs)\\[A-Za-z0-9._-]+\.(jpg|png)$') { throw 'Not a cached picture.' }
+            $f = Join-Path $script:CacheDir $rel
+            if (-not (Test-Path -LiteralPath $f) -or (Get-Item -LiteralPath $f).Length -gt 2MB) { return 'null' }
+            ConvertTo-PageJson ('data:image/jpeg;base64,' + [Convert]::ToBase64String([IO.File]::ReadAllBytes($f))) } }
     'collections.get' = @{ Fetch = $false; Run = { param($a) ConvertTo-Json -InputObject (Get-PageCollections) -Depth 6 -Compress } }
     'collections.save' = @{ Fetch = $false; Run = { param($a) Save-PageCollections $a.collections; ConvertTo-Json -InputObject (Get-PageCollections) -Depth 6 -Compress } }
     'open.url'       = @{ Fetch = $false; Run = { param($a) Open-HostUrl ([string]$a.url); 'true' } }
@@ -698,6 +840,7 @@ function Receive-DashEvents {
         Push-HostEvent 'library' @{ tab = $tab; ready = (-not $x.Sync.Error); error = $x.Sync.Error }
     }
     try { Get-UpdateEvents; Watch-DropFolder } catch { Write-HostLog 'updates' $_ }
+    try { Get-SeriesEvents } catch { Write-HostLog 'series' $_ }
     # one drain for every event source; whatever is over the cap waits for the next call (callers wrap the result in @())
     try {
         $msg = $null
@@ -727,6 +870,7 @@ function Stop-DashTraffic {
     if (-not $script:Traffic) { return }
     $script:Traffic.Halted = $true
     Stop-HostScan -Wait 0
+    if ($script:Series -and $script:Series.Sync) { $script:Series.Sync.Cancel = $true }
     Send-HostEventNow 'traffic' @{ stopped = $true }
 }
 

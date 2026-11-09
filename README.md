@@ -65,7 +65,7 @@ Collections work with both Plex and local scans. They are matched by IMDb or TMD
 
 ## Getting started
 
-1. Keep `Modern-Media-Library-Manager.ps1`, `dashboard-template.html`, `tv-template.html` and `Run-ModernMediaLibraryManager.cmd` together in one folder.
+1. Keep the whole folder together: `Modern-Media-Library-Manager.ps1`, the `modules` and `src` folders, `dashboard-template.html`, `tv-template.html`, `Update-MMLM.ps1`, `Apply-Update.ps1`, `VERSION` and `Run-ModernMediaLibraryManager.cmd`.
 2. If Windows blocked the download, run once in PowerShell: `Get-ChildItem . -Recurse | Unblock-File`
 3. Double-click `Run-ModernMediaLibraryManager.cmd`. It starts PowerShell in the mode WinForms needs.
 4. Pick a source, then click **Scan Media**.

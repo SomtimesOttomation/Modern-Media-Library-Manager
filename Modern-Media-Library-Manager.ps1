@@ -20,12 +20,14 @@
         Modern-Media-Library-Manager.ps1  this script
         dashboard-template.html    dashboard page the script fills with your data
         tv-template.html           TV Shows page (posters and the show / season / episode grid)
+        modules\MMLM.*.psm1        the data logic with no UI: Library (records, local scan), Plex, Fetch (online info)
+        src\Mmlm.Native.cs         small C# helper (TV page data, library snapshot), compiled on first use
         lib\                       WebView2 DLLs - created automatically on first use of the Dashboard view
                                    (or copy Microsoft.Web.WebView2.Core.dll, ...WinForms.dll and WebView2Loader.dll in yourself)
         Run-ModernMediaLibraryManager.cmd  optional double-click launcher
 
     Adding a metadata field = add one line to $script:FieldDefs below, then one assignment in
-    Get-MediaInfoRecord. The grid, detail view, CSV and dashboard JSON pick it up automatically.
+    Get-MmlmMediaInfoRecord. The grid, detail view, CSV and dashboard JSON pick it up automatically.
 
 .NOTES
     Requires Windows PowerShell 5.1+ and the "Get-MediaInfo" module (auto-installed on first run).
@@ -158,240 +160,6 @@ $script:TypeMap = @{ string = [string]; int = [int]; long = [long]; double = [do
 #endregion
 
 #region ---------------------------------------------------------------- Small helpers
-function ConvertTo-SafeInt {
-    param($Value)
-    $r = 0
-    if ([int]::TryParse([string]$Value, [Globalization.NumberStyles]::Any, $script:Culture, [ref]$r)) { $r } else { 0 }
-}
-function ConvertTo-SafeDouble {
-    param($Value)
-    $r = 0.0
-    if ([double]::TryParse([string]$Value, [Globalization.NumberStyles]::Any, $script:Culture, [ref]$r)) { $r } else { 0.0 }
-}
-
-function Join-UniqueList {
-    # "English / English / French" (one entry per track) -> "English; French"
-    param([string]$Text)
-    if ([string]::IsNullOrWhiteSpace($Text)) { return '' }
-    $parts = @($Text -split '\s*/\s*' | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
-    $parts -join '; '
-}
-
-function Get-StringHash {
-    param([Parameter(Mandatory)][string]$Text)
-    $sha = [System.Security.Cryptography.SHA1]::Create()
-    try   { ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Text)))).Replace('-', '') }
-    finally { $sha.Dispose() }
-}
-
-function New-EmptyRecord {
-    $rec = [ordered]@{}
-    foreach ($f in $script:Fields) {
-        $rec[$f.Name] = switch ($f.Type) {
-            'string' { '' }
-            'int'    { 0 }
-            'long'   { [long]0 }
-            'double' { 0.0 }
-            'bool'   { $false }
-        }
-    }
-    $rec
-}
-
-function Get-ResolutionClass {
-    param([int]$Width, [int]$Height)
-    if ($Width -le 0 -and $Height -le 0) { return 'Unknown' }
-    if     ($Width -ge 3400 -or $Height -ge 2000) { '4K' }
-    elseif ($Width -ge 2400 -or $Height -ge 1300) { '1440p' }
-    elseif ($Width -ge 1800 -or $Height -ge 1000) { '1080p' }
-    elseif ($Width -ge 1200 -or $Height -ge 700)  { '720p' }
-    else                                          { 'SD' }
-}
-
-function Get-HdrType {
-    param([string]$HdrFormat, [string]$Compat, [string]$Transfer)
-    if ($HdrFormat -match 'Dolby Vision')                                   { return 'Dolby Vision' }
-    if ($HdrFormat -match 'SMPTE ST 2094|HDR10\+' -or $Compat -match 'HDR10\+') { return 'HDR10+' }
-    if ($HdrFormat -match 'SMPTE ST 2086|HDR10'   -or $Compat -match 'HDR10')   { return 'HDR10' }
-    if ($Transfer  -match 'HLG|ARIB STD-B67')                               { return 'HLG' }
-    if ($Transfer  -match 'PQ|SMPTE ST 2084')                               { return 'HDR10' }
-    'SDR'
-}
-
-function Get-DolbyVisionInfo {
-    # Works out the Dolby Vision profile (5, 7, 8.1, 8.2, 8.4 ...), single vs dual layer and the base-layer
-    # compatibility from the several MediaInfo fields that describe it. MediaInfo cannot tell FEL from MEL -
-    # a dual-layer file is reported as 'Dual layer' until the optional dovi_tool probe has looked at it.
-    param([string]$Format, [string]$ProfileRaw, [string]$Settings, [string]$Compat, [string]$InfoString)
-
-    $r = [pscustomobject]@{ Profile = ''; Layer = ''; Base = '' }
-    if ($Format -notmatch 'Dolby Vision') { return $r }
-
-    $num = 0; $sub = 0
-    if ($ProfileRaw -match 'dv(?:he|h1|av1|a1)\.0*(\d+)') { $num = [int]$Matches[1] }
-    if ($InfoString -match 'Profile\s+(\d+)(?:\.(\d))?') {
-        if ($num -eq 0) { $num = [int]$Matches[1] }
-        if ($Matches[2]) { $sub = [int]$Matches[2] }
-    }
-
-    # what a player without Dolby Vision would show (the "base layer")
-    $base = 'None'
-    if     ($Compat -match 'HLG')           { $base = 'HLG' }
-    elseif ($Compat -match 'SDR')           { $base = 'SDR' }
-    elseif ($Compat -match 'HDR10|Blu-ray') { $base = 'HDR10' }
-    elseif ($sub -eq 1)                     { $base = 'HDR10' }
-    elseif ($sub -eq 2)                     { $base = 'SDR' }
-    elseif ($sub -eq 4)                     { $base = 'HLG' }
-    if ($num -eq 5) { $base = 'None' }               # profile 5 has no backwards-compatible fallback
-
-    $profile = ''
-    if ($num -gt 0) {
-        $profile = "$num"
-        if ($num -in 8, 10) {
-            switch ($base) {
-                'HDR10' { $profile = "$num.1" }
-                'SDR'   { $profile = "$num.2" }
-                'HLG'   { $profile = "$num.4" }
-            }
-        }
-    }
-
-    $dual = ($Settings -match '\bEL\b') -or ($num -in 4, 7)
-    $r.Profile = $profile
-    $r.Layer   = if ($dual) { 'Dual layer' } else { 'Single layer' }
-    $r.Base    = $base
-    $r
-}
-
-function Get-HdrStack {
-    # One readable label for the whole HDR picture, e.g. "Dolby Vision P8.1 + HDR10" or "Dolby Vision P7 FEL + HDR10".
-    param([string]$HdrType, $Dv, [bool]$HasHdr10Plus)
-    if ($HdrType -ne 'Dolby Vision') { return $HdrType }
-
-    $label = 'Dolby Vision'
-    if ($Dv.Profile) { $label += " P$($Dv.Profile)" }
-    if     ($Dv.Layer -eq 'FEL')        { $label += ' FEL' }
-    elseif ($Dv.Layer -eq 'MEL')        { $label += ' MEL' }
-    elseif ($Dv.Layer -eq 'Dual layer') { $label += ' (dual layer)' }
-
-    $fallback = @()
-    if ($Dv.Base -in 'HDR10', 'HLG', 'SDR') { $fallback += $Dv.Base }
-    if ($HasHdr10Plus)                      { $fallback += 'HDR10+' }
-    if ($fallback.Count -gt 0) { $label += ' + ' + ($fallback -join ' + ') }
-    $label
-}
-
-function Find-Tool {
-    # Looks for an executable in the lib folder next to the script first, then on PATH.
-    param([Parameter(Mandatory)][string]$Name)
-    $local = Join-Path $script:LibFolder $Name
-    if (Test-Path -LiteralPath $local) { return $local }
-    $cmd = Get-Command $Name -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($cmd) { return $cmd.Source }
-    $null
-}
-
-function Get-DolbyVisionLayerType {
-    # Optional: tells FEL from MEL by pulling ~20 seconds of video through ffmpeg and reading the Dolby Vision
-    # RPU with dovi_tool. Needs ffmpeg.exe and dovi_tool.exe (lib folder or PATH). Returns 'FEL', 'MEL' or ''.
-    param([Parameter(Mandatory)][string]$Path, [int]$DurationSec = 0)
-
-    $ffmpeg = Find-Tool 'ffmpeg.exe'
-    $dovi   = Find-Tool 'dovi_tool.exe'
-    if (-not $ffmpeg -or -not $dovi) { return '' }
-
-    Set-WorkerStage 'FEL probe: waiting for a free slot' 0 4
-    $work = Join-Path ([IO.Path]::GetTempPath()) ('dvprobe-' + [guid]::NewGuid().ToString('N'))
-    New-Item -Path $work -ItemType Directory -Force | Out-Null
-    # During a parallel scan only a couple of probes may run at once (ffmpeg reads a lot of video).
-    $gate = $script:FelGate
-    if ($gate) { [void]$gate.Wait() }
-    try {
-        $hevc = Join-Path $work 'sample.hevc'
-        $rpu  = Join-Path $work 'rpu.bin'
-        $seek = if ($DurationSec -gt 900) { 300 } else { 0 }      # skip studio logos on feature-length files
-
-        Set-WorkerStage 'FEL probe: sampling video (ffmpeg)' 1 4
-        & $ffmpeg -v error -nostdin -y -ss $seek -i $Path -map 0:v:0 -c:v copy -bsf:v hevc_mp4toannexb -t 20 -f hevc $hevc 2>$null
-        if (-not (Test-Path -LiteralPath $hevc) -or (Get-Item -LiteralPath $hevc).Length -eq 0) { return '' }
-
-        Set-WorkerStage 'FEL probe: extracting RPU' 2 4
-        & $dovi extract-rpu -i $hevc -o $rpu 2>$null | Out-Null
-        if (-not (Test-Path -LiteralPath $rpu)) { return '' }
-
-        Set-WorkerStage 'FEL probe: analyzing RPU' 3 4
-        $summary = (& $dovi info -i $rpu --summary 2>&1 | Out-String)
-        if ($summary -match '\bFEL\b') { return 'FEL' }
-        if ($summary -match '\bMEL\b') { return 'MEL' }
-        $frame = (& $dovi info -i $rpu -f 0 2>&1 | Out-String)
-        if ($frame -match '\bFEL\b') { return 'FEL' }
-        if ($frame -match '\bMEL\b') { return 'MEL' }
-        return ''
-    }
-    catch { return '' }
-    finally {
-        if ($gate) { [void]$gate.Release() }
-        Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
-    }
-}
-
-function Get-AudioLabel {
-    param([string]$Format, [string]$Commercial)
-    $c = ($Commercial -replace '(?i)\s+with\s+Dolby\s+Atmos', '').Trim()
-    if ($c) { return $c }
-    switch ($Format) {
-        'AC-3'    { 'Dolby Digital' }
-        'E-AC-3'  { 'Dolby Digital Plus' }
-        'MLP FBA' { 'Dolby TrueHD' }
-        default   { if ($Format) { $Format } else { 'Unknown' } }
-    }
-}
-
-function Get-AudioLayout {
-    param([int]$Channels)
-    switch ($Channels) {
-        0       { 'Unknown' }
-        1       { 'Mono' }
-        2       { 'Stereo' }
-        6       { '5.1' }
-        7       { '6.1' }
-        8       { '7.1' }
-        default { "$Channels ch" }
-    }
-}
-
-function Get-SourceFromName {
-    param([string]$Name)
-    if     ($Name -match '(?i)\bhybrid\b')                  { 'DV/HDR Hybrid' }      # e.g. a UHD remux with a Dolby Vision layer from a WEB-DL
-    elseif ($Name -match '(?i)remux')                      { 'Remux' }
-    elseif ($Name -match '(?i)blu-?ray|bdrip|brrip|\bbd\b'){ 'Blu-ray' }
-    elseif ($Name -match '(?i)web[-. ]?dl|\bamzn\b|\bnf\b|\bdsnp\b') { 'WEB-DL' }
-    elseif ($Name -match '(?i)web[-. ]?rip')               { 'WEBRip' }
-    elseif ($Name -match '(?i)\bweb\b')                    { 'WEB-DL' }
-    elseif ($Name -match '(?i)hdtv|pdtv')                  { 'HDTV' }
-    elseif ($Name -match '(?i)dvdrip|\bdvd\b')             { 'DVD' }
-    else                                                   { 'Unknown' }
-}
-
-function Resolve-SourceLabel {
-    # Fine-tunes an 'Unknown' source from the Dolby Vision profile (the file name always wins):
-    #   P7   -> UHD Blu-ray   (dual-layer is a disc format)
-    #   P5   -> WEB-DL        (streaming, no HDR10 fallback)
-    #   P8.1 -> DV/HDR Hybrid        (typically a UHD remux with the Dolby Vision layer taken from a WEB-DL)
-    # Guessed values carry "(inferred)" so they are never mistaken for facts.
-    param([string]$Source, [string]$FileName, [string]$HdrType, [string]$DvProfile)
-    if ($FileName -match '(?i)\bhybrid\b') { return 'DV/HDR Hybrid' }
-    if ($Source -like 'Hybrid*') { $Source = $Source -replace '^Hybrid', 'DV/HDR Hybrid' }      # label used by earlier builds
-    if ($Source -and $Source -ne 'Unknown') { return $Source }
-    if ($HdrType -ne 'Dolby Vision') { return 'Unknown' }
-    switch ($DvProfile) {
-        '7'   { 'UHD Blu-ray (inferred)' }
-        '5'   { 'WEB-DL (inferred)' }
-        '8.1' { 'DV/HDR Hybrid (inferred)' }
-        default { 'Unknown' }
-    }
-}
-
 # ---- Source labels, worked out from the measurements (file names are NOT used) -------------------------
 # Six plain labels plus DV/HDR Hybrid. Movies only: TV episodes keep the older name-based label until TV support is finished.
 $script:SourceLabels  = @('4K Remux', '4K Web-DL', 'Blu-ray Remux', 'Blu-ray Encode', 'DVD', 'DV/HDR Hybrid', 'Unknown')
@@ -460,8 +228,8 @@ function Set-SourceLabels {
         if ([string]$rec.Show) { continue }               # TV episodes: not yet
         if ([string]$rec.Type -eq 'Audio') { continue }
         $c = Get-SourceClass $rec
-        Set-RecField $rec 'Source' $c.Label
-        Set-RecField $rec 'SourceWhy' $c.Why
+        Set-MmlmRecField $rec 'Source' $c.Label
+        Set-MmlmRecField $rec 'SourceWhy' $c.Why
     }
 }
 #endregion
@@ -470,426 +238,12 @@ function Set-SourceLabels {
 $script:MediaInfoInitialized = $false
 $script:CurrentMi            = $null
 
-function Initialize-MediaInfoModule {
-    if ($script:MediaInfoInitialized) { return }
-
-    if (-not (Get-Module -ListAvailable -Name Get-MediaInfo)) {
-        Install-Module Get-MediaInfo -Scope CurrentUser -Force -ErrorAction Stop
-    }
-    $moduleInfo = Get-Module -ListAvailable -Name Get-MediaInfo | Sort-Object Version -Descending | Select-Object -First 1
-    if (-not $moduleInfo) { throw 'Get-MediaInfo module could not be found or installed.' }
-
-    $dllPath = Join-Path $moduleInfo.ModuleBase 'MediaInfoSharp.dll'
-    if (-not (Test-Path -LiteralPath $dllPath)) { throw "MediaInfoSharp.dll not found at '$dllPath'." }
-
-    Add-Type -Path $dllPath
-    $script:MediaInfoInitialized = $true
-}
-
-function Get-MiFirst {
-    # First non-empty value among several candidate parameter names, flattened to one line (for CSV-friendly clue columns).
-    param([string]$Kind, [string[]]$Names, [int]$Index = 0)
-    foreach ($n in $Names) {
-        $v = Get-Mi $Kind $n $Index
-        if ($v) { return (($v -replace '\s+', ' ').Trim()) }
-    }
-    ''
-}
-
-function Save-MediaInfoText {
-    # Keeps MediaInfo's complete text for one file, so tags we do not know about yet can be found by reading it.
-    # Best effort: if this MediaInfo wrapper exposes no Inform method, nothing is written.
-    param($Mi, [string]$Leaf)
-    try {
-        if (-not $script:InformFolder) { return '' }
-        if (-not (Test-Path -LiteralPath $script:InformFolder)) { New-Item -Path $script:InformFolder -ItemType Directory -Force | Out-Null }
-        try { [void]$Mi.Option('Complete', '1') } catch { }
-        $text = ''
-        foreach ($m in @('Inform', 'Get_Inform')) {
-            try { $text = [string]$Mi.$m(); if ($text) { break } } catch { }
-        }
-        if (-not $text) { return '' }
-        $bad  = [IO.Path]::GetInvalidFileNameChars()
-        $safe = -join ($Leaf.ToCharArray() | ForEach-Object { if ($bad -contains $_) { '_' } else { $_ } })
-        $path = Join-Path $script:InformFolder ($safe + '.txt')
-        [IO.File]::WriteAllText($path, $text, (New-Object Text.UTF8Encoding($false)))
-        $path
-    }
-    catch { '' }
-}
-
-function Get-Mi {
-    # Reads one value from the MediaInfo object currently being processed.
-    param([string]$Kind, [string]$Param, [int]$Index = 0)
-    try   { $val = $script:CurrentMi.GetInfo($Kind, $Index, $Param) }
-    catch { return '' }
-    if ($null -eq $val) { return '' }
-    ([string]$val).Trim()
-}
 #endregion
 
 #region ---------------------------------------------------------------- Sidecar files (NFO + poster) and NFO parsing
-function Get-ExternalAudioFiles {
-    # Audio files that sit beside a video and share its name ("Movie.flac", "Movie.en.dts", "Movie - 5.1.flac").
-    # They belong to that video; they are not separate titles.
-    param([Parameter(Mandatory)][System.IO.FileInfo]$File)
-    $found = @()
-    try {
-        $base = $File.BaseName.ToLowerInvariant()
-        foreach ($p in [IO.Directory]::GetFiles($File.DirectoryName)) {
-            $e = [IO.Path]::GetExtension($p).TrimStart('.').ToLowerInvariant()
-            if ($script:AudioExtensions -notcontains $e) { continue }
-            if ($script:VideoExtensions -contains $e) { continue }
-            if ([IO.Path]::GetFileNameWithoutExtension($p).ToLowerInvariant().StartsWith($base)) { $found += (New-Object IO.FileInfo($p)) }
-        }
-    }
-    catch { }
-    , $found
-}
-
-function Get-SidecarFiles {
-    param([Parameter(Mandatory)][System.IO.FileInfo]$File)
-
-    $result = [pscustomobject]@{ Nfo = ''; Poster = '' }
-    try {
-        $names = @{}
-        foreach ($p in [IO.Directory]::GetFiles($File.DirectoryName)) {
-            $names[[IO.Path]::GetFileName($p).ToLowerInvariant()] = $p
-        }
-        $base = $File.BaseName.ToLowerInvariant()
-
-        # NFO: "<file>.nfo" first, then movie.nfo, then any .nfo in the folder
-        foreach ($cand in @("$base.nfo", 'movie.nfo')) {
-            if ($names.ContainsKey($cand)) { $result.Nfo = $names[$cand]; break }
-        }
-        if (-not $result.Nfo) {
-            $anyNfo = $names.Keys | Where-Object { $_ -like '*.nfo' } | Sort-Object | Select-Object -First 1
-            if ($anyNfo) { $result.Nfo = $names[$anyNfo] }
-        }
-
-        # Poster: "<file>-poster.ext", "<file>.ext", then poster/folder/cover/movie/thumb.ext
-        $stems = @("$base-poster", $base) + $script:PosterNames
-        :search foreach ($stem in $stems) {
-            foreach ($ext in $script:ImageExtensions) {
-                $key = "$stem.$ext"
-                if ($names.ContainsKey($key)) { $result.Poster = $names[$key]; break search }
-            }
-        }
-    }
-    catch { }
-    $result
-}
-
-function Read-NfoRoot {
-    param([string]$NfoPath)
-    if (-not $NfoPath) { return $null }
-    try {
-        $raw = [IO.File]::ReadAllText($NfoPath, [Text.Encoding]::UTF8)
-        # The leading comma stops PowerShell from unrolling the XmlElement into its child nodes.
-        try { $xml = New-Object System.Xml.XmlDocument; $xml.LoadXml($raw); return ,$xml.DocumentElement }
-        catch {
-            # Some NFOs have junk (e.g. a URL) before/after the XML - grab the first element block.
-            $m = [regex]::Match($raw, '<(movie|episodedetails|tvshow)\b.*</\1>', 'Singleline')
-            if ($m.Success) { $xml = New-Object System.Xml.XmlDocument; $xml.LoadXml($m.Value); return ,$xml.DocumentElement }
-        }
-    }
-    catch { }
-    $null
-}
-
-function Get-NfoText {
-    param($Root, [string]$XPath, [int]$Max = 100)
-    if ($null -eq $Root) { return '' }
-    try {
-        $nodes = $Root.SelectNodes($XPath)
-        if ($null -eq $nodes -or $nodes.Count -eq 0) { return '' }
-        $vals = foreach ($n in $nodes) { $t = $n.InnerText.Trim(); if ($t) { $t } }
-        (@($vals) | Select-Object -First $Max) -join '; '
-    }
-    catch { '' }
-}
 #endregion
 
 #region ---------------------------------------------------------------- Record builder (with cache)
-function Get-MediaInfoCachePath {
-    param([Parameter(Mandatory)][System.IO.FileInfo]$File)
-    $key = '{0}|{1}|{2}' -f $File.FullName, $File.Length, $script:CacheVersion
-    Join-Path $script:CacheFolder ((Get-StringHash $key) + '.json')
-}
-
-function Repair-CachedRecord {
-    # PowerShell 7's ConvertFrom-Json turns ISO date strings into DateTime; keep them as plain text.
-    param($Rec)
-    foreach ($f in $script:Fields) {
-        if ($f.Type -eq 'string') {
-            $v = $Rec.($f.Name)
-            if ($v -is [datetime]) { $Rec.($f.Name) = $v.ToString('yyyy-MM-dd') }
-        }
-    }
-    $Rec.Source = Resolve-SourceLabel -Source ([string]$Rec.Source) -FileName ([string]$Rec.FileName) -HdrType ([string]$Rec.HDRType) -DvProfile ([string]$Rec.DVProfile)
-    $Rec
-}
-
-function Get-MediaInfoRecord {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory, ValueFromPipeline)][System.IO.FileInfo]$File,
-        [switch]$RebuildCache,
-        [switch]$DetectFel          # probe dual-layer Dolby Vision files with ffmpeg + dovi_tool to tell FEL from MEL
-    )
-
-    begin { Initialize-MediaInfoModule }
-
-    process {
-        $ext     = $File.Extension.TrimStart('.').ToLowerInvariant()
-        $isVideo = $script:VideoExtensions -contains $ext
-        $isAudio = (-not $isVideo) -and ($script:AudioExtensions -contains $ext)
-        if (-not $isVideo -and -not $isAudio) { return }
-
-        $cacheFile = Get-MediaInfoCachePath -File $File
-        Set-WorkerStage 'Checking cache' 1 4
-        if ($RebuildCache) { Remove-Item -LiteralPath $cacheFile -Force -ErrorAction SilentlyContinue }
-
-        if (Test-Path -LiteralPath $cacheFile) {
-            try {
-                Set-WorkerStage 'Reading cache' 2 4
-                $cached = [IO.File]::ReadAllText($cacheFile, [Text.Encoding]::UTF8) | ConvertFrom-Json
-                # Records saved before the clue columns existed are read again once (the file is re-opened below).
-                if ($cached -and ($null -ne $cached.PSObject.Properties['WritingApp'])) {
-                    $cached = Repair-CachedRecord $cached
-                    # A cached dual-layer file can be upgraded to FEL/MEL later, when the probe is switched on.
-                    if ($DetectFel -and $cached.DVLayer -eq 'Dual layer') {
-                        $layer = Get-DolbyVisionLayerType -Path $File.FullName -DurationSec ([int]([double]$cached.RuntimeMin * 60))
-                        if ($layer) {
-                            $cached.DVLayer  = $layer
-                            $cached.HDRStack = ([string]$cached.HDRStack) -replace '\(dual layer\)', $layer
-                            try { [IO.File]::WriteAllText($cacheFile, ($cached | ConvertTo-Json -Depth 3), (New-Object Text.UTF8Encoding($false))) } catch { }
-                        }
-                    }
-                    return $cached
-                }
-            }
-            catch { }   # corrupt cache entry - rebuild below
-        }
-
-        $mi = $null
-        try {
-            Set-WorkerStage 'Opening file (MediaInfo)' 2 4
-            $mi = New-Object MediaInfoSharp -ArgumentList $File.FullName
-            $script:CurrentMi = $mi
-            Set-WorkerStage 'Reading streams and tags' 3 4
-
-            $rec   = New-EmptyRecord
-            $kind  = if ($isVideo) { 'Video' } else { 'Audio' }
-            $side  = Get-SidecarFiles -File $File
-            $root  = if ($isVideo) { Read-NfoRoot -NfoPath $side.Nfo } else { $null }
-
-            # ---- file / container ------------------------------------------------
-            $rec.FileName           = $File.Name
-            $rec.Ext                = $ext
-            $rec.Type               = $kind
-            $rec.Container          = Get-Mi 'General' 'Format'
-            $rec.FileSizeGB         = [math]::Round($File.Length / 1GB, 2)
-            $rec.RuntimeMin         = [math]::Round((ConvertTo-SafeDouble (Get-Mi 'General' 'Duration')) / 60000, 2)
-            $overall                = ConvertTo-SafeDouble (Get-Mi 'General' 'OverallBitRate')
-            $rec.OverallBitRateMbps = [math]::Round($overall / 1000000, 2)
-            $rec.Source             = Get-SourceFromName $File.BaseName
-            $rec.Added              = $File.CreationTime.ToString('yyyy-MM-dd')
-            $rec.Modified           = $File.LastWriteTime.ToString('yyyy-MM-dd')
-            $rec.Directory          = $File.DirectoryName
-            $rec.FullPath           = $File.FullName
-            $rec.HasNfo             = [bool]$side.Nfo
-            $rec.HasPoster          = [bool]$side.Poster
-            $rec.PosterPath         = $side.Poster
-
-            # ---- source clues -------------------------------------------------------
-            $rec.WritingApp      = Get-MiFirst 'General' @('Encoded_Application/String', 'Encoded_Application')
-            $rec.WritingLib      = Get-MiFirst 'General' @('Encoded_Library/String', 'Encoded_Library')
-            $rec.EmbeddedTitle   = Get-MiFirst 'General' @('Movie', 'Title')
-            $rec.EmbeddedComment = Get-MiFirst 'General' @('Comment', 'Description')
-            $rec.OriginalMedia   = Get-MiFirst 'General' @('OriginalSourceMedium', 'Original_Source_Medium', 'ORIGINAL_MEDIA_TYPE', 'OriginalMediaType', 'Source')
-            $rec.EncodedDate     = Get-MiFirst 'General' @('Encoded_Date', 'Tagged_Date')
-            $chBegin = ConvertTo-SafeInt (Get-Mi 'Menu' 'Chapters_Pos_Begin'); $chEnd = ConvertTo-SafeInt (Get-Mi 'Menu' 'Chapters_Pos_End')
-            $rec.Chapters        = if ($chEnd -gt $chBegin) { $chEnd - $chBegin } else { 0 }
-            $rec.AudioFormatList = Join-UniqueList (Get-Mi 'General' 'Audio_Format_List')
-            $trackLabels = @()
-            $trackCount  = [math]::Min((ConvertTo-SafeInt (Get-Mi 'General' 'AudioCount')), 8)
-            for ($ti = 0; $ti -lt $trackCount; $ti++) {
-                $tc  = Get-Mi 'Audio' 'Format_Commercial_IfAny' $ti
-                $tl  = Get-AudioLabel -Format (Get-Mi 'Audio' 'Format' $ti) -Commercial $tc
-                $tch = ConvertTo-SafeInt (Get-Mi 'Audio' 'Channels' $ti)
-                if ($tc -match 'Atmos') { $tl += ' Atmos' }
-                $trackLabels += ('{0} {1}' -f $tl, (Get-AudioLayout -Channels $tch))
-            }
-            if ($isVideo) {
-                # external audio beside the video (e.g. Movie.flac next to Movie.mkv) is listed, marked "(external)"
-                foreach ($extAudio in @(Get-ExternalAudioFiles -File $File)) {
-                    $mi2 = $null; $savedMi = $script:CurrentMi
-                    try {
-                        $mi2 = New-Object MediaInfoSharp -ArgumentList $extAudio.FullName
-                        $script:CurrentMi = $mi2
-                        $xf  = Get-Mi 'Audio' 'Format'
-                        $xl  = Get-AudioLabel -Format $xf -Commercial (Get-Mi 'Audio' 'Format_Commercial_IfAny')
-                        $xch = ConvertTo-SafeInt (Get-Mi 'Audio' 'Channels')
-                        $trackLabels += ('{0} {1} (external)' -f $xl, (Get-AudioLayout -Channels $xch))
-                        $rec.AudioFormatList = (@($rec.AudioFormatList, ($xf + ' (external)')) | Where-Object { $_ }) -join '; '
-                    }
-                    catch { }
-                    finally { $script:CurrentMi = $savedMi; if ($mi2) { $mi2.Dispose() } }
-                }
-            }
-            $rec.AudioTrackList  = $trackLabels -join '; '
-            $rec.InformFile      = Save-MediaInfoText -Mi $mi -Leaf ([IO.Path]::GetFileNameWithoutExtension($File.Name) + '-' + (Get-StringHash $File.FullName).Substring(0, 6))
-
-            # ---- video -----------------------------------------------------------
-            if ($isVideo) {
-                $w   = ConvertTo-SafeInt (Get-Mi 'Video' 'Width')
-                $h   = ConvertTo-SafeInt (Get-Mi 'Video' 'Height')
-                $fps = ConvertTo-SafeDouble (Get-Mi 'Video' 'FrameRate')
-                $vbr = ConvertTo-SafeDouble (Get-Mi 'Video' 'BitRate')
-                if ($vbr -le 0) { $vbr = ConvertTo-SafeDouble (Get-Mi 'Video' 'BitRate_Nominal') }
-                if ($vbr -le 0) { $vbr = $overall }
-
-                $codec = Get-Mi 'Video' 'Format'
-                if ($codec -eq 'MPEG Video') { $codec = 'MPEG' }
-
-                $rec.Width             = $w
-                $rec.Height            = $h
-                $rec.Resolution        = if ($w -gt 0) { "${w}x${h}" } else { '' }
-                $rec.ResolutionClass   = Get-ResolutionClass -Width $w -Height $h
-                $rec.DAR               = ConvertTo-SafeDouble (Get-Mi 'Video' 'DisplayAspectRatio')
-                $rec.VideoCodec        = $codec
-                $rec.FormatProfile     = Get-Mi 'Video' 'Format_Profile'
-                $rec.VideoCodecID      = Get-Mi 'Video' 'CodecID'
-                $rec.VideoBitRateMbps  = [math]::Round($vbr / 1000000, 2)
-                $rec.FrameRate         = $fps
-                $rec.FrameRateMode     = Get-Mi 'Video' 'FrameRate_Mode'
-                $rec.BitsPerPixel      = if (($w * $h * $fps) -gt 0 -and $vbr -gt 0) { [math]::Round($vbr / ($w * $h * $fps), 3) } else { 0.0 }
-                $rec.ScanType          = Get-Mi 'Video' 'ScanType'
-                $rec.BitDepth          = ConvertTo-SafeInt (Get-Mi 'Video' 'BitDepth')
-                $rec.ChromaSubsampling = Get-Mi 'Video' 'ChromaSubsampling'
-                $rec.ColorRange        = Get-Mi 'Video' 'colour_range'
-                $enc = Get-Mi 'Video' 'Encoded_Library_Name'
-                if (-not $enc) { $enc = Get-Mi 'General' 'Encoded_Library_Name' }
-                $rec.Encoder           = $enc
-                $rec.VideoTitle        = Get-Mi 'Video' 'Title'
-                $rec.VideoEncLib       = Get-MiFirst 'Video' @('Encoded_Library/String', 'Encoded_Library')
-                $encSettings           = Get-MiFirst 'Video' @('Encoded_Library_Settings')
-                $rec.VideoEncSettings  = if ($encSettings.Length -gt 300) { $encSettings.Substring(0, 300) } else { $encSettings }
-
-                $hdrFormat   = Get-Mi 'Video' 'HDR_Format'
-                $hdrCompat   = Get-Mi 'Video' 'HDR_Format_Compatibility'
-                $hdrProfRaw  = Get-Mi 'Video' 'HDR_Format_Profile'
-                $hdrSettings = Get-Mi 'Video' 'HDR_Format_Settings'
-                $hdrString   = Get-Mi 'Video' 'HDR_Format/String'
-                $transfer    = Get-Mi 'Video' 'transfer_characteristics'
-
-                $rec.HDRType           = Get-HdrType -HdrFormat $hdrFormat -Compat $hdrCompat -Transfer $transfer
-                $dvInfo                = Get-DolbyVisionInfo -Format $hdrFormat -ProfileRaw $hdrProfRaw -Settings $hdrSettings -Compat $hdrCompat -InfoString $hdrString
-                $hasHdr10Plus          = [bool](($hdrFormat -match 'SMPTE ST 2094|HDR10\+') -or ($hdrCompat -match 'HDR10\+'))
-                if ($DetectFel -and $dvInfo.Layer -eq 'Dual layer') {
-                    $probe = Get-DolbyVisionLayerType -Path $File.FullName -DurationSec ([int]($rec.RuntimeMin * 60))
-                    if ($probe) { $dvInfo.Layer = $probe }
-                }
-                $rec.DVProfile         = $dvInfo.Profile
-                $rec.DVLayer           = $dvInfo.Layer
-                $rec.DVBase            = $dvInfo.Base
-                $rec.HasHDR10Plus      = $hasHdr10Plus
-                $rec.HDRStack          = Get-HdrStack -HdrType $rec.HDRType -Dv $dvInfo -HasHdr10Plus $hasHdr10Plus
-                $rec.Source            = Resolve-SourceLabel -Source $rec.Source -FileName $File.Name -HdrType $rec.HDRType -DvProfile $rec.DVProfile
-                $rec.HDRFormat         = $hdrFormat
-                $hdrProfile            = $hdrProfRaw -replace '/', ''
-                $rec.HDRFormatProfile  = $hdrProfile
-                $rec.HDRFormatLevel    = (Get-Mi 'Video' 'HDR_Format_Level') -replace '/', ''
-                $rec.HDRFormatSettings = (Get-Mi 'Video' 'HDR_Format_Settings') -replace '/', ''
-                $rec.HDRFormatCompat   = $hdrCompat
-                $rec.MaxCLL            = Get-Mi 'Video' 'MaxCLL'
-                $rec.MaxFALL           = Get-Mi 'Video' 'MaxFALL'
-                $rec.MasteringDisplay  = Get-Mi 'Video' 'MasteringDisplay_Luminance'
-                $rec.Primaries         = Get-Mi 'Video' 'colour_primaries'
-                $rec.Transfer          = $transfer
-                $rec.Matrix            = Get-Mi 'Video' 'matrix_coefficients'
-            }
-
-            # ---- audio (first track) ---------------------------------------------
-            $aFormat = Get-Mi 'Audio' 'Format'
-            $aComm   = Get-Mi 'Audio' 'Format_Commercial_IfAny'
-            $aAddl   = Get-Mi 'Audio' 'Format_AdditionalFeatures'
-            $ch      = ConvertTo-SafeInt (Get-Mi 'Audio' 'Channels')
-            if ($ch -le 0) { $ch = ConvertTo-SafeInt (Get-Mi 'Audio' 'Channel(s)') }
-
-            $rec.AudioFormat       = Get-AudioLabel -Format $aFormat -Commercial $aComm
-            $rec.ObjectAudio       = if ($aComm -match 'Atmos' -or $aAddl -match 'JOC') { 'Dolby Atmos' }
-                                     elseif ($aAddl -match 'XLL X' -or $aComm -match 'DTS:X') { 'DTS:X' }
-                                     else { '' }
-            $rec.AudioTitle        = Get-Mi 'Audio' 'Title'
-            $rec.AudioCompression  = Get-Mi 'Audio' 'Compression_Mode'
-            $rec.AudioBitRateMode  = Get-Mi 'Audio' 'BitRate_Mode'
-            $rec.AudioBitRateKbps  = [int][math]::Round((ConvertTo-SafeDouble (Get-Mi 'Audio' 'BitRate')) / 1000)
-            $rec.AudioChannels     = $ch
-            $rec.AudioLayout       = Get-AudioLayout -Channels $ch
-            $rec.AudioSamplingRate = Get-Mi 'Audio' 'SamplingRate'
-            $rec.AudioBitDepth     = Get-Mi 'Audio' 'BitDepth'
-            $rec.AudioLanguages    = Join-UniqueList (Get-Mi 'General' 'Audio_Language_List')
-            $rec.AudioTracks       = ConvertTo-SafeInt (Get-Mi 'General' 'AudioCount')
-
-            # ---- subtitles --------------------------------------------------------
-            $rec.SubtitleTracks    = ConvertTo-SafeInt (Get-Mi 'General' 'TextCount')
-            $rec.SubtitleLanguages = Join-UniqueList (Get-Mi 'General' 'Text_Language_List')
-            $rec.SubtitleFormats   = Join-UniqueList (Get-Mi 'General' 'Text_Format_List')
-
-            # ---- descriptive metadata (NFO, falling back to file tags / file name) -
-            $title = Get-NfoText $root 'title'
-            if (-not $title) { $title = Get-Mi 'General' 'Title' }
-            if (-not $title) { $title = $File.BaseName }
-            $rec.Title       = $title
-            $rec.ReleaseDate = Get-NfoText $root 'premiered'
-            if (-not $rec.ReleaseDate) { $rec.ReleaseDate = Get-NfoText $root 'releasedate' }
-            $year = ConvertTo-SafeInt (Get-NfoText $root 'year')
-            if ($year -le 0 -and $rec.ReleaseDate.Length -ge 4) { $year = ConvertTo-SafeInt $rec.ReleaseDate.Substring(0, 4) }
-            $rec.Year        = $year
-            $rec.Genre       = Get-NfoText $root 'genre'
-            $mpaa            = (Get-NfoText $root 'mpaa') -replace '(?i)^\s*(rated|usa?)[:\s]+', ''
-            $rec.MPAARating  = $mpaa.Trim()
-            $rating = Get-NfoText $root "ratings/rating[@name='imdb']/value"
-            $rec.RatingSource = if ($rating) { 'IMDb' } else { '' }
-            if (-not $rating) { $rating = (Get-NfoText $root 'ratings/rating/value') -split ';' | Select-Object -First 1 }
-            if (-not $rating) { $rating = Get-NfoText $root 'rating' }
-            $rec.Rating      = ConvertTo-SafeDouble $rating
-            $votes = Get-NfoText $root "ratings/rating[@name='imdb']/votes"
-            if (-not $votes) { $votes = Get-NfoText $root 'votes' }
-            $rec.Votes       = ConvertTo-SafeInt $votes
-            $rec.Studio      = Get-NfoText $root 'studio' 1
-            $rec.Director    = Get-NfoText $root 'director'
-            $rec.Cast        = Get-NfoText $root 'actor/name' 6
-            $coll = Get-NfoText $root 'set/name'
-            if (-not $coll) { $coll = Get-NfoText $root 'set[not(*)]' }
-            $rec.Collection  = $coll
-            $rec.Country     = Get-NfoText $root 'country'
-            $rec.Tagline     = Get-NfoText $root 'tagline'
-            $rec.Plot        = (Get-NfoText $root 'plot') -replace '\s+', ' '
-            $imdb = Get-NfoText $root "uniqueid[@type='imdb']"
-            if (-not $imdb) { $imdb = Get-NfoText $root 'imdbid' }
-            if (-not $imdb) { $idTxt = Get-NfoText $root 'id'; if ($idTxt -match '^tt\d+$') { $imdb = $idTxt } }
-            $rec.IMDBID      = $imdb
-            $tmdb = Get-NfoText $root "uniqueid[@type='tmdb']"
-            if (-not $tmdb) { $tmdb = Get-NfoText $root 'tmdbid' }
-            $rec.TMDBID      = $tmdb
-
-            $result = [pscustomobject]$rec
-            Set-WorkerStage 'Writing cache' 4 4
-            [IO.File]::WriteAllText($cacheFile, ($result | ConvertTo-Json -Depth 3), (New-Object Text.UTF8Encoding($false)))
-            $result
-        }
-        catch {
-            Write-Warning "Failed to read media info for '$($File.FullName)': $_"
-        }
-        finally {
-            $script:CurrentMi = $null
-            if ($mi) { $mi.Dispose() }
-        }
-    }
-}
 #endregion
 
 #region ---------------------------------------------------------------- Plex source
@@ -902,24 +256,6 @@ $script:PlexTimeoutMs = 30000
 $script:PlexClientId  = 'get-mediainfogui-' + $env:COMPUTERNAME
 # Shared with the background scan worker (a synchronized hashtable is safe to touch from both threads).
 $script:Sync = [hashtable]::Synchronized(@{ Text = ''; Value = 0; Max = 0; Total = 0; Cancel = $false; Done = $false; Error = $null; Results = $null; Partial = $null; PhaseLo = 0.0; PhaseHi = 1.0 })
-function Test-ScanCancelled { [bool]$script:Sync.Cancel }
-function Get-NowMs { [Diagnostics.Stopwatch]::GetTimestamp() * 1000.0 / [Diagnostics.Stopwatch]::Frequency }
-function Set-WorkerStage {
-    # Tells the Workers pane what this reader is doing right now (no-op outside a parallel scan).
-    param([string]$Text, [int]$Step = 0, [int]$Of = 0)
-    $w = $script:WStat
-    if ($w) { $w.Stage = $Text; $w.Step = $Step; $w.Of = $Of }
-}
-function Set-ScanPhase {
-    # Starts a new step (reading details, posters, fetching info...): the STEP bar goes back to 0 % and its ETA starts over.
-    # Lo..Hi is the slice (0..1) of the OVERALL bar that this step covers.
-    param([double]$Lo = 0.0, [double]$Hi = 1.0)
-    $sy = $script:Sync
-    $sy.Max = 0; $sy.Value = 0
-    $sy.PhaseLo = $Lo; $sy.PhaseHi = $Hi
-    $sy.PhaseId = 1 + [int]$sy.PhaseId
-}
-
 function Protect-PlexToken {
     # DPAPI: only this Windows user, on this computer, can decrypt the result.
     param([string]$Plain)
@@ -939,645 +275,18 @@ function Unprotect-PlexToken {
     catch { '' }
 }
 
-function New-PlexRequest {
-    param([string]$BaseUrl, [string]$Path, [hashtable]$Query = @{}, [string]$Token, [string]$Accept = 'application/xml')
-    $parts = @()
-    foreach ($k in $Query.Keys) { $parts += ('{0}={1}' -f [Uri]::EscapeDataString([string]$k), [Uri]::EscapeDataString([string]$Query[$k])) }
-    $url = $BaseUrl.TrimEnd('/') + $Path
-    if ($parts.Count -gt 0) { $url += '?' + ($parts -join '&') }
-
-    $req = [Net.HttpWebRequest]::Create($url)
-    $req.Method           = 'GET'
-    $req.Timeout          = $script:PlexTimeoutMs
-    $req.ReadWriteTimeout = $script:PlexTimeoutMs
-    $req.Accept           = $Accept
-    $req.Headers.Add('X-Plex-Token', $Token)                       # header, not query string, so it never lands in a URL log
-    $req.Headers.Add('X-Plex-Client-Identifier', $script:PlexClientId)
-    $req.Headers.Add('X-Plex-Product', 'Modern Media Library Manager')
-    $req
-}
-
-function Get-PlexXml {
-    param([string]$BaseUrl, [string]$Path, [hashtable]$Query = @{}, [string]$Token)
-    $req  = New-PlexRequest -BaseUrl $BaseUrl -Path $Path -Query $Query -Token $Token
-    $resp = $null
-    $text = ''
-    try {
-        $resp = $req.GetResponse()
-        $sr = New-Object IO.StreamReader($resp.GetResponseStream(), [Text.Encoding]::UTF8)
-        try { $text = $sr.ReadToEnd() } finally { $sr.Dispose() }
-    }
-    catch [Net.WebException] {
-        $we = $_.Exception
-        if ($we.Response) {
-            $code = [int]$we.Response.StatusCode
-            if ($code -eq 401) { throw 'Plex rejected the token (401 Unauthorized).' }
-            throw ("Plex returned HTTP {0} for {1}" -f $code, $Path)
-        }
-        throw ("Could not reach Plex at {0}: {1}" -f $BaseUrl, $we.Message)
-    }
-    finally { if ($resp) { $resp.Close() } }
-
-    $doc = New-Object Xml.XmlDocument
-    $doc.LoadXml($text)
-    , $doc                                  # the comma stops PowerShell from unrolling the document into its child nodes
-}
-
-function Get-PlexSections {
-    param([string]$BaseUrl, [string]$Token)
-    $doc = Get-PlexXml -BaseUrl $BaseUrl -Path '/library/sections' -Token $Token
-    foreach ($d in $doc.SelectNodes('/MediaContainer/Directory')) {
-        [pscustomobject]@{ Key = $d.GetAttribute('key'); Title = $d.GetAttribute('title'); Type = $d.GetAttribute('type') }
-    }
-}
-
-function Get-PlexStubs {
-    # One light-weight entry (ratingKey + updatedAt) per movie / episode in a library section.
-    param([string]$BaseUrl, [string]$Token, $Section)
-    $stubs = New-Object System.Collections.Generic.List[object]
-    $start = 0; $total = [int]::MaxValue
-    while ($start -lt $total) {
-        if (Test-ScanCancelled) { break }
-        $q = @{ 'X-Plex-Container-Start' = $start; 'X-Plex-Container-Size' = 200 }
-        if ($Section.Type -eq 'show') { $q['type'] = 4 }                 # 4 = episodes
-        $doc   = Get-PlexXml -BaseUrl $BaseUrl -Path ('/library/sections/' + $Section.Key + '/all') -Query $q -Token $Token
-        $t     = $doc.DocumentElement.GetAttribute('totalSize')
-        if ($t) { $total = [int]$t }
-        $nodes = @($doc.SelectNodes('/MediaContainer/Video'))
-        if ($nodes.Count -eq 0) { break }
-        foreach ($n in $nodes) {
-            $stubs.Add([pscustomobject]@{ Key = $n.GetAttribute('ratingKey'); Updated = $n.GetAttribute('updatedAt'); Section = $Section.Title; Kind = $Section.Type })
-        }
-        $start += $nodes.Count
-        if (-not $t) { break }                                           # no paging info: one page is all there is
-        Set-UiProgress -Text ("Listing {0}: {1} of {2}" -f $Section.Title, [math]::Min($start, $total), $total) -Value ([math]::Min($start, $total)) -Max $total
-    }
-    $stubs
-}
-
-function Get-PlexMetadataMap {
-    # ratingKey -> full <Video> element (streams, tags, guids). One batched request, with single requests as a fallback.
-    param([string]$BaseUrl, [string]$Token, [string[]]$Keys)
-    $map = @{}
-    try {
-        $doc = Get-PlexXml -BaseUrl $BaseUrl -Path ('/library/metadata/' + ($Keys -join ',')) -Query @{ includeGuids = 1 } -Token $Token
-        foreach ($v in $doc.SelectNodes('/MediaContainer/Video')) { $map[$v.GetAttribute('ratingKey')] = $v }
-    }
-    catch { if ($_.Exception.Message -match 'rejected|Could not reach') { throw } }
-
-    foreach ($k in $Keys) {
-        if ($map.ContainsKey($k)) { continue }
-        try {
-            $doc = Get-PlexXml -BaseUrl $BaseUrl -Path ('/library/metadata/' + $k) -Query @{ includeGuids = 1 } -Token $Token
-            $v = $doc.SelectSingleNode('/MediaContainer/Video')
-            if ($null -ne $v) { $map[$k] = $v }
-        }
-        catch { if ($_.Exception.Message -match 'rejected|Could not reach') { throw } }
-    }
-    $map
-}
-
-function Get-PlexShowNode {
-    param([string]$BaseUrl, [string]$Token, [string]$ShowKey, [hashtable]$Cache)
-    if (-not $ShowKey) { return $null }
-    if ($Cache.ContainsKey($ShowKey)) { return , $Cache[$ShowKey] }      # comma: an XmlElement would otherwise be unrolled into its children
-    $node = $null
-    try {
-        $doc  = Get-PlexXml -BaseUrl $BaseUrl -Path ('/library/metadata/' + $ShowKey) -Query @{ includeGuids = 1 } -Token $Token
-        $node = $doc.SelectSingleNode('/MediaContainer/Directory')
-    }
-    catch { if ($_.Exception.Message -match 'rejected|Could not reach') { throw } }
-    $Cache[$ShowKey] = $node
-    , $node
-}
-
-function Save-PlexPoster {
-    # Downloads a small (240x360) poster through Plex's own image resizer and keeps it in the thumbnail folder.
-    param([string]$BaseUrl, [string]$Token, [string]$ThumbPath)
-    if ([string]::IsNullOrWhiteSpace($ThumbPath)) { return '' }
-    $dest = Join-Path $script:ThumbFolder ('plex-' + (Get-StringHash ($BaseUrl.ToLowerInvariant() + '|' + $ThumbPath)) + '.jpg')
-    if ((Test-Path -LiteralPath $dest) -and ((Get-Item -LiteralPath $dest).Length -gt 0)) { return $dest }
-
-    $resp = $null
-    try {
-        $req  = New-PlexRequest -BaseUrl $BaseUrl -Path '/photo/:/transcode' -Token $Token -Accept 'image/jpeg,image/*' `
-                    -Query @{ width = 240; height = 360; minSize = 1; upscale = 1; url = $ThumbPath }
-        $resp = $req.GetResponse()
-        $ms   = New-Object IO.MemoryStream
-        try {
-            $rs = $resp.GetResponseStream()
-            $rs.CopyTo($ms)
-            if ($ms.Length -gt 0) { [IO.File]::WriteAllBytes($dest, $ms.ToArray()); return $dest }
-        }
-        finally { $ms.Dispose() }
-    }
-    catch { }
-    finally { if ($resp) { $resp.Close() } }
-    ''
-}
-
-function Convert-PlexEpoch {
-    param([string]$Seconds)
-    $n = [long]0
-    if ([long]::TryParse($Seconds, [ref]$n) -and $n -gt 0) {
-        try { return [DateTimeOffset]::FromUnixTimeSeconds($n).LocalDateTime.ToString('yyyy-MM-dd') } catch { }
-    }
-    ''
-}
-
-function Get-PlexTags {
-    param($Node, [string]$Child, [int]$Max = 0)
-    if ($null -eq $Node) { return '' }
-    $v = @($Node.SelectNodes($Child) | ForEach-Object { $_.GetAttribute('tag') } | Where-Object { $_ })
-    if ($Max -gt 0) { $v = @($v | Select-Object -First $Max) }
-    $v -join '; '
-}
-
-function Get-PlexRatings {
-    # All the scores Plex carries for one item: Imdb / Tmdb (0-10), RTCritic / RTAudience (percent, 0 = none).
-    # Plex lists them as <Rating image= value= type=> children, and as rating / audienceRating attributes with ratingImage / audienceRatingImage.
-    param($Node)
-    $o = @{ Imdb = 0.0; Tmdb = 0.0; RTCritic = 0; RTAudience = 0 }
-    if ($null -eq $Node) { return $o }
-    $pairs = New-Object System.Collections.Generic.List[object]
-    foreach ($n in @($Node.SelectNodes('Rating'))) { $pairs.Add(@($n.GetAttribute('image'), $n.GetAttribute('value'), $n.GetAttribute('type'))) }
-    $pairs.Add(@($Node.GetAttribute('ratingImage'),         $Node.GetAttribute('rating'),         'critic'))
-    $pairs.Add(@($Node.GetAttribute('audienceRatingImage'), $Node.GetAttribute('audienceRating'), 'audience'))
-    foreach ($p in $pairs) {
-        $img = [string]$p[0]; $val = ConvertTo-SafeDouble $p[1]
-        if (-not $img -or $val -le 0) { continue }
-        if     ($img -like 'imdb://*')          { if ($o.Imdb -le 0) { $o.Imdb = $val } }
-        elseif ($img -like 'themoviedb://*')    { if ($o.Tmdb -le 0) { $o.Tmdb = $val } }
-        elseif ($img -like 'rottentomatoes://*') {
-            $pct = [int][math]::Round($val * 10)
-            if ($pct -lt 1 -or $pct -gt 100) { continue }
-            if ($img -match 'upright|spilled') { if ($o.RTAudience -le 0) { $o.RTAudience = $pct } }
-            else                               { if ($o.RTCritic   -le 0) { $o.RTCritic   = $pct } }
-        }
-    }
-    $o
-}
-
-function Get-PlexRating {
-    # The single generic rating: IMDb, else TMDB, else a Plex score that is not from Rotten Tomatoes.
-    param($Node)
-    if ($null -eq $Node) { return 0.0 }
-    $r = Get-PlexRatings $Node
-    if ($r.Imdb -gt 0) { return $r.Imdb }
-    if ($r.Tmdb -gt 0) { return $r.Tmdb }
-    if ([string]$Node.GetAttribute('audienceRatingImage') -notlike 'rottentomatoes://*') {
-        $a = ConvertTo-SafeDouble $Node.GetAttribute('audienceRating'); if ($a -gt 0) { return $a }
-    }
-    if ([string]$Node.GetAttribute('ratingImage') -notlike 'rottentomatoes://*') {
-        return (ConvertTo-SafeDouble $Node.GetAttribute('rating'))
-    }
-    0.0
-}
-
-function Get-PlexRatingSource {
-    # Which service Get-PlexRating took the number from ('IMDb', 'TMDB', or '' when it is only a generic Plex score).
-    param($Node)
-    if ($null -eq $Node) { return '' }
-    $r = Get-PlexRatings $Node
-    if ($r.Imdb -gt 0) { return 'IMDb' }
-    if ($r.Tmdb -gt 0) { return 'TMDB' }
-    ''
-}
-
-function Get-PlexAudioFormat {
-    # -> @{ Label; Object } using the same names the MediaInfo path produces
-    param([string]$Codec, [string]$Profile, [string]$Display)
-    $c = $Codec.ToLowerInvariant(); $p = $Profile.ToLowerInvariant()
-    $label = switch -Regex ($c) {
-        '^truehd'     { 'Dolby TrueHD' }
-        '^eac3'       { 'Dolby Digital Plus' }
-        '^ac3'        { 'Dolby Digital' }
-        '^(dca|dts)'  {
-            if     ($p -match 'ma|dts-x|dtsx')  { 'DTS-HD Master Audio' }
-            elseif ($p -match 'hra')            { 'DTS-HD High Resolution Audio' }
-            elseif ($p -match 'es')             { 'DTS-ES' }
-            else                                { 'DTS' }
-        }
-        '^aac'        { 'AAC' }
-        '^flac'       { 'FLAC' }
-        '^mp3'        { 'MP3' }
-        '^opus'       { 'Opus' }
-        '^vorbis'     { 'Vorbis' }
-        '^pcm'        { 'PCM' }
-        default       { if ($c) { $c.ToUpperInvariant() } else { 'Unknown' } }
-    }
-    $obj = ''
-    if     ($Display -match 'Atmos')                    { $obj = 'Dolby Atmos' }
-    elseif ($p -match 'dts-x|dtsx' -or $Display -match 'DTS[-: ]X') { $obj = 'DTS:X' }
-    @{ Label = $label; Object = $obj }
-}
-
-function ConvertFrom-PlexVideo {
-    # Turns one Plex <Video> (movie or episode) into a record with the same fields the MediaInfo path fills.
-    param([Parameter(Mandatory)]$Video, [string]$LibraryName, $Show = $null)
-
-    $rec  = New-EmptyRecord
-    $isEp = ($Video.GetAttribute('type') -eq 'episode')
-    $meta = if ($isEp -and $null -ne $Show) { $Show } else { $Video }          # tags (genre, cast, ...) live on the show for episodes
-
-    # ---- best media version -> first part -> streams -------------------------
-    $media = @($Video.SelectNodes('Media')) |
-        Sort-Object @{ Expression = { ConvertTo-SafeInt $_.GetAttribute('width') }; Descending = $true },
-                    @{ Expression = { ConvertTo-SafeInt $_.GetAttribute('bitrate') }; Descending = $true } |
-        Select-Object -First 1
-    $parts = @(); $part = $null; $streams = @()
-    if ($null -ne $media) {
-        $parts = @($media.SelectNodes('Part'))
-        $part  = $parts | Select-Object -First 1
-        if ($null -ne $part) { $streams = @($part.SelectNodes('Stream')) }
-    }
-    $vs       = $streams | Where-Object { $_.GetAttribute('streamType') -eq '1' } | Select-Object -First 1
-    $audio    = @($streams | Where-Object { $_.GetAttribute('streamType') -eq '2' })
-    $subs     = @($streams | Where-Object { $_.GetAttribute('streamType') -eq '3' })
-    $as       = $audio | Where-Object { $_.GetAttribute('selected') -eq '1' } | Select-Object -First 1
-    if ($null -eq $as) { $as = $audio | Select-Object -First 1 }
-
-    # ---- titles / descriptive metadata ---------------------------------------
-    $title = $Video.GetAttribute('title')
-    $rec.Library = $LibraryName
-    if ($isEp) {
-        $season = ConvertTo-SafeInt $Video.GetAttribute('parentIndex')
-        $epNum  = ConvertTo-SafeInt $Video.GetAttribute('index')
-        $showTitle = $Video.GetAttribute('grandparentTitle')
-        $rec.Show    = $showTitle
-        $rec.Season  = $season
-        $rec.Episode = $epNum
-        $rec.Title   = ('{0} - S{1:00}E{2:00} - {3}' -f $showTitle, $season, $epNum, $title)
-    }
-    else { $rec.Title = $title }
-
-    $rec.ReleaseDate = $Video.GetAttribute('originallyAvailableAt')
-    $year = ConvertTo-SafeInt $Video.GetAttribute('year')
-    if ($year -le 0 -and $rec.ReleaseDate.Length -ge 4) { $year = ConvertTo-SafeInt $rec.ReleaseDate.Substring(0, 4) }
-    if ($year -le 0 -and $null -ne $Show) { $year = ConvertTo-SafeInt $Show.GetAttribute('year') }
-    $rec.Year       = $year
-    $rec.Genre      = Get-PlexTags $meta 'Genre'
-    $mpaa = $Video.GetAttribute('contentRating')
-    if (-not $mpaa -and $null -ne $Show) { $mpaa = $Show.GetAttribute('contentRating') }
-    $rec.MPAARating = $mpaa
-    $rating = Get-PlexRating $Video
-    if ($rating -le 0 -and $null -ne $Show) { $rating = Get-PlexRating $Show }
-    $rec.Rating     = $rating
-    $rsrc = Get-PlexRatingSource $Video
-    if ($rsrc -eq '' -and (Get-PlexRating $Video) -le 0 -and $null -ne $Show) { $rsrc = Get-PlexRatingSource $Show }
-    $rec.RatingSource = $rsrc
-    $rt = Get-PlexRatings $Video
-    if ($rt.RTCritic -le 0 -and $rt.RTAudience -le 0 -and $null -ne $Show) { $rt = Get-PlexRatings $Show }
-    if ($rt.RTCritic   -gt 0) { $rec.RTCritic   = $rt.RTCritic }
-    if ($rt.RTAudience -gt 0) { $rec.RTAudience = $rt.RTAudience }
-    $rec.Studio     = $meta.GetAttribute('studio')
-    $rec.Director   = Get-PlexTags $Video 'Director' 3
-    $rec.Cast       = Get-PlexTags $meta 'Role' 6
-    $rec.Collection = Get-PlexTags $Video 'Collection' 1
-    $rec.Country    = Get-PlexTags $meta 'Country'
-    $rec.Tagline    = $Video.GetAttribute('tagline')
-    $rec.Plot       = ($Video.GetAttribute('summary')) -replace '\s+', ' '
-    foreach ($g in @($meta.SelectNodes('Guid'))) {
-        $id = $g.GetAttribute('id')
-        if     ($id -match '^imdb://(tt\d+)') { $rec.IMDBID = $Matches[1] }
-        elseif ($id -match '^tmdb://(\d+)')   { $rec.TMDBID = $Matches[1] }
-    }
-    if (-not $rec.IMDBID -and $meta.GetAttribute('guid') -match 'imdb://(tt\d+)') { $rec.IMDBID = $Matches[1] }
-    if (-not $rec.TMDBID -and $meta.GetAttribute('guid') -match 'themoviedb://(\d+)') { $rec.TMDBID = $Matches[1] }
-
-    # ---- file / container ------------------------------------------------------
-    $file = if ($null -ne $part) { $part.GetAttribute('file') } else { '' }
-    $durMs = if ($null -ne $media) { ConvertTo-SafeDouble $media.GetAttribute('duration') } else { 0.0 }
-    if ($durMs -le 0) { $durMs = ConvertTo-SafeDouble $Video.GetAttribute('duration') }
-    $sizeBytes = 0.0
-    foreach ($p in $parts) { $sizeBytes += (ConvertTo-SafeDouble $p.GetAttribute('size')) }
-    $overallKbps = if ($null -ne $media) { ConvertTo-SafeDouble $media.GetAttribute('bitrate') } else { 0.0 }
-    $cont = if ($null -ne $media) { $media.GetAttribute('container') } else { '' }
-
-    $rec.RuntimeMin         = [math]::Round($durMs / 60000, 2)
-    $rec.FileName           = if ($file) { [IO.Path]::GetFileName($file) } else { '' }
-    $rec.Ext                = if ($file) { [IO.Path]::GetExtension($file).TrimStart('.').ToLowerInvariant() } else { $cont }
-    $rec.Type               = 'Video'
-    $rec.Container          = switch -Regex ($cont.ToLowerInvariant()) {
-        '^mkv'           { 'Matroska' }
-        '^(mp4|m4v|mov)' { 'MPEG-4' }
-        '^avi'           { 'AVI' }
-        '^(ts|mpegts)'   { 'MPEG-TS' }
-        '^m2ts'          { 'BDAV' }
-        default          { if ($cont) { $cont.ToUpperInvariant() } else { '' } }
-    }
-    $rec.FileSizeGB         = [math]::Round($sizeBytes / 1GB, 2)
-    $rec.OverallBitRateMbps = [math]::Round($overallKbps / 1000, 2)
-    $rec.Source             = if ($file) { Get-SourceFromName ([IO.Path]::GetFileNameWithoutExtension($file)) } else { 'Unknown' }
-    $rec.Added              = Convert-PlexEpoch $Video.GetAttribute('addedAt')
-    $rec.Modified           = Convert-PlexEpoch $Video.GetAttribute('updatedAt')
-    if ($file) {
-        $cut = $file.LastIndexOfAny([char[]]@('\', '/'))
-        $rec.Directory = if ($cut -gt 0) { $file.Substring(0, $cut) } else { '' }
-    }
-    $rec.FullPath           = $file
-    $rec.HasNfo             = $true          # Plex already holds the metadata (keeps the "Missing NFO" health tile honest)
-    $rec.ViewCount          = ConvertTo-SafeInt $Video.GetAttribute('viewCount')
-    $rec.LastViewed         = Convert-PlexEpoch $Video.GetAttribute('lastViewedAt')
-    $rec.PlexKey            = $Video.GetAttribute('ratingKey')
-    $thumb = if ($isEp -and $Video.GetAttribute('grandparentThumb')) { $Video.GetAttribute('grandparentThumb') } else { $Video.GetAttribute('thumb') }
-    $rec.PlexThumb          = $thumb
-
-    # ---- video -------------------------------------------------------------------
-    $w = if ($null -ne $media) { ConvertTo-SafeInt $media.GetAttribute('width') }  else { 0 }
-    $h = if ($null -ne $media) { ConvertTo-SafeInt $media.GetAttribute('height') } else { 0 }
-    if ($null -ne $vs) {
-        if ($w -le 0) { $w = ConvertTo-SafeInt $vs.GetAttribute('width') }
-        if ($h -le 0) { $h = ConvertTo-SafeInt $vs.GetAttribute('height') }
-    }
-    $codecRaw = if ($null -ne $vs) { $vs.GetAttribute('codec') } elseif ($null -ne $media) { $media.GetAttribute('videoCodec') } else { '' }
-    $codec = switch -Regex ($codecRaw.ToLowerInvariant()) {
-        '^(hevc|h265)'  { 'HEVC' }
-        '^(h264|avc)'   { 'AVC' }
-        '^vc1'          { 'VC-1' }
-        '^mpeg2'        { 'MPEG' }
-        '^mpeg4'        { 'MPEG-4 Visual' }
-        '^av1'          { 'AV1' }
-        '^vp9'          { 'VP9' }
-        default         { if ($codecRaw) { $codecRaw.ToUpperInvariant() } else { '' } }
-    }
-    $fps = if ($null -ne $vs) { ConvertTo-SafeDouble $vs.GetAttribute('frameRate') } else { 0.0 }
-    if ($fps -le 0 -and $media -and $media.GetAttribute('videoFrameRate') -match '^(\d+(\.\d+)?)') { $fps = ConvertTo-SafeDouble $Matches[1] }
-    $vbr = if ($null -ne $vs) { (ConvertTo-SafeDouble $vs.GetAttribute('bitrate')) * 1000 } else { 0.0 }
-    if ($vbr -le 0) { $vbr = $overallKbps * 1000 }
-
-    $rec.Width            = $w
-    $rec.Height           = $h
-    $rec.Resolution       = if ($w -gt 0) { "${w}x${h}" } else { '' }
-    $rec.ResolutionClass  = Get-ResolutionClass -Width $w -Height $h
-    $rec.DAR              = if ($null -ne $media) { ConvertTo-SafeDouble $media.GetAttribute('aspectRatio') } else { 0.0 }
-    $rec.VideoCodec       = $codec
-    if ($null -ne $vs) { $rec.FormatProfile = (Get-Culture).TextInfo.ToTitleCase($vs.GetAttribute('profile')) }
-    $rec.VideoBitRateMbps = [math]::Round($vbr / 1000000, 2)
-    $rec.FrameRate        = $fps
-    $rec.BitsPerPixel     = if (($w * $h * $fps) -gt 0 -and $vbr -gt 0) { [math]::Round($vbr / ($w * $h * $fps), 3) } else { 0.0 }
-    if ($null -ne $vs) {
-        $scan = $vs.GetAttribute('scanType')
-        $rec.ScanType          = if ($scan) { (Get-Culture).TextInfo.ToTitleCase($scan) } else { '' }
-        $rec.BitDepth          = ConvertTo-SafeInt $vs.GetAttribute('bitDepth')
-        $rec.ChromaSubsampling = $vs.GetAttribute('chromaSubsampling')
-        $range = $vs.GetAttribute('colorRange')
-        $rec.ColorRange        = switch ($range) { 'tv' { 'Limited' } 'pc' { 'Full' } default { $range } }
-    }
-
-    # ---- HDR / Dolby Vision (Plex exposes the DOVI* flags on the video stream) -----
-    $trc     = if ($null -ne $vs) { $vs.GetAttribute('colorTrc') } else { '' }
-    $display = if ($null -ne $vs) { ($vs.GetAttribute('displayTitle') + ' ' + $vs.GetAttribute('extendedDisplayTitle')) } else { '' }
-    $doviOn  = $false
-    if ($null -ne $vs) {
-        $doviOn = ($vs.GetAttribute('DOVIPresent') -in '1', 'true') -or ($display -match 'Dolby Vision|DoVi')
-    }
-    $hdrType = if ($doviOn) { 'Dolby Vision' }
-               elseif ($trc -eq 'smpte2084')    { 'HDR10' }
-               elseif ($trc -eq 'arib-std-b67') { 'HLG' }
-               else { 'SDR' }
-
-    $dv = [pscustomobject]@{ Profile = ''; Layer = ''; Base = '' }
-    if ($doviOn) {
-        $num  = ConvertTo-SafeInt $vs.GetAttribute('DOVIProfile')
-        $base = switch ($vs.GetAttribute('DOVIBLCompatID')) { '1' { 'HDR10' } '6' { 'HDR10' } '2' { 'SDR' } '4' { 'HLG' } default { 'None' } }
-        if ($num -eq 5) { $base = 'None' }
-        $prof = ''
-        if ($num -gt 0) {
-            $prof = "$num"
-            if ($num -in 8, 10) {
-                switch ($base) { 'HDR10' { $prof = "$num.1" } 'SDR' { $prof = "$num.2" } 'HLG' { $prof = "$num.4" } }
-            }
-        }
-        $dual = ($vs.GetAttribute('DOVIELPresent') -in '1', 'true') -or ($num -in 4, 7)
-        $dv.Profile = $prof
-        $dv.Base    = $base
-        $dv.Layer   = if ($num -le 0) { '' } elseif ($dual) { 'Dual layer' } else { 'Single layer' }
-    }
-    $rec.HDRType           = $hdrType
-    $rec.DVProfile         = $dv.Profile
-    $rec.DVLayer           = $dv.Layer
-    $rec.DVBase            = $dv.Base
-    $rec.HasHDR10Plus      = $false         # Plex does not report HDR10+ (dynamic metadata)
-    $rec.HDRStack          = Get-HdrStack -HdrType $hdrType -Dv $dv -HasHdr10Plus $false
-    $rec.Source            = Resolve-SourceLabel -Source $rec.Source -FileName $rec.FileName -HdrType $hdrType -DvProfile $dv.Profile
-    $rec.HDRFormat         = switch ($hdrType) { 'Dolby Vision' { 'Dolby Vision' } 'HDR10' { 'SMPTE ST 2084' } 'HLG' { 'HLG' } default { '' } }
-    if ($doviOn) {
-        $rec.HDRFormatLevel    = $vs.GetAttribute('DOVILevel')
-        $rec.HDRFormatSettings = if ($dv.Layer -eq 'Dual layer') { 'BL+EL+RPU' } else { 'BL+RPU' }
-        $rec.HDRFormatCompat   = $dv.Base
-    }
-    if ($null -ne $vs) {
-        $rec.Primaries = $vs.GetAttribute('colorPrimaries')
-        $rec.Transfer  = $trc
-        $rec.Matrix    = $vs.GetAttribute('colorSpace')
-    }
-
-    # ---- audio (the selected / first track) ----------------------------------------
-    if ($null -ne $as) {
-        $ch   = ConvertTo-SafeInt $as.GetAttribute('channels')
-        $adis = $as.GetAttribute('displayTitle') + ' ' + $as.GetAttribute('extendedDisplayTitle')
-        $af   = Get-PlexAudioFormat -Codec $as.GetAttribute('codec') -Profile $as.GetAttribute('profile') -Display $adis
-        $rec.AudioFormat       = $af.Label
-        $rec.ObjectAudio       = $af.Object
-        $rec.AudioTitle        = $as.GetAttribute('title')
-        $rec.AudioBitRateKbps  = [int](ConvertTo-SafeDouble $as.GetAttribute('bitrate'))
-        $rec.AudioChannels     = $ch
-        $rec.AudioLayout       = Get-AudioLayout -Channels $ch
-        $rec.AudioSamplingRate = $as.GetAttribute('samplingRate')
-        $rec.AudioBitDepth     = $as.GetAttribute('bitDepth')
-    }
-    elseif ($null -ne $media) {
-        $ch = ConvertTo-SafeInt $media.GetAttribute('audioChannels')
-        $rec.AudioFormat   = (Get-PlexAudioFormat -Codec $media.GetAttribute('audioCodec') -Profile $media.GetAttribute('audioProfile') -Display '').Label
-        $rec.AudioChannels = $ch
-        $rec.AudioLayout   = Get-AudioLayout -Channels $ch
-    }
-    $rec.AudioTracks    = $audio.Count
-    $rec.AudioLanguages = (@($audio | ForEach-Object { $_.GetAttribute('language') } | Where-Object { $_ } | Select-Object -Unique)) -join '; '
-
-    # ---- subtitles --------------------------------------------------------------------
-    $rec.SubtitleTracks    = $subs.Count
-    $rec.SubtitleLanguages = (@($subs | ForEach-Object { $_.GetAttribute('language') } | Where-Object { $_ } | Select-Object -Unique)) -join '; '
-    $rec.SubtitleFormats   = (@($subs | ForEach-Object { $_.GetAttribute('codec') } | Where-Object { $_ } | ForEach-Object { $_.ToUpperInvariant() } | Select-Object -Unique)) -join '; '
-
-    [pscustomobject]$rec
-}
-
-function Invoke-PlexScan {
-    param([string]$BaseUrl, [string]$Token, [bool]$Movies, [bool]$Shows, [bool]$Rebuild, [bool]$DetectFel, [hashtable]$Prior = @{})
-
-    Set-UiProgress -Text 'Connecting to Plex...'
-    $sections = @(Get-PlexSections -BaseUrl $BaseUrl -Token $Token | Where-Object {
-        ($_.Type -eq 'movie' -and $Movies) -or ($_.Type -eq 'show' -and $Shows) })
-    if ($sections.Count -eq 0) { throw 'This Plex server has no movie / TV libraries matching your selection.' }
-
-    # 1) list every item (cheap) ---------------------------------------------------------
-    $stubs = New-Object System.Collections.Generic.List[object]
-    Set-ScanPhase -Lo 0.0 -Hi 0.05
-    foreach ($sec in $sections) {
-        foreach ($s in @(Get-PlexStubs -BaseUrl $BaseUrl -Token $Token -Section $sec)) { $stubs.Add($s) }
-    }
-    $script:Sync.Total = $stubs.Count
-    if ($stubs.Count -eq 0) { return @() }
-
-    # 2) reuse cached records whose Plex 'updatedAt' has not changed ------------------------
-    $byKey = @{}
-    $todo  = New-Object System.Collections.Generic.List[object]
-    Set-ScanPhase -Lo 0.05 -Hi 0.10
-    $chk = 0
-    foreach ($s in $stubs) {
-        $chk++
-        if (($chk % 250) -eq 0) {
-            if (Test-ScanCancelled) { break }
-            Set-UiProgress -Text ("Checking for changes: {0} of {1}" -f $chk, $stubs.Count) -Value $chk -Max $stubs.Count
-        }
-        # unchanged since the last scan (same Plex 'updatedAt'): reuse the record we already have
-        $p0 = $Prior[[string]$s.Key]
-        if ($null -ne $p0 -and [string]$p0.PlexUpdated -eq [string]$s.Updated) { $byKey[$s.Key] = $p0; continue }
-        $ck = Join-Path $script:CacheFolder ((Get-StringHash ('plex|{0}|{1}|{2}|{3}|rt2' -f $BaseUrl.ToLowerInvariant(), $s.Key, $s.Updated, $script:CacheVersion)) + '.json')
-        $s | Add-Member -NotePropertyName CacheFile -NotePropertyValue $ck -Force
-        if ($Rebuild) { Remove-Item -LiteralPath $ck -Force -ErrorAction SilentlyContinue }
-        $hit = $null
-        if (Test-Path -LiteralPath $ck) {
-            try { $hit = Repair-CachedRecord ([IO.File]::ReadAllText($ck, [Text.Encoding]::UTF8) | ConvertFrom-Json) } catch { $hit = $null }
-        }
-        if ($hit) { $byKey[$s.Key] = $hit } else { $todo.Add($s) }
-    }
-
-    # 3) fetch full details for the rest, in batches ----------------------------------------
-    $showCache = @{}
-    $done = $stubs.Count - $todo.Count
-    $postLo = if ($todo.Count -gt 0) { 0.8 } else { 0.10 }       # the overall bar: details 0-80 %, posters 80-100 % (all of it when everything was cached)
-    Set-ScanPhase -Lo 0.10 -Hi $postLo
-    for ($i = 0; $i -lt $todo.Count; $i += 25) {
-        if (Test-ScanCancelled) { break }
-        $batch = @($todo.GetRange($i, [Math]::Min(25, $todo.Count - $i)))      # (Select-Object -Skip re-walks the whole list every time, which crawls on tens of thousands of episodes)
-        Set-UiProgress -Text ("Reading Plex metadata: {0} of {1}" -f ($done + 1), $stubs.Count) -Value $done -Max $stubs.Count
-        $map = Get-PlexMetadataMap -BaseUrl $BaseUrl -Token $Token -Keys @($batch | ForEach-Object { $_.Key })
-        foreach ($s in $batch) {
-            $v = $map[$s.Key]
-            if ($null -eq $v) { $done++; continue }
-            $showNode = $null
-            if ($v.GetAttribute('type') -eq 'episode') {
-                $showNode = Get-PlexShowNode -BaseUrl $BaseUrl -Token $Token -ShowKey $v.GetAttribute('grandparentRatingKey') -Cache $showCache
-            }
-            try {
-                $rec = ConvertFrom-PlexVideo -Video $v -LibraryName $s.Section -Show $showNode
-                $byKey[$s.Key] = $rec
-                [IO.File]::WriteAllText($s.CacheFile, ($rec | ConvertTo-Json -Depth 3), (New-Object Text.UTF8Encoding($false)))
-            }
-            catch { Write-Warning "Skipped Plex item $($s.Key): $_" }
-            $done++
-        }
-    }
-
-    # 4) posters + optional FEL/MEL probe, then put everything back in library order ----------
-    $out = New-Object System.Collections.Generic.List[object]
-    $posterSeen = @{}
-    $n = 0
-    Set-ScanPhase -Lo $postLo -Hi 1.0
-    foreach ($s in $stubs) {
-        if (Test-ScanCancelled) { break }
-        $n++
-        $rec = $byKey[$s.Key]
-        if ($null -eq $rec) { continue }
-        if ([string]$rec.PlexUpdated -ne [string]$s.Updated) {          # remembered so the next scan can tell what changed
-            if ($null -ne $rec.PSObject.Properties['PlexUpdated']) { $rec.PlexUpdated = $s.Updated }
-            else { $rec.PSObject.Properties.Add((New-Object Management.Automation.PSNoteProperty('PlexUpdated', [string]$s.Updated))) }
-        }
-        if (($n % 5) -eq 0 -or $n -eq $stubs.Count) { Set-UiProgress -Text ("Posters: {0} of {1} titles ({2} distinct images)" -f $n, $stubs.Count, $posterSeen.Count) -Value $n -Max $stubs.Count }
-
-        # one poster per distinct image: every episode of a show shares its show's poster, so it is checked / fetched once
-        $th = [string]$rec.PlexThumb
-        if ($th -and $posterSeen.ContainsKey($th)) { $rec.PosterPath = $posterSeen[$th]; $rec.HasPoster = [bool]$posterSeen[$th] }
-        else {
-            if (-not $rec.PosterPath -or -not (Test-Path -LiteralPath $rec.PosterPath)) {
-                $poster = [string](@(Save-PlexPoster -BaseUrl $BaseUrl -Token $Token -ThumbPath $th) | Select-Object -Last 1)
-                $rec.PosterPath = $poster
-                $rec.HasPoster  = [bool]$poster
-            }
-            if ($th) { $posterSeen[$th] = [string]$rec.PosterPath }
-        }
-        if ($DetectFel -and $rec.DVLayer -eq 'Dual layer' -and $rec.FullPath -and (Test-Path -LiteralPath $rec.FullPath -ErrorAction SilentlyContinue)) {
-            $layer = Get-DolbyVisionLayerType -Path $rec.FullPath -DurationSec ([int]([double]$rec.RuntimeMin * 60))
-            if ($layer) {
-                $rec.DVLayer  = $layer
-                $rec.HDRStack = ([string]$rec.HDRStack) -replace '\(dual layer\)', $layer
-                try { [IO.File]::WriteAllText($s.CacheFile, ($rec | ConvertTo-Json -Depth 3), (New-Object Text.UTF8Encoding($false))) } catch { }
-            }
-        }
-        $out.Add($rec)
-    }
-    $out.ToArray()
-}
 #endregion
 
 #region ---------------------------------------------------------------- Metadata store + online lookups (TMDB, IMDb ratings file, OMDb)
-# Fetched and hand-typed values live in one small JSON store, NOT in the media files and not in the scan cache:
-#   manual values always win, fetched values fill empty fields (or replace them when "Replace existing values" was ticked).
-function Set-RecField {
-    # Cached records are plain objects that may predate a field - add the property when it is missing.
-    param($Rec, [string]$Name, $Value)
-    if ($null -ne $Rec.PSObject.Properties[$Name]) { $Rec.$Name = $Value }
-    else { $Rec | Add-Member -NotePropertyName $Name -NotePropertyValue $Value -Force }
-}
-
-function Test-ValueEmpty {
-    param($Value)
-    if ($null -eq $Value) { return $true }
-    if ($Value -is [string]) { return [string]::IsNullOrWhiteSpace($Value) }
-    if ($Value -is [ValueType]) { return ([double]$Value -eq 0) }
-    $false
-}
-
-function Get-MetaKeys {
-    # Every key a title can be filed under, best first (an IMDb id survives renames; title+year is the fallback).
-    param($Rec)
-    $keys = @()
-    if ($Rec.IMDBID)  { $keys += ('imdb:' + [string]$Rec.IMDBID) }
-    if ($Rec.TMDBID)  { $keys += ('tmdb:' + [string]$Rec.TMDBID) }
-    $keys += ('t:' + ([string]$Rec.Title).ToLowerInvariant() + '|' + [string]$Rec.Year)
-    $keys
-}
-
-function Read-MetaStore {
-    param([string]$Path)
-    $store = @{}
-    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $store }
-    try {
-        $j = [IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8) | ConvertFrom-Json
-        foreach ($p in $j.PSObject.Properties) {
-            $e = @{ Manual = @{}; Scraped = @{}; Force = @(); Sources = @{}; At = [string]$p.Value.At }
-            if ($p.Value.Manual)  { foreach ($q in $p.Value.Manual.PSObject.Properties)  { $e.Manual[$q.Name]  = $q.Value } }
-            if ($p.Value.Scraped) { foreach ($q in $p.Value.Scraped.PSObject.Properties) { $e.Scraped[$q.Name] = $q.Value } }
-            if ($p.Value.Sources) { foreach ($q in $p.Value.Sources.PSObject.Properties) { $e.Sources[$q.Name] = [string]$q.Value } }
-            if ($p.Value.Force)   { $e.Force = @($p.Value.Force) }
-            $store[$p.Name] = $e
-        }
-    }
-    catch { }
-    $store
-}
-
-function Write-MetaStore {
-    param([string]$Path, [hashtable]$Store)
-    $dir = Split-Path -Parent $Path
-    if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
-    $tmp = $Path + '.tmp'
-    [IO.File]::WriteAllText($tmp, (ConvertTo-Json -InputObject $Store -Depth 6), (New-Object Text.UTF8Encoding($false)))
-    Move-Item -LiteralPath $tmp -Destination $Path -Force
-}
-
 function Merge-MetaStore {
     # Applies the store to freshly scanned records (called on the UI thread right after every scan).
     # A title can be filed under several keys (IMDb id, TMDB id, title+year): all of them apply, fetched values first, typed-in values last.
     param([object[]]$Records, [string]$Path)
-    $store = Read-MetaStore -Path $Path
+    $store = Read-MmlmMetaStore -Path $Path
     if ($store.Count -eq 0) { return }
     foreach ($rec in $Records) {
         $entries = @()
-        foreach ($k in (Get-MetaKeys $rec)) { if ($store.ContainsKey($k)) { $entries += , $store[$k] } }
+        foreach ($k in (Get-MmlmMetaKeys $rec)) { if ($store.ContainsKey($k)) { $entries += , $store[$k] } }
         if ($entries.Count -eq 0) { continue }
         [array]::Reverse($entries)                      # weakest key first, so the best key has the last word
         $manualNames = @{}
@@ -1587,12 +296,12 @@ function Merge-MetaStore {
             foreach ($name in @($entry.Scraped.Keys)) {
                 if ($manualNames.ContainsKey($name)) { continue }
                 $cur = $rec.$name
-                if ((Test-ValueEmpty $cur) -or ($entry.Force -contains $name)) {
+                if ((Test-MmlmValueEmpty $cur) -or ($entry.Force -contains $name)) {
                     $f = $script:Fields | Where-Object { $_.Name -eq $name } | Select-Object -First 1
                     if ($null -eq $f) { continue }
-                    try { Set-RecField $rec $name ([Convert]::ChangeType($entry.Scraped[$name], $script:TypeMap[$f.Type])) } catch { continue }
+                    try { Set-MmlmRecField $rec $name ([Convert]::ChangeType($entry.Scraped[$name], $script:TypeMap[$f.Type])) } catch { continue }
                     $notes += ('{0}: {1}' -f $name, $entry.Sources[$name])
-                    if ($name -eq 'Rating') { Set-RecField $rec 'RatingSource' ([string]$entry.Sources[$name]) }
+                    if ($name -eq 'Rating') { Set-MmlmRecField $rec 'RatingSource' ([string]$entry.Sources[$name]) }
                 }
             }
         }
@@ -1600,514 +309,57 @@ function Merge-MetaStore {
             foreach ($name in @($entry.Manual.Keys)) {
                 $f = $script:Fields | Where-Object { $_.Name -eq $name } | Select-Object -First 1
                 if ($null -eq $f) { continue }
-                try { Set-RecField $rec $name ([Convert]::ChangeType($entry.Manual[$name], $script:TypeMap[$f.Type])) } catch { continue }
+                try { Set-MmlmRecField $rec $name ([Convert]::ChangeType($entry.Manual[$name], $script:TypeMap[$f.Type])) } catch { continue }
                 $notes += ('{0}: manual' -f $name)
-                if ($name -eq 'Rating') { Set-RecField $rec 'RatingSource' '' }
+                if ($name -eq 'Rating') { Set-MmlmRecField $rec 'RatingSource' '' }
             }
         }
-        if ($notes.Count -gt 0) { Set-RecField $rec 'MetaSources' ($notes -join '; ') }
+        if ($notes.Count -gt 0) { Set-MmlmRecField $rec 'MetaSources' ($notes -join '; ') }
     }
 }
 
-function Invoke-JsonGet {
-    # One polite GET. $null for 404; waits and retries on 429 / 5xx; throws 'KEYREJECT' when the service refuses the key.
-    param([string]$Url, [hashtable]$Headers = @{}, [int]$TimeoutMs = 20000)
-    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-    for ($try = 1; $try -le 4; $try++) {
-        if (Test-ScanCancelled) { return $null }
-        try {
-            $req = [Net.HttpWebRequest]::Create($Url)
-            $req.Method = 'GET'; $req.Timeout = $TimeoutMs; $req.ReadWriteTimeout = $TimeoutMs
-            $req.UserAgent = 'ModernMediaLibraryManager/1.0'; $req.Accept = 'application/json'
-            foreach ($k in $Headers.Keys) { $req.Headers[$k] = [string]$Headers[$k] }
-            $resp = $req.GetResponse()
-            try {
-                $sr = New-Object IO.StreamReader($resp.GetResponseStream(), [Text.Encoding]::UTF8)
-                try { $txt = $sr.ReadToEnd() } finally { $sr.Dispose() }
-            }
-            finally { $resp.Close() }
-            return ($txt | ConvertFrom-Json)
-        }
-        catch [Net.WebException] {
-            $r    = $_.Exception.Response
-            $code = if ($null -ne $r) { [int]$r.StatusCode } else { 0 }
-            if ($code -eq 404) { return $null }
-            if ($code -eq 401 -or $code -eq 403) { throw 'KEYREJECT' }
-            if ($try -ge 4) { throw }
-            $wait = 2 * $try
-            if ($code -eq 429 -and $null -ne $r) {
-                $ra = 0; if ([int]::TryParse([string]$r.Headers['Retry-After'], [ref]$ra) -and $ra -gt 0) { $wait = [Math]::Min(30, $ra) }
-            }
-            Start-Sleep -Seconds $wait
-        }
+#endregion
+
+#region ---------------------------------------------------------------- Modules (the data logic, no UI)
+$script:ModuleFiles = @('MMLM.Library.psm1', 'MMLM.Plex.psm1', 'MMLM.Fetch.psm1') | ForEach-Object { Join-Path (Join-Path $script:AppRoot 'modules') $_ }
+foreach ($m in $script:ModuleFiles) { Import-Module $m -DisableNameChecking }
+
+function Get-MmlmModulePreamble {
+    # Script text that loads the modules by full path and hands them the shared values ($WorkerVars) inside a runspace.
+    $lines = foreach ($m in $script:ModuleFiles) { "Import-Module '{0}' -DisableNameChecking" -f ($m -replace "'", "''") }
+    ($lines -join "`r`n") + "`r`nSet-MmlmContext -Values `$WorkerVars; Set-MmlmPlexContext -Values `$WorkerVars; Set-MmlmFetchContext -Values `$WorkerVars`r`n"
+}
+
+function Update-MmlmContext {
+    # The values the modules read, for calls made on this (UI) thread. Called again whenever $script:Sync is replaced.
+    $v = @{
+        Sync = $script:Sync; AppRoot = $script:AppRoot; CacheVersion = $script:CacheVersion; CacheFolder = $script:CacheFolder
+        ThumbFolder = $script:ThumbFolder; LibFolder = $script:LibFolder; Culture = $script:Culture
+        VideoExtensions = $script:VideoExtensions; AudioExtensions = $script:AudioExtensions
+        PosterNames = $script:PosterNames; ImageExtensions = $script:ImageExtensions
+        Fields = $script:Fields; TypeMap = $script:TypeMap
+        PlexTimeoutMs = $script:PlexTimeoutMs; PlexClientId = $script:PlexClientId; InformFolder = $script:InformFolder
     }
+    Set-MmlmContext -Values $v; Set-MmlmPlexContext -Values $v; Set-MmlmFetchContext -Values $v
 }
-
-function Get-ImdbRatingMap {
-    # IMDb publishes daily rating files for personal, non-commercial use. Download once a week, keep only the ids we need.
-    param([string]$DataFolder, $Wanted)
-    $map = @{}
-    if (-not (Test-Path -LiteralPath $DataFolder)) { New-Item -Path $DataFolder -ItemType Directory -Force | Out-Null }
-    $gz = Join-Path $DataFolder 'title.ratings.tsv.gz'
-    $stale = (-not (Test-Path -LiteralPath $gz)) -or (((Get-Date) - (Get-Item -LiteralPath $gz).LastWriteTime).TotalDays -gt 7)
-    if ($stale) {
-        Set-UiProgress -Text 'Downloading IMDb ratings (refreshed weekly)...'
-        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        $wc = New-Object Net.WebClient
-        try {
-            $wc.Headers['User-Agent'] = 'ModernMediaLibraryManager/1.0'
-            $wc.DownloadFile('https://datasets.imdbws.com/title.ratings.tsv.gz', $gz + '.tmp')
-            Move-Item -LiteralPath ($gz + '.tmp') -Destination $gz -Force
-        }
-        catch { Remove-Item -LiteralPath ($gz + '.tmp') -Force -ErrorAction SilentlyContinue }
-        finally { $wc.Dispose() }
-    }
-    if (-not (Test-Path -LiteralPath $gz)) { return $map }
-    Set-UiProgress -Text 'Reading IMDb ratings...'
-    $fs = [IO.File]::OpenRead($gz)
-    $gs = New-Object IO.Compression.GZipStream($fs, [IO.Compression.CompressionMode]::Decompress)
-    $sr = New-Object IO.StreamReader($gs)
-    try {
-        [void]$sr.ReadLine()
-        $n = 0
-        while ($null -ne ($line = $sr.ReadLine())) {
-            $n++
-            if (($n % 200000) -eq 0 -and (Test-ScanCancelled)) { break }
-            $tab = $line.IndexOf("`t")
-            if ($tab -lt 1) { continue }
-            $id = $line.Substring(0, $tab)
-            if ($Wanted.Contains($id)) {
-                $p = $line.Split("`t")
-                $map[$id] = @{ Rating = (ConvertTo-SafeDouble $p[1]); Votes = (ConvertTo-SafeInt $p[2]) }
-            }
-        }
-    }
-    finally { $sr.Dispose(); $gs.Dispose(); $fs.Dispose() }
-    $map
-}
-
-function Add-FetchDetail {
-    # Remembers why one title did not get fetched, for the "Details" link in the status bar.
-    param($Rec, [string]$Kind, [string]$Reason)
-    if ($null -eq $script:Sync.Details) { return }
-    $yr = if ([int]$Rec.Year -gt 0) { ' (' + [int]$Rec.Year + ')' } else { '' }
-    [void]$script:Sync.Details.Add(('{0}{1}  [{2}]{3}    {4}' -f [string]$Rec.Title, $yr, $Kind, "`
-`
-", $Reason))
-}
-
-function Get-TitleKey {
-    # Normalises a title for comparing: lower case, accents and punctuation gone, "&" = "and", leading "the" and a trailing "(year)" dropped.
-    param([string]$Title)
-    $t = ([string]$Title).Normalize([Text.NormalizationForm]::FormD)
-    $t = [regex]::Replace($t, '\p{Mn}', '')
-    $t = $t.ToLowerInvariant() -replace '\s*\(\d{4}\)\s*$', '' -replace '&', ' and '
-    $t = ($t -replace "[^a-z0-9 ]", ' ') -replace '\s+', ' '
-    $t = $t.Trim() -replace '^(the|a|an) ', ''
-    return $t
-}
-
-function Find-TmdbMovieId {
-    # Looks a movie up by title (and year) when no ID is known. Tries the exact year, then a looser search, and scores the candidates
-    # so a well-known title is not lost to a year that is off by one or a title with different punctuation.
-    param([string]$Title, [int]$Year, [string]$KeyQuery, [hashtable]$Headers)
-    $want = Get-TitleKey $Title
-    if (-not $want) { return '' }
-    $plain = ([string]$Title) -replace '\s*\(\d{4}\)\s*$', ''
-    $queries = New-Object System.Collections.Generic.List[string]
-    $base = 'https://api.themoviedb.org/3/search/movie?query=' + [Uri]::EscapeDataString($plain) + '&include_adult=false'
-    if ($Year -gt 0) { $queries.Add($base + '&year=' + $Year) }
-    $queries.Add($base)
-    if ($plain -match '^(.+?)\s*[:\-]\s+.+$') { $queries.Add('https://api.themoviedb.org/3/search/movie?query=' + [Uri]::EscapeDataString($Matches[1]) + '&include_adult=false') }
-    $best = $null; $bestScore = 0
-    foreach ($qq in $queries) {
-        $f = Invoke-JsonGet -Url ($qq + $KeyQuery) -Headers $Headers
-        Start-Sleep -Milliseconds 250
-        if (-not $f) { continue }
-        foreach ($h in @($f.results)) {
-            $score = 0
-            $names = @((Get-TitleKey ([string]$h.title)), (Get-TitleKey ([string]$h.original_title)))
-            if ($names -contains $want) { $score += 100 }
-            elseif ($names | Where-Object { $_ -and ($_.StartsWith($want) -or $want.StartsWith($_)) }) { $score += 40 }
-            else { continue }
-            $hy = 0
-            if ($h.release_date -and ([string]$h.release_date).Length -ge 4) { $hy = [int]([string]$h.release_date).Substring(0, 4) }
-            if ($Year -gt 0 -and $hy -gt 0) {
-                $d = [Math]::Abs($hy - $Year)
-                if ($d -eq 0) { $score += 50 } elseif ($d -eq 1) { $score += 35 } elseif ($d -le 3) { $score += 10 } else { $score -= 40 }
-            }
-            $score += [Math]::Min(10, [Math]::Log10(1 + [double]$h.vote_count) * 2.5)
-            if ($score -gt $bestScore) { $bestScore = $score; $best = $h }
-        }
-        if ($bestScore -ge 150) { break }                  # exact title and year: no need to widen the search
-    }
-    if ($best -and $bestScore -ge 60) { return [string]$best.id }
-    return ''
-}
-
-function Invoke-MetadataScrape {
-    # Fills Year, Genre, certification, rating, studio, director, Rotten Tomatoes critic score and box office for the given titles.
-    param([object[]]$Records, [int[]]$Indexes, [string]$TmdbKey, [string]$OmdbKey, [bool]$Overwrite, [string]$DataFolder, [string]$StorePath)
-
-    $script:Sync.Total = $Indexes.Count
-    foreach ($r in $Records) { [void]$script:Sync.Partial.Add($r) }      # so an abandoned run still returns every title
-    $targets = @($Indexes | ForEach-Object { $Records[$_] } | Where-Object { -not [string]$_.Show })
-    $skippedTv = $Indexes.Count - $targets.Count
-    if ($targets.Count -eq 0) { $script:Sync.Summary = 'Nothing to fetch: only movies are supported for now (TV titles were skipped).'; return }
-
-    $wanted = New-Object 'System.Collections.Generic.HashSet[string]'
-    foreach ($t in $targets) { if ($t.IMDBID) { [void]$wanted.Add([string]$t.IMDBID) } }
-    Set-ScanPhase -Lo 0.0 -Hi 0.1
-    $imdb = Get-ImdbRatingMap -DataFolder $DataFolder -Wanted $wanted
-
-    $headers = @{}; $keyQ = ''
-    if ($TmdbKey.Length -gt 60) { $headers['Authorization'] = 'Bearer ' + $TmdbKey } else { $keyQ = '&api_key=' + [Uri]::EscapeDataString($TmdbKey) }
-    $store = Read-MetaStore -Path $StorePath
-    $stats = @{ Done = 0; Found = 0; Missing = 0; Failed = 0 }
-    $tmdbOff = (-not $TmdbKey); $omdbOff = (-not $OmdbKey); $omdbLimit = $false; $keyBad = ''
-    Set-ScanPhase -Lo 0.1 -Hi 1.0
-    $i = 0
-    foreach ($rec in $targets) {
-        if (Test-ScanCancelled) { break }
-        $i++
-        Set-UiProgress -Text ('Fetching info {0} of {1}: {2}' -f $i, $targets.Count, $rec.Title) -Value $i -Max $targets.Count
-        $keys  = Get-MetaKeys $rec
-        $entry = $null
-        foreach ($k in $keys) { if ($store.ContainsKey($k)) { $entry = $store[$k]; break } }
-        if ($null -eq $entry) { $entry = @{ Manual = @{}; Scraped = @{}; Force = @(); Sources = @{}; At = '' } }
-        $got = @{}                                   # field -> @{ Value; Source }
-        $imdbId = [string]$rec.IMDBID
-        try {
-            # ---- TMDB ---------------------------------------------------------------
-            if (-not $tmdbOff) {
-                $tid = [string]$rec.TMDBID
-                if (-not $tid -and $imdbId) {
-                    $f = Invoke-JsonGet -Url ('https://api.themoviedb.org/3/find/' + $imdbId + '?external_source=imdb_id' + $keyQ) -Headers $headers
-                    Start-Sleep -Milliseconds 250
-                    if ($f -and @($f.movie_results).Count -gt 0) { $tid = [string]@($f.movie_results)[0].id }
-                }
-                if (-not $tid) { $tid = Find-TmdbMovieId -Title ([string]$rec.Title) -Year ([int]$rec.Year) -KeyQuery $keyQ -Headers $headers }
-                if ($tid) {
-                    $d = Invoke-JsonGet -Url ('https://api.themoviedb.org/3/movie/' + $tid + '?append_to_response=credits,release_dates' + $keyQ) -Headers $headers
-                    Start-Sleep -Milliseconds 250
-                    if ($d) {
-                        if (-not $imdbId -and $d.imdb_id) { $imdbId = [string]$d.imdb_id }
-                        if ($d.release_date -and ([string]$d.release_date).Length -ge 4) { $got['Year'] = @{ Value = [int]([string]$d.release_date).Substring(0, 4); Source = 'TMDB' } }
-                        $g = @($d.genres | ForEach-Object { $_.name } | Where-Object { $_ })
-                        if ($g.Count -gt 0) { $got['Genre'] = @{ Value = ($g -join '; '); Source = 'TMDB' } }
-                        $co = @($d.production_companies | ForEach-Object { $_.name } | Where-Object { $_ }) | Select-Object -First 1
-                        if ($co) { $got['Studio'] = @{ Value = [string]$co; Source = 'TMDB' } }
-                        $dir = @($d.credits.crew | Where-Object { $_.job -eq 'Director' } | ForEach-Object { $_.name } | Select-Object -Unique)
-                        if ($dir.Count -gt 0) { $got['Director'] = @{ Value = ($dir -join '; '); Source = 'TMDB' } }
-                        $us = @($d.release_dates.results | Where-Object { $_.iso_3166_1 -eq 'US' }) | Select-Object -First 1
-                        if ($us) {
-                            $c = @($us.release_dates | Where-Object { $_.certification } | Sort-Object { if ($_.type -eq 3) { 0 } else { 1 } })
-                            if ($c.Count -gt 0) { $got['MPAARating'] = @{ Value = [string]$c[0].certification; Source = 'TMDB' } }
-                        }
-                        if ([double]$d.revenue -gt 0) { $got['BoxOfficeWorldwide'] = @{ Value = [double]$d.revenue; Source = 'TMDB' } }
-                        if ([double]$d.vote_average -gt 0) { $got['Rating'] = @{ Value = [Math]::Round([double]$d.vote_average, 1); Source = 'TMDB' }; $got['Votes'] = @{ Value = [int]$d.vote_count; Source = 'TMDB' } }
-                        if (-not $rec.TMDBID) { $got['TMDBID'] = @{ Value = $tid; Source = 'TMDB' } }
-                    }
-                }
-            }
-            if ($imdbId -and -not $rec.IMDBID) { $got['IMDBID'] = @{ Value = $imdbId; Source = 'TMDB' } }
-
-            # ---- IMDb ratings file (beats TMDB's own score) --------------------------------
-            if ($imdbId -and $imdb.ContainsKey($imdbId)) {
-                $m = $imdb[$imdbId]
-                if ($m.Rating -gt 0) { $got['Rating'] = @{ Value = [double]$m.Rating; Source = 'IMDb' }; $got['Votes'] = @{ Value = [int]$m.Votes; Source = 'IMDb' } }
-            }
-
-            # ---- OMDb: Rotten Tomatoes critic score, Metacritic Metascore, domestic box office ---------------------
-            if (-not $omdbOff -and -not $omdbLimit -and $imdbId) {
-                $o = Invoke-JsonGet -Url ('https://www.omdbapi.com/?apikey=' + [Uri]::EscapeDataString($OmdbKey) + '&i=' + $imdbId)
-                if ($o) {
-                    if ($o.Response -eq 'False' -and ([string]$o.Error) -match 'limit') { $omdbLimit = $true }
-                    elseif ($o.Response -eq 'True') {
-                        $rt = @($o.Ratings | Where-Object { $_.Source -eq 'Rotten Tomatoes' }) | Select-Object -First 1
-                        if ($rt -and ([string]$rt.Value) -match '^(\d+)%') { $got['RTCritic'] = @{ Value = [int]$Matches[1]; Source = 'OMDb' } }
-                        if (([string]$o.Metascore) -match '^\d+$' -and [int]$o.Metascore -gt 0) { $got['Metascore'] = @{ Value = [int]$o.Metascore; Source = 'OMDb' } }
-                        $bo = [string]$o.BoxOffice
-                        if ($bo -match '^\$([\d,]+)$') { $got['BoxOfficeDomestic'] = @{ Value = [double]($Matches[1] -replace ',', ''); Source = 'OMDb' } }
-                    }
-                }
-            }
-        }
-        catch {
-            if ($_.Exception.Message -eq 'KEYREJECT') { $keyBad = 'An API key was rejected - check the keys under the gear button.'; Add-FetchDetail $rec 'Failed' 'A service rejected the API key (HTTP 401/403). Check the TMDB and OMDb keys under the gear button.'; break }
-            $why = [string]$_.Exception.Message
-            $inner = $_.Exception.InnerException
-            if ($null -ne $inner -and $inner.Message -and $why -notmatch [regex]::Escape($inner.Message)) { $why += ' / ' + $inner.Message }
-            Add-FetchDetail $rec 'Failed' ('Error while looking it up: ' + $why)
-            $stats.Failed++; continue
-        }
-
-        # ---- apply: manual values always win; empty fields are filled; Replace ticked => overwrite ----
-        $changed = $false
-        foreach ($name in @($got.Keys)) {
-            if ($entry.Manual.ContainsKey($name)) { continue }
-            $f = $script:Fields | Where-Object { $_.Name -eq $name } | Select-Object -First 1
-            if ($null -eq $f) { continue }
-            $v = $got[$name].Value
-            $cur = $rec.$name
-            if ((Test-ValueEmpty $cur) -or ($Overwrite -and "$cur" -ne "$v")) {
-                Set-RecField $rec $name ([Convert]::ChangeType($v, $script:TypeMap[$f.Type]))
-                if ($name -eq 'Rating') { Set-RecField $rec 'RatingSource' ([string]$got[$name].Source) }
-                $changed = $true
-            }
-            $entry.Scraped[$name] = $v
-            $entry.Sources[$name] = $got[$name].Source
-            if ($Overwrite -and $entry.Force -notcontains $name) { $entry.Force = @($entry.Force) + $name }
-        }
-        if ($got.Count -gt 0) {
-            $entry.At = (Get-Date).ToString('yyyy-MM-dd')
-            foreach ($k in (Get-MetaKeys $rec)) { $store[$k] = $entry }
-            $stats.Found++
-        }
-        else {
-            $stats.Missing++
-            $why = if ($tmdbOff) { 'No TMDB key is set, so nothing could be looked up (add one under the gear button).' }
-                   elseif ($tid) { 'TMDB found the movie (id ' + $tid + ') but returned no usable fields.' }
-                   elseif ($imdbId) { 'TMDB has no movie for IMDb id ' + $imdbId + ', and a search by title found no close match.' }
-                   else { 'No IMDb/TMDB id on this title, and a TMDB search for "' + [string]$rec.Title + '"' + $(if ([int]$rec.Year -gt 0) { ' (' + [int]$rec.Year + ')' } else { '' }) + ' found no close match.' }
-            Add-FetchDetail $rec 'Not found' $why
-        }
-        if ($changed) { $notes = @($entry.Sources.Keys | Sort-Object | ForEach-Object { '{0}: {1}' -f $_, $entry.Sources[$_] }); Set-RecField $rec 'MetaSources' ($notes -join '; ') }
-        $stats.Done++
-        if (($i % 25) -eq 0) { try { Write-MetaStore -Path $StorePath -Store $store } catch { } }
-    }
-    try { Write-MetaStore -Path $StorePath -Store $store } catch { }
-
-    $sum = 'Fetched info for {0} of {1} title(s)' -f $stats.Found, $targets.Count
-    if ($stats.Missing -gt 0) { $sum += ", $($stats.Missing) not found" }
-    if ($stats.Failed  -gt 0) { $sum += ", $($stats.Failed) failed" }
-    if ($skippedTv     -gt 0) { $sum += ", $skippedTv TV title(s) skipped" }
-    $sum += '.'
-    if ($omdbLimit) { $sum += ' OMDb daily limit reached - run again tomorrow for the rest.' }
-    if ($keyBad)    { $sum += ' ' + $keyBad }
-    if ($tmdbOff)   { $sum += ' (No TMDB key set.)' }
-    $script:Sync.Summary = $sum
-}
+Update-MmlmContext
 #endregion
 
 #region ---------------------------------------------------------------- Background scan (keeps the window responsive)
-function Invoke-FolderScan {
-    # Walks a folder (local or UNC), reads every media file and adds each finished record to $script:Sync.Partial.
-    # Cancellable between files and between directories; a progress line is published as it goes.
-    param([string]$Folder, [bool]$Video, [bool]$Audio, [bool]$Rebuild, [bool]$DetectFel, [int]$Parallel = 1)
-
-    if (-not [IO.Directory]::Exists($Folder)) { throw "The folder was not found or cannot be reached:`n$Folder" }
-    Initialize-MediaInfoModule
-
-    $exts = @()
-    if ($Video) { $exts += $script:VideoExtensions }
-    if ($Audio) { $exts += $script:AudioExtensions }
-
-    $paths = New-Object System.Collections.Generic.List[string]
-    $stack = New-Object System.Collections.Generic.Stack[string]
-    $stack.Push($Folder)
-    while ($stack.Count -gt 0) {
-        if (Test-ScanCancelled) { return }
-        $dir = $stack.Pop()
-        try {
-            foreach ($f in [IO.Directory]::EnumerateFiles($dir)) {
-                $e = [IO.Path]::GetExtension($f).TrimStart('.').ToLowerInvariant()
-                if ($exts -contains $e) { $paths.Add($f) }
-            }
-            foreach ($d in [IO.Directory]::EnumerateDirectories($dir)) { $stack.Push($d) }
-        }
-        catch { }          # unreadable folder: skip it
-        Set-UiProgress -Text ('Enumerating files... {0} found' -f $paths.Count)
-    }
-    # External audio that belongs to a video in the same folder (Movie.mkv + Movie.flac) is not a title of its own.
-    $videoBases = @{}
-    foreach ($p in $paths) {
-        if ($script:VideoExtensions -contains [IO.Path]::GetExtension($p).TrimStart('.').ToLowerInvariant()) {
-            $d = [IO.Path]::GetDirectoryName($p)
-            if (-not $videoBases.ContainsKey($d)) { $videoBases[$d] = New-Object System.Collections.Generic.List[string] }
-            $videoBases[$d].Add([IO.Path]::GetFileNameWithoutExtension($p).ToLowerInvariant())
-        }
-    }
-    if ($videoBases.Count -gt 0) {
-        $kept = New-Object System.Collections.Generic.List[string]
-        foreach ($p in $paths) {
-            $isCompanion = $false
-            if ($script:AudioExtensions -contains [IO.Path]::GetExtension($p).TrimStart('.').ToLowerInvariant()) {
-                $d = [IO.Path]::GetDirectoryName($p)
-                if ($videoBases.ContainsKey($d)) {
-                    $ab = [IO.Path]::GetFileNameWithoutExtension($p).ToLowerInvariant()
-                    foreach ($vb in $videoBases[$d]) { if ($ab.StartsWith($vb)) { $isCompanion = $true; break } }
-                }
-            }
-            if (-not $isCompanion) { $kept.Add($p) }
-        }
-        $paths = $kept
-    }
-    $script:Sync.Total = $paths.Count
-    if ($paths.Count -eq 0) { return }
-
-    $sorted = @($paths | Sort-Object)
-    $workers = [Math]::Max(1, [Math]::Min([Math]::Min(12, [int]$Parallel), $sorted.Count))
-
-    if ($sorted.Count -lt 2 -or -not $script:FunctionCode) {
-        $i = 0
-        foreach ($p in $sorted) {
-            if (Test-ScanCancelled) { break }
-            $i++
-            Set-UiProgress -Text ('Reading {0} of {1}: {2}' -f $i, $sorted.Count, [IO.Path]::GetFileName($p)) -Value $i -Max $sorted.Count
-            try {
-                $fi  = New-Object IO.FileInfo($p)
-                $rec = Get-MediaInfoRecord -File $fi -RebuildCache:$Rebuild -DetectFel:$DetectFel
-                if ($rec) { [void]$script:Sync.Partial.Add($rec) }
-            }
-            catch { }
-        }
-        return
-    }
-
-    # ---- parallel: N reader runspaces pull file numbers from one shared queue ---------------------------
-    $queue = New-Object 'System.Collections.Concurrent.ConcurrentQueue[int]'
-    for ($k = 0; $k -lt $sorted.Count; $k++) { $queue.Enqueue($k) }
-    $slots  = New-Object 'object[]' $sorted.Count
-    $shared = [hashtable]::Synchronized(@{ Done = 0; Error = $null })
-    $gate   = New-Object System.Threading.SemaphoreSlim -ArgumentList 4
-    $stats  = New-Object 'object[]' 13           # one live status record per reader, shown by the Workers pane
-    for ($k = 1; $k -le 12; $k++) {
-        $stats[$k] = [hashtable]::Synchronized(@{ No = $k; State = 'Not started'; File = ''; Stage = ''; Step = 0; Of = 4; Since = 0.0; Started = 0.0; Done = 0; BusyMs = 0.0 })
-    }
-    $script:Sync.WorkerStats = $stats
-
-    $childScript = $script:FunctionCode + @'
-try {
-    $idx = 0
-    if ([double]$WStat.Started -eq 0) { $WStat.Started = Get-NowMs }
-    $WStat.State = 'Idle'
-    # A reader whose number is above the current target (the box can be changed mid-scan) stops after its file.
-    while (-not (Test-ScanCancelled) -and ($WorkerNo -le [int]$script:Sync.Workers) -and $Queue.TryDequeue([ref]$idx)) {
-        $p = $Paths[$idx]
-        $WStat.File = [IO.Path]::GetFileName($p); $WStat.Stage = 'Starting'; $WStat.Step = 0; $WStat.Of = 4
-        $WStat.Since = Get-NowMs; $WStat.State = 'Reading'
-        try {
-            $fi  = New-Object IO.FileInfo($p)
-            $rec = Get-MediaInfoRecord -File $fi -RebuildCache:$Rebuild -DetectFel:$DetectFel
-            if ($rec) { $Slots[$idx] = $rec; [void]$script:Sync.Partial.Add($rec) }
-        }
-        catch { }
-        $WStat.BusyMs = [double]$WStat.BusyMs + ((Get-NowMs) - [double]$WStat.Since)
-        $WStat.Done = [int]$WStat.Done + 1
-        $WStat.State = 'Idle'; $WStat.Stage = 'Finished file'; $WStat.Step = 4
-        [System.Threading.Monitor]::Enter($Shared.SyncRoot)
-        try {
-            $Shared.Done = [int]$Shared.Done + 1
-            Set-UiProgress -Text ('Reading {0} of {1}: {2}' -f $Shared.Done, $Paths.Count, [IO.Path]::GetFileName($p)) -Value $Shared.Done -Max $Paths.Count
-        }
-        finally { [System.Threading.Monitor]::Exit($Shared.SyncRoot) }
-    }
-    $WStat.State = if (Test-ScanCancelled) { 'Cancelled' } elseif ($WorkerNo -gt [int]$script:Sync.Workers) { 'Stopped' } else { 'Finished' }
-    $WStat.Stage = ''
-}
-catch { $Shared.Error = $_.Exception.Message; $WStat.State = 'Error' }
-'@
-
-    $kids    = New-Object System.Collections.Generic.List[object]      # every reader ever started (cleaned up at the end)
-    $readers = New-Object 'object[]' 13                                 # the current reader for each number 1..12
-    $script:Sync.Workers = [Math]::Max(1, [Math]::Min(12, [int]$Parallel))
-
-    $addReader = {
-        param([int]$no)
-        $rs = [runspacefactory]::CreateRunspace()
-        $rs.ApartmentState = 'MTA'
-        $rs.Open()
-        foreach ($key in @($script:WorkerVars.Keys)) { $rs.SessionStateProxy.SetVariable($key, $script:WorkerVars[$key]) }
-        $rs.SessionStateProxy.SetVariable('Queue',     $queue)
-        $rs.SessionStateProxy.SetVariable('Paths',     $sorted)
-        $rs.SessionStateProxy.SetVariable('Slots',     $slots)
-        $rs.SessionStateProxy.SetVariable('Shared',    $shared)
-        $rs.SessionStateProxy.SetVariable('Rebuild',   $Rebuild)
-        $rs.SessionStateProxy.SetVariable('DetectFel', $DetectFel)
-        $rs.SessionStateProxy.SetVariable('FelGate',   $gate)
-        $rs.SessionStateProxy.SetVariable('WorkerNo',  $no)
-        $rs.SessionStateProxy.SetVariable('WStat',     $stats[$no])
-        $ps = [powershell]::Create()
-        $ps.Runspace = $rs
-        [void]$ps.AddScript($childScript)
-        $kid = [pscustomobject]@{ Ps = $ps; Rs = $rs; Handle = $ps.BeginInvoke() }
-        $kids.Add($kid)
-        $kid
-    }
-
-    try {
-        $started = 0
-        while ($true) {
-            # (re)start readers up to the current target; the box can be raised or lowered while the scan runs
-            if (-not (Test-ScanCancelled) -and -not $queue.IsEmpty -and $started -lt 80) {
-                $target = [Math]::Max(1, [Math]::Min(12, [int]$script:Sync.Workers))
-                for ($no = 1; $no -le $target; $no++) {
-                    $cur = $readers[$no]
-                    if ($null -eq $cur -or $cur.Handle.IsCompleted) { $readers[$no] = & $addReader $no; $started++ }
-                }
-            }
-            $alive = 0
-            for ($no = 1; $no -le 12; $no++) {
-                if ($null -ne $readers[$no] -and -not $readers[$no].Handle.IsCompleted) { $alive++ }
-            }
-            $script:Sync.Active = $alive
-            if ($alive -eq 0) { break }
-            Start-Sleep -Milliseconds 120
-        }
-    }
-    finally {
-        foreach ($kid in $kids) {
-            try { if ($kid.Handle.IsCompleted) { $kid.Ps.EndInvoke($kid.Handle) | Out-Null } } catch { }
-            try { $kid.Ps.Dispose() } catch { }
-            try { $kid.Rs.Dispose() } catch { }
-        }
-        try { $gate.Dispose() } catch { }
-    }
-
-    # put the records back in library (path) order
-    $ordered = @($slots | Where-Object { $null -ne $_ })
-    if ($ordered.Count -eq 0 -and $shared.Error -and -not (Test-ScanCancelled)) { throw $shared.Error }
-    $script:Sync.Partial.Clear()
-    foreach ($r in $ordered) { [void]$script:Sync.Partial.Add($r) }
-}
-
-# Everything the worker needs, copied into a separate runspace (a second PowerShell on its own thread).
-$script:WorkerFunctions = @(
-    'Test-ScanCancelled', 'Get-NowMs', 'Set-WorkerStage', 'Set-ScanPhase', 'ConvertTo-SafeInt', 'ConvertTo-SafeDouble', 'Join-UniqueList', 'Get-StringHash', 'New-EmptyRecord',
-    'Get-ResolutionClass', 'Get-HdrType', 'Get-DolbyVisionInfo', 'Get-HdrStack', 'Find-Tool', 'Get-DolbyVisionLayerType',
-    'Get-AudioLabel', 'Get-AudioLayout', 'Get-SourceFromName', 'Resolve-SourceLabel', 'Initialize-MediaInfoModule', 'Get-Mi', 'Get-MiFirst', 'Save-MediaInfoText', 'Get-SidecarFiles', 'Get-ExternalAudioFiles',
-    'Read-NfoRoot', 'Get-NfoText', 'Get-MediaInfoCachePath', 'Repair-CachedRecord', 'Get-MediaInfoRecord',
-    'New-PlexRequest', 'Get-PlexXml', 'Get-PlexSections', 'Get-PlexStubs', 'Get-PlexMetadataMap', 'Get-PlexShowNode',
-    'Save-PlexPoster', 'Convert-PlexEpoch', 'Get-PlexTags', 'Get-PlexRatings', 'Get-PlexRating', 'Get-PlexRatingSource', 'Get-PlexAudioFormat', 'ConvertFrom-PlexVideo',
-    'Invoke-PlexScan', 'Invoke-FolderScan',
-    'Set-RecField', 'Test-ValueEmpty', 'Get-MetaKeys', 'Read-MetaStore', 'Write-MetaStore', 'Invoke-JsonGet', 'Get-ImdbRatingMap', 'Get-TitleKey', 'Find-TmdbMovieId', 'Add-FetchDetail', 'Invoke-MetadataScrape'
-)
-
+# The worker is a separate runspace (a second PowerShell on its own thread). It loads the same three modules by full path
+# (modules\MMLM.*.psm1) and gets the shared values through Set-MmlmContext*; readers of a parallel folder scan do the same.
 function Start-ScanWorker {
     param([ValidateSet('Plex', 'Folder', 'Scrape')][string]$Mode, [hashtable]$ScanArgs)
 
     $code = New-Object Text.StringBuilder
-    foreach ($name in $script:WorkerFunctions) {
-        $cmd = Get-Command -Name $name -CommandType Function -ErrorAction Stop
-        [void]$code.AppendLine("function $name {")
-        [void]$code.AppendLine($cmd.Definition)
-        [void]$code.AppendLine('}')
-    }
-    [void]$code.AppendLine(@'
-function Set-UiProgress {
-    param([string]$Text, [int]$Value = -1, [int]$Max = 0)
-    if ($Text) { $script:Sync.Text = $Text }
-    if ($Max -gt 0 -and $Value -ge 0) { $script:Sync.Value = $Value; $script:Sync.Max = $Max }
-}
-'@)
-    $functionCode = $code.ToString()      # reader threads of a parallel folder scan load exactly this
+    [void]$code.AppendLine((Get-MmlmModulePreamble))
+    $functionCode = $code.ToString()      # reader threads of a parallel folder scan start with exactly this
     [void]$code.AppendLine(@'
 try {
-    if ($Mode -eq 'Plex') { $script:Sync.Results = @(Invoke-PlexScan @ScanArgs) }
-    elseif ($Mode -eq 'Scrape') { Invoke-MetadataScrape @ScanArgs; $script:Sync.Results = @($ScanArgs.Records) }
+    if ($Mode -eq 'Plex') { $script:Sync.Results = @(Invoke-MmlmPlexScan @ScanArgs) }
+    elseif ($Mode -eq 'Scrape') { Invoke-MmlmMetadataScrape @ScanArgs; $script:Sync.Results = @($ScanArgs.Records) }
     else {
-        Invoke-FolderScan @ScanArgs
+        Invoke-MmlmFolderScan @ScanArgs
         $script:Sync.Results = @($script:Sync.Partial.ToArray())
     }
 }
@@ -2131,6 +383,7 @@ finally { $script:Sync.Done = $true }
     foreach ($k in $vars.Keys) { if ($k -ne 'Mode' -and $k -ne 'ScanArgs') { $workerVars[$k] = $vars[$k] } }
     $vars['FunctionCode'] = $functionCode
     $vars['WorkerVars']   = $workerVars
+    $workerVars['FunctionCode'] = $functionCode; $workerVars['WorkerVars'] = $workerVars        # the modules' context in the worker
     foreach ($k in $vars.Keys) { $rs.SessionStateProxy.SetVariable($k, $vars[$k]) }
 
     $ps = [powershell]::Create()
@@ -2249,7 +502,7 @@ function Get-PosterThumbnail {
     try {
         $fi   = Get-Item -LiteralPath $Source -ErrorAction Stop
         $key  = '{0}|{1}|{2}|{3}' -f $fi.FullName, $fi.Length, $fi.LastWriteTimeUtc.Ticks, $Width
-        $dest = Join-Path $script:ThumbFolder ((Get-StringHash $key) + '.jpg')
+        $dest = Join-Path $script:ThumbFolder ((Get-MmlmStringHash $key) + '.jpg')
         if (Test-Path -LiteralPath $dest) { return $dest }
 
         $bytes = [IO.File]::ReadAllBytes($fi.FullName)
@@ -3717,7 +1970,7 @@ function Get-UnionExpression {
 
 function Get-CardKey {
     param([string]$Id)
-    (Get-StringHash $Id).Substring(0, 16)
+    (Get-MmlmStringHash $Id).Substring(0, 16)
 }
 
 function Get-RecordId {
@@ -3833,7 +2086,7 @@ function Initialize-TvData {
     $code = [IO.File]::ReadAllText($srcFile)
     $dir = Join-Path $script:AppData 'Helper'
     if (-not (Test-Path -LiteralPath $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
-    $name = 'Mmlm.Native-{0}-{1}.dll' -f $script:AppVersion, (Get-StringHash ($code + '|' + $PSVersionTable.PSVersion.Major)).Substring(0, 8)
+    $name = 'Mmlm.Native-{0}-{1}.dll' -f $script:AppVersion, (Get-MmlmStringHash ($code + '|' + $PSVersionTable.PSVersion.Major)).Substring(0, 8)
     $dll = Join-Path $dir $name
     # older cached copies: not loaded in this process yet, so they can go now
     foreach ($old in @(Get-ChildItem -LiteralPath $dir -Filter '*.dll' -File -ErrorAction SilentlyContinue)) {
@@ -4300,7 +2553,7 @@ function Show-PlexTokenDialog {
         $script:TokDlg.Cursor = [Windows.Forms.Cursors]::WaitCursor
         [Windows.Forms.Application]::DoEvents()
         try {
-            $secs = @(Get-PlexSections -BaseUrl $url -Token $tok)
+            $secs = @(Get-MmlmPlexSections -BaseUrl $url -Token $tok)
             $script:PlexToken    = $tok
             $script:PlexRemember = [bool]$script:TokRemember.Checked
             $script:PlexUrlOut   = $url
@@ -4432,6 +2685,7 @@ $btnFetch.Add_Click({
         Details = [Collections.ArrayList]::Synchronized((New-Object Collections.ArrayList))
         Partial = [Collections.ArrayList]::Synchronized((New-Object Collections.ArrayList))
     })
+    Update-MmlmContext
     $script:ScanUsePlex = $false
     $script:ScanMode    = 'Scrape'
     $script:KeepRecords = @()
@@ -4479,7 +2733,7 @@ $script:EditFields = @(
 
 function Get-EditText {
     param($Spec, $Value)
-    if (Test-ValueEmpty $Value) { return '' }
+    if (Test-MmlmValueEmpty $Value) { return '' }
     switch ($Spec.K) {
         'money'  { return ('{0:N0}' -f [double]$Value) }
         'double' { return [string]::Format([Globalization.CultureInfo]::InvariantCulture, '{0:0.0}', [double]$Value) }
@@ -4532,7 +2786,7 @@ function ConvertFrom-EditText {
 function Find-MetaEntry {
     # The store entry a record is filed under (any of its keys), or $null.
     param([hashtable]$Store, $Rec)
-    foreach ($k in (Get-MetaKeys $Rec)) { if ($Store.ContainsKey($k)) { return @{ Key = $k; Entry = $Store[$k] } } }
+    foreach ($k in (Get-MmlmMetaKeys $Rec)) { if ($Store.ContainsKey($k)) { return @{ Key = $k; Entry = $Store[$k] } } }
     $null
 }
 
@@ -4616,7 +2870,7 @@ function Edit-SelectedMetadata {
     }
     if ($null -eq $rec) { return }
 
-    $store = Read-MetaStore -Path $script:MetaStorePath
+    $store = Read-MmlmMetaStore -Path $script:MetaStorePath
     $found = Find-MetaEntry $store $rec
     $manual = if ($found) { $found.Entry.Manual } else { @{} }
     $res = Show-MetaEditor -Rec $rec -Manual $manual
@@ -4624,12 +2878,12 @@ function Edit-SelectedMetadata {
 
     # 1) the store file
     if ($found) { $key = $found.Key; $entry = $found.Entry }
-    else { $key = (Get-MetaKeys $rec)[0]; $entry = @{ Manual = @{}; Scraped = @{}; Force = @(); Sources = @{}; At = '' } }
+    else { $key = (Get-MmlmMetaKeys $rec)[0]; $entry = @{ Manual = @{}; Scraped = @{}; Force = @(); Sources = @{}; At = '' } }
     foreach ($n in $res.Put.Keys) { $entry.Manual[$n] = $res.Put[$n] }
     foreach ($n in $res.Del) { $entry.Manual.Remove($n) }
     $entry.At = (Get-Date).ToString('s')
     if ($entry.Manual.Count -eq 0 -and $entry.Scraped.Count -eq 0) { $store.Remove($key) } else { $store[$key] = $entry }
-    try { Write-MetaStore -Path $script:MetaStorePath -Store $store }
+    try { Write-MmlmMetaStore -Path $script:MetaStorePath -Store $store }
     catch { [Windows.Forms.MessageBox]::Show("Could not save the changes:`n$_", 'Edit info', 'OK', 'Error') | Out-Null; return }
 
     # 2) what is on screen right now (the next scan re-applies the store by itself)
@@ -4637,25 +2891,25 @@ function Edit-SelectedMetadata {
     foreach ($n in $res.Put.Keys) {
         $f = $script:Fields | Where-Object { $_.Name -eq $n } | Select-Object -First 1
         $typed = [Convert]::ChangeType($res.Put[$n], $script:TypeMap[$f.Type])
-        Set-RecField $rec $n $typed
+        Set-MmlmRecField $rec $n $typed
         $drv.Row[$n] = $typed
     }
     foreach ($n in $res.Del) {
         if ($n -eq 'Source') {
             $c = Get-SourceClass $rec
-            Set-RecField $rec 'Source' $c.Label; Set-RecField $rec 'SourceWhy' $c.Why
+            Set-MmlmRecField $rec 'Source' $c.Label; Set-MmlmRecField $rec 'SourceWhy' $c.Why
             $drv.Row['Source'] = $c.Label; $drv.Row['SourceWhy'] = $c.Why
         }
         elseif ($entry.Scraped.ContainsKey($n)) {
             $f = $script:Fields | Where-Object { $_.Name -eq $n } | Select-Object -First 1
-            try { $typed = [Convert]::ChangeType($entry.Scraped[$n], $script:TypeMap[$f.Type]); Set-RecField $rec $n $typed; $drv.Row[$n] = $typed } catch { }
+            try { $typed = [Convert]::ChangeType($entry.Scraped[$n], $script:TypeMap[$f.Type]); Set-MmlmRecField $rec $n $typed; $drv.Row[$n] = $typed } catch { }
         }
         else { $note += $n }
     }
     $names = @($res.Put.Keys) + @($res.Del)
     $keep = @(([string]$rec.MetaSources -split '; ') | Where-Object { $t = $_; $_ -and -not ($res.Put.Keys -contains ($t -split ':')[0]) -and -not ($res.Del -contains ($t -split ':')[0]) })
     $keep += @($res.Put.Keys | ForEach-Object { '{0}: manual' -f $_ })
-    Set-RecField $rec 'MetaSources' ($keep -join '; ')
+    Set-MmlmRecField $rec 'MetaSources' ($keep -join '; ')
     $drv.Row['MetaSources'] = [string]$rec.MetaSources
     $script:DashboardStale = $true
     $lblStatus.Text = 'Saved {0} change(s) for {1}.' -f $names.Count, $rec.Title
@@ -4739,7 +2993,7 @@ function Resolve-Collection {
     $want = @{}
     foreach ($it in $Col.Items) { foreach ($k in $it.Ids) { $want[[string]$k] = $true } }
     foreach ($r in $script:ScanResults) {
-        foreach ($k in (Get-MetaKeys $r)) { if ($want.ContainsKey($k)) { [void]$set.Add((Get-RecordId $r)); break } }
+        foreach ($k in (Get-MmlmMetaKeys $r)) { if ($want.ContainsKey($k)) { [void]$set.Add((Get-RecordId $r)); break } }
     }
     return ,$set
 }
@@ -4830,7 +3084,7 @@ function Add-RecordsToCollection {
     foreach ($it in $Col.Items) { foreach ($k in $it.Ids) { $have[[string]$k] = $true } }
     $added = 0
     foreach ($r in @($Records)) {
-        $ids = @(Get-MetaKeys $r)
+        $ids = @(Get-MmlmMetaKeys $r)
         $dup = $false
         foreach ($k in $ids) { if ($have.ContainsKey($k)) { $dup = $true; break } }
         if ($dup) { continue }
@@ -5128,7 +3382,7 @@ function Remove-SelectedFromCollection {
     $recs = @(Get-SelectedRecords)
     if ($recs.Count -eq 0) { return }
     $drop = @{}
-    foreach ($r in $recs) { foreach ($k in (Get-MetaKeys $r)) { $drop[$k] = $true } }
+    foreach ($r in $recs) { foreach ($k in (Get-MmlmMetaKeys $r)) { $drop[$k] = $true } }
     $removed = 0
     for ($i = $col.Items.Count - 1; $i -ge 0; $i--) {
         $hit = $false
@@ -5628,13 +3882,13 @@ $btnScan.Add_Click({
         if (-not $chkVideo.Checked -and -not $chkAudio.Checked) {
             [Windows.Forms.MessageBox]::Show('Select at least one media type (Video or Audio).', 'Modern Media Library Manager', 'OK', 'Warning') | Out-Null; return
         }
-        try { Initialize-MediaInfoModule }
+        try { Initialize-MmlmMediaInfoModule }
         catch {
             [Windows.Forms.MessageBox]::Show("Could not initialize the MediaInfo module:`n$_", 'Modern Media Library Manager', 'OK', 'Error') | Out-Null; return
         }
     }
 
-    if ($chkFel.Checked -and -not ((Find-Tool 'ffmpeg.exe') -and (Find-Tool 'dovi_tool.exe'))) {
+    if ($chkFel.Checked -and -not ((Find-MmlmTool 'ffmpeg.exe') -and (Find-MmlmTool 'dovi_tool.exe'))) {
         [Windows.Forms.MessageBox]::Show(
             "FEL / MEL detection needs ffmpeg.exe and dovi_tool.exe.`n`nCopy both into:`n$($script:LibFolder)`n(or put them on your PATH) and scan again.`n`nThis scan will continue without it - dual-layer files will show as 'Dual layer'.",
             'Detect FEL / MEL', 'OK', 'Information') | Out-Null
@@ -5647,6 +3901,7 @@ $btnScan.Add_Click({
         Text = 'Starting...'; Value = 0; Max = 0; Total = 0; Cancel = $false; Done = $false; Error = $null; Results = $null; Workers = [int]$nudPar.Value
         Partial = [Collections.ArrayList]::Synchronized((New-Object Collections.ArrayList))
     })
+    Update-MmlmContext
     $script:ScanUsePlex = $usePlex
     $script:ScanMode    = 'Scan'
     $script:ScanWatch   = [Diagnostics.Stopwatch]::StartNew()
@@ -5899,7 +4154,7 @@ function Update-WorkersData {
     $stats = $s.WorkerStats
     if ($null -eq $stats) { $script:WkRows = @(); $script:WkHead = $null; return }
 
-    $now    = Get-NowMs
+    $now    = Get-MmlmNowMs
     $dt     = if ($null -ne $script:WkT) { $now - $script:WkT } else { 0 }
     $sample = ($null -eq $script:WkT) -or ($dt -ge 1500)
     $proc   = [Diagnostics.Process]::GetCurrentProcess()

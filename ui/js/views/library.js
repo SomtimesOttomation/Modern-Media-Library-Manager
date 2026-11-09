@@ -148,7 +148,7 @@ export function mount(ctx) {
     if (mode === 'posters') {
       const wall = h('div', { class: 'wall' });
       body.append(wall);
-      stopWall = fillWall(wall, rows, (r) => tileHtml({ key: r._i, poster: posterHtml(r), title: r.Title, sub: [r.Year > 0 ? r.Year : '', fmtSize(r.FileSizeGB)].filter(Boolean).join(' · '), res: r.ResolutionClass, hdr: hdrLabel(r), rating: r.Rating }));
+      stopWall = fillWall(wall, rows, (r) => tileHtml({ key: r._i, poster: posterHtml(r), title: r.Title, sub: [r.Year > 0 ? r.Year : '', fmtSize(r.FileSizeGB)].filter(Boolean).join(' · '), res: r.ResolutionClass, hdr: hdrLabel(r), rating: r.Rating, rt: r.RTCritic, mcScore: r.Metascore }));
       wall.addEventListener('click', (e) => { const t = e.target.closest('.pc'); if (t) openCard(L.rows[+t.dataset.k], ctx.toast); });
     } else {
       const cols = gridColumns(L);

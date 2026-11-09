@@ -11,10 +11,10 @@ function spec(title, pairs) {
   if (!p.length) return '';
   return `<div class="spec"><h4>${title}</h4><dl>${p.map((x) => `<dt>${esc(x[0])}</dt><dd>${x[1] && x[1].html ? x[1].html : esc(x[1])}</dd>`).join('')}</dl></div>`;
 }
-const TOMATO = '<svg class="rti" viewBox="0 0 16 16" aria-label="Fresh"><circle cx="8" cy="9.2" r="6.4" fill="#E63428"/><path d="M8 5 4.8 2.2 8 3.2 11.4 1.4 10 5z" fill="#46AA46"/></svg>';
-const SPLAT = '<svg class="rti" viewBox="0 0 16 16" aria-label="Rotten"><g fill="#70A82C"><ellipse cx="8" cy="10" rx="6.6" ry="4.4"/><circle cx="8" cy="6" r="4"/><circle cx="2.4" cy="12.6" r="2.2"/><circle cx="13.6" cy="12" r="2.2"/><circle cx="12.6" cy="4" r="1.5"/></g></svg>';
+export const TOMATO = '<svg class="rti" viewBox="0 0 16 16" aria-label="Fresh"><circle cx="8" cy="9.2" r="6.4" fill="#E63428"/><path d="M8 5 4.8 2.2 8 3.2 11.4 1.4 10 5z" fill="#46AA46"/></svg>';
+export const SPLAT = '<svg class="rti" viewBox="0 0 16 16" aria-label="Rotten"><g fill="#70A82C"><ellipse cx="8" cy="10" rx="6.6" ry="4.4"/><circle cx="8" cy="6" r="4"/><circle cx="2.4" cy="12.6" r="2.2"/><circle cx="13.6" cy="12" r="2.2"/><circle cx="12.6" cy="4" r="1.5"/></g></svg>';
 /* Metacritic's colours: green 61-100, yellow 40-60, red 0-39, with the score on the square */
-function mc(x) {
+export function mc(x) {
   const n = Math.round(num(x)); if (!(n > 0)) return '';
   const c = n >= 61 ? ['#66cc33', '#fff'] : n >= 40 ? ['#ffcc33', '#222'] : ['#ff0000', '#fff'];
   return { html: `<span class="mc" style="background:${c[0]};color:${c[1]}">${n}</span>` };
@@ -23,10 +23,12 @@ function scoreCards(r) {
   const rt = (x) => (num(x) > 0 ? { html: (num(x) >= 60 ? TOMATO : SPLAT) + Math.round(num(x)) + '%' } : '');
   const rlabel = r.RatingSource === 'IMDb' ? 'IMDb rating' : r.RatingSource === 'TMDB' ? 'TMDB rating' : 'Rating';
   const rating = [[rlabel, num(r.Rating) > 0 ? num(r.Rating).toFixed(1) + (num(r.Votes) > 0 ? '  (' + fmtInt(num(r.Votes)) + ' votes)' : '') : ''],
-    ['RT Critics', rt(r.RTCritic)], ['RT Audience', rt(r.RTAudience)], ['Metacritic', mc(r.Metascore)], ['CinemaScore', r.CinemaScore]];
+    ['RT Critics', rt(r.RTCritic)], ['RT Audience', rt(r.RTAudience)],
+    // Metacritic always shows on a movie: its score comes from OMDb, so say how to get it when it is missing
+    ['Metacritic', mc(r.Metascore) || (r.Show ? '' : { html: '<span class="muted" title="Metacritic scores come from OMDb: Tools > Fetch info (needs an OMDb key in Settings > Data)">not fetched</span>' })], ['CinemaScore', r.CinemaScore]];
   const money = [['Domestic (all-time)', fmtMoney(r.BoxOfficeDomestic)], ['Worldwide (all-time)', fmtMoney(r.BoxOfficeWorldwide)],
     ['Opening, domestic', fmtMoney(r.OpeningDomestic)], ['Opening, worldwide', fmtMoney(r.OpeningWorldwide)]];
-  const has = (rows) => rows.some((x) => x[1]);
+  const has = (rows) => rows.some((x) => x[1] && !(x[1].html && x[1].html.includes('not fetched')));
   return (has(rating) ? spec('Ratings', rating) : '') + (has(money) ? spec('Box office', money) : '');
 }
 const ADDCOL = '<span class="addcol"><button type="button" data-addcol="1" title="Add to a collection">+ Collection</button></span>';

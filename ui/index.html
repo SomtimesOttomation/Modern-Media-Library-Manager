@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en" data-theme="system">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; img-src 'self' data: blob: https://mmlm.cache; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://mmlm.cache data:">
+  <title>Modern Media Library Manager</title>
+  <link rel="icon" href="img/tab-icon.svg">
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="stylesheet" href="css/mmlm.css">
+</head>
+<body>
+  <!-- NBADash's page layout via DashLauncher's Sample: top bar, kill-switch bar, scan strip, the shared navigation bar
+       (docs/NAVBAR-SPEC.md), then the view. -->
+  <div id="app">
+    <div id="chrome">
+    <header id="topbar">
+      <button id="brand" class="brand" type="button" title="Modern Media Library Manager">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-text">Media <b>Library</b></span>
+      </button>
+      <nav id="nav" class="nav" aria-label="Sections">
+        <a href="#/movies" data-route="movies">Movies <span class="nav-count" id="count-movies"></span></a>
+        <a href="#/tv" data-route="tv">TV Shows <span class="nav-count" id="count-tv"></span></a>
+        <a href="#/stats" data-route="stats">Stats</a>
+      </nav>
+      <div class="topbar-right">
+        <button id="btn-version" class="ver-btn" type="button" hidden title="Check for updates"></button>
+        <button id="btn-theme" class="icon-btn" type="button" title="Theme" aria-label="Theme"></button>
+      </div>
+    </header>
+    <div id="haltbar" class="haltbar" hidden role="status"></div>
+    <div id="dropbar" class="haltbar dropbar" hidden role="status"></div>
+    <div id="syncbar" class="syncbar" hidden role="status"><div class="syncbar-fill"></div><span class="syncbar-text"></span></div>
+    <div class="navpill-row">
+      <div id="navpill" class="navpill" role="navigation" aria-label="Page navigation">
+        <button id="btn-back" class="np-btn" type="button" title="Back (Alt+Left)" aria-label="Back"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button id="btn-fwd" class="np-btn" type="button" title="Forward (Alt+Right)" aria-label="Forward"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <a id="btn-home" class="np-btn" href="#/" title="Home" aria-label="Home" data-route="home"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M4 10.5 12 4l8 6.5V19a1 1 0 0 1-1 1h-4.5v-5.5h-5V20H5a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/></svg></a>
+        <button id="btn-refresh" class="np-btn" type="button" title="Scan this library from Plex (F5)" aria-label="Scan from Plex"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <span class="np-sep" aria-hidden="true"></span>
+        <div class="psearch">
+          <input id="psearch" type="search" placeholder="Search title, genre, cast, studio..." autocomplete="off" spellcheck="false" aria-label="Search the library">
+        </div>
+        <span class="np-sep" aria-hidden="true"></span>
+        <button id="live-status" class="live-status np-live" type="button" title=""></button>
+        <button id="btn-settings" class="np-btn" type="button" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4zM19.4 13.5l1.6 1.2-1.8 3.1-1.9-.7a7.6 7.6 0 0 1-1.7 1l-.3 2h-3.6l-.3-2a7.6 7.6 0 0 1-1.7-1l-1.9.7-1.8-3.1 1.6-1.2a7.7 7.7 0 0 1 0-2l-1.6-1.2 1.8-3.1 1.9.7a7.6 7.6 0 0 1 1.7-1l.3-2h3.6l.3 2a7.6 7.6 0 0 1 1.7 1l1.9-.7 1.8 3.1-1.6 1.2a7.7 7.7 0 0 1 0 2z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      </div>
+    </div>
+    </div>
+    <main id="view" class="view" tabindex="-1"></main>
+  </div>
+  <div id="overlay-root"></div>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

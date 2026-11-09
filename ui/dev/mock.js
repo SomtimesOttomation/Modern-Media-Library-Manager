@@ -1,0 +1,111 @@
+// Browser preview host (as in DashLauncher's Sample): serve the ui folder with any local web server, for example
+// `python -m http.server` inside ui, and open index.html. It answers the same commands as modules\MMLM.Host.psm1 with a
+// small made-up library. Dev only: the real host never loads this file.
+let emit = () => {};
+export function attach(fn) { emit = fn; }
+
+const qs = new URLSearchParams(location.search);
+const settings = { theme: qs.get('theme') || 'system', updateCheck: false, moviesView: qs.get('view') || 'posters', tvView: qs.get('view') || 'posters', moviesSort: 'added', tvSort: 'title', columns: [], hideDupes: false };
+const plex = { url: 'http://plex-server:32400', hasToken: true };
+const traffic = { requests: 0, bytes: 0, errors: 0 };
+let halted = false, scanTimer = 0;
+const empty = qs.has('empty');
+
+const seed = (s) => { let x = 17; for (const c of String(s)) x = (x * 31 + c.charCodeAt(0)) % 2147483647; const r = () => (x = (x * 48271) % 2147483647) / 2147483647; r(); r(); r(); return r; };
+const pick = (rnd, a) => a[Math.floor(rnd() * a.length)];
+function poster(title, hue) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="240" height="360"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="hsl(${hue},55%,42%)"/><stop offset="1" stop-color="hsl(${(hue + 40) % 360},60%,18%)"/></linearGradient></defs><rect width="240" height="360" fill="url(#g)"/><circle cx="185" cy="80" r="46" fill="hsla(${(hue + 180) % 360},70%,70%,.35)"/><text x="18" y="300" font-family="Segoe UI,Arial" font-size="22" font-weight="700" fill="#fff">${title.replace(/&/g, '&amp;').slice(0, 18)}</text></svg>`;
+  return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+}
+const FIELDS = [
+  ['Title', 'string', 'Overview', 1], ['Library', 'string', 'Overview', 1], ['Show', 'string', 'Overview', 1], ['Season', 'int', 'Overview', 0], ['Episode', 'int', 'Overview', 0],
+  ['Year', 'int', 'Overview', 1], ['Genre', 'string', 'Overview', 1], ['MPAARating', 'string', 'Overview', 1], ['Rating', 'double', 'Overview', 1], ['RuntimeMin', 'double', 'Overview', 1],
+  ['Studio', 'string', 'Overview', 1], ['Director', 'string', 'Overview', 0], ['Cast', 'string', 'Overview', 0], ['Tagline', 'string', 'Overview', 0], ['Plot', 'string', 'Overview', 0],
+  ['ReleaseDate', 'string', 'Overview', 0], ['IMDBID', 'string', 'Overview', 0], ['Resolution', 'string', 'Video', 0], ['ResolutionClass', 'string', 'Video', 1], ['VideoCodec', 'string', 'Video', 1],
+  ['VideoBitRateMbps', 'double', 'Video', 1], ['BitsPerPixel', 'double', 'Video', 0], ['FrameRate', 'double', 'Video', 1], ['BitDepth', 'int', 'Video', 1], ['HDRType', 'string', 'HDR', 1],
+  ['HDRStack', 'string', 'HDR', 0], ['DVProfile', 'string', 'HDR', 1], ['DVLayer', 'string', 'HDR', 1], ['AudioFormat', 'string', 'Audio', 1], ['ObjectAudio', 'string', 'Audio', 1],
+  ['AudioChannels', 'int', 'Audio', 0], ['AudioLayout', 'string', 'Audio', 1], ['AudioLanguages', 'string', 'Audio', 1], ['SubtitleTracks', 'int', 'Subtitles', 1], ['SubtitleLanguages', 'string', 'Subtitles', 0],
+  ['FileName', 'string', 'File', 1], ['Container', 'string', 'File', 1], ['Type', 'string', 'File', 0], ['FileSizeGB', 'double', 'File', 1], ['Source', 'string', 'File', 1], ['Added', 'string', 'File', 1],
+  ['HasNfo', 'bool', 'Library', 0], ['HasPoster', 'bool', 'Library', 0], ['RTCritic', 'int', 'Ratings', 1], ['RTAudience', 'int', 'Ratings', 1], ['Metascore', 'int', 'Ratings', 1],
+  ['BoxOfficeDomestic', 'double', 'Box office', 1], ['BoxOfficeWorldwide', 'double', 'Box office', 1], ['Poster', 'string', 'Library', 0],
+].map(([n, t, g, s]) => ({ n, t, g, s: !!s }));
+const W1 = ['Silent', 'Crimson', 'Last', 'Hidden', 'Golden', 'Broken', 'Northern', 'Midnight', 'Paper', 'Iron', 'Glass', 'Electric', 'Quiet', 'Burning', 'Lost'];
+const W2 = ['Harbor', 'Orchard', 'Signal', 'Kingdom', 'Frontier', 'Lantern', 'Meridian', 'Tide', 'Archive', 'Comet', 'Garden', 'Engine', 'Summit', 'Mirror', 'River'];
+const GEN = ['Drama', 'Comedy', 'Thriller', 'Science Fiction', 'Animation', 'Documentary', 'Adventure', 'Horror', 'Romance', 'Crime'];
+function quality(rnd) {
+  const res = pick(rnd, ['4K', '4K', '1080p', '1080p', '1080p', '720p', 'SD']);
+  const hdr = res === '4K' ? pick(rnd, ['Dolby Vision', 'Dolby Vision', 'HDR10', 'HDR10+', 'SDR']) : 'SDR';
+  const prof = hdr === 'Dolby Vision' ? pick(rnd, ['8', '8', '7', '5']) : '';
+  return { ResolutionClass: res, Resolution: { '4K': '3840x2160', '1080p': '1920x1080', '720p': '1280x720', SD: '720x480' }[res], HDRType: hdr, HDRStack: hdr === 'Dolby Vision' ? `Dolby Vision P${prof}` : hdr,
+    DVProfile: prof, DVLayer: prof === '7' ? pick(rnd, ['FEL', 'MEL']) : prof ? 'Single layer' : '', VideoCodec: res === 'SD' ? 'AVC' : pick(rnd, ['HEVC', 'HEVC', 'AVC', 'AV1']),
+    BitDepth: hdr === 'SDR' ? 8 : 10, FrameRate: 23.976, VideoBitRateMbps: Math.round((res === '4K' ? 18 + rnd() * 50 : res === '1080p' ? 4 + rnd() * 20 : 1 + rnd() * 4) * 10) / 10,
+    BitsPerPixel: Math.round((0.03 + rnd() * 0.2) * 1000) / 1000,
+    AudioFormat: pick(rnd, ['Dolby TrueHD', 'DTS-HD MA', 'Dolby Digital Plus', 'AAC', 'Dolby Digital']), ObjectAudio: pick(rnd, ['Dolby Atmos', 'None', 'None', 'DTS:X']),
+    AudioLayout: pick(rnd, ['7.1', '5.1', '5.1', 'Stereo']), AudioChannels: 6, AudioLanguages: pick(rnd, ['English', 'English; French', 'English; Spanish', 'Japanese; English']),
+    SubtitleTracks: Math.floor(rnd() * 6), SubtitleLanguages: 'English', Container: pick(rnd, ['Matroska', 'Matroska', 'MPEG-4']), Type: 'Video', Source: pick(rnd, ['Blu-ray', 'UHD Blu-ray', 'WEB-DL', 'Unknown']),
+    HasNfo: rnd() > 0.2, HasPoster: true };
+}
+function movies() {
+  const out = [];
+  for (let i = 0; i < (qs.has('big') ? 5000 : 84); i++) {
+    const rnd = seed('m' + i), title = `The ${pick(rnd, W1)} ${pick(rnd, W2)}${i % 9 === 0 ? ' II' : ''}`, year = 1975 + Math.floor(rnd() * 51);
+    const q = quality(rnd);
+    out.push({ Title: title, Library: 'Movies', Year: year, Genre: `${pick(rnd, GEN)}, ${pick(rnd, GEN)}`, MPAARating: pick(rnd, ['G', 'PG', 'PG-13', 'R', 'R']), Rating: Math.round((5 + rnd() * 4) * 10) / 10,
+      RuntimeMin: 85 + Math.floor(rnd() * 80), Studio: pick(rnd, ['Northlight Pictures', 'Blue Harbor Films', 'Kestrel Studios', 'Paper Moon']), Director: pick(rnd, ['A. Moreau', 'J. Okafor', 'R. Castell', 'M. Vance']),
+      Cast: 'Alex Hale, Sam Brandt, Jordan Pike', Tagline: rnd() > 0.5 ? 'Some stories wait for the right night.' : '', Plot: 'A made-up film for the browser preview. Every title, poster and number here is invented.',
+      ReleaseDate: `${year}-${String(1 + Math.floor(rnd() * 12)).padStart(2, '0')}-${String(1 + Math.floor(rnd() * 28)).padStart(2, '0')}`, IMDBID: rnd() > 0.3 ? 'tt' + (1000000 + i) : '',
+      ...q, FileName: `${title} (${year}).mkv`, FileSizeGB: Math.round((q.ResolutionClass === '4K' ? 40 + rnd() * 40 : 4 + rnd() * 16) * 100) / 100,
+      Added: `20${20 + Math.floor(rnd() * 7)}-${String(1 + Math.floor(rnd() * 12)).padStart(2, '0')}-${String(1 + Math.floor(rnd() * 28)).padStart(2, '0')}`,
+      RTCritic: rnd() > 0.25 ? Math.floor(20 + rnd() * 80) : 0, RTAudience: rnd() > 0.25 ? Math.floor(30 + rnd() * 70) : 0, Metascore: rnd() > 0.3 ? Math.floor(25 + rnd() * 70) : 0,
+      BoxOfficeDomestic: rnd() > 0.4 ? Math.floor(rnd() * 4e8) : 0, BoxOfficeWorldwide: rnd() > 0.4 ? Math.floor(rnd() * 1.1e9) : 0, Poster: rnd() > 0.06 ? poster(title, Math.floor(rnd() * 360)) : '' });
+  }
+  return out;
+}
+function tv() {
+  const out = [];
+  for (let s = 0; s < (qs.has('big') ? 420 : 14); s++) {
+    const rnd = seed('s' + s), show = `${pick(rnd, W1)} ${pick(rnd, W2)}`, y0 = 1995 + Math.floor(rnd() * 28), seasons = 1 + Math.floor(rnd() * 5), p = poster(show, Math.floor(rnd() * 360));
+    const genre = `${pick(rnd, GEN)}, ${pick(rnd, GEN)}`, q = quality(rnd);
+    for (let n = 1; n <= seasons; n++) for (let e = 1; e <= 6 + Math.floor(rnd() * 6); e++) {
+      out.push({ Title: `${show} - S${String(n).padStart(2, '0')}E${String(e).padStart(2, '0')} - Chapter ${e}`, Library: 'TV', Show: show, Season: n, Episode: e, Year: y0 + n - 1, Genre: genre,
+        MPAARating: 'TV-14', RuntimeMin: 42 + Math.floor(rnd() * 20), Studio: pick(rnd, ['Harbor TV', 'Northlight', 'Kestrel']), ReleaseDate: `${y0 + n - 1}-0${1 + (e % 9)}-1${e % 9}`,
+        ...q, FileName: `S${n}E${e}.mkv`, FileSizeGB: Math.round((1 + rnd() * 5) * 100) / 100, Added: `202${Math.floor(rnd() * 6)}-0${1 + Math.floor(rnd() * 9)}-1${Math.floor(rnd() * 9)}`, Poster: p });
+    }
+  }
+  return out;
+}
+const libs = { movies: movies(), tv: tv() };
+const pack = (rows) => ({ fields: FIELDS, rows: rows.map((r) => FIELDS.map((f) => (r[f.n] === undefined || r[f.n] === '' ? null : r[f.n]))) });
+
+const later = (ms, fn) => setTimeout(fn, ms);
+export async function request(cmd, args = {}) {
+  await new Promise((r) => setTimeout(r, 30));
+  switch (cmd) {
+    case 'init': return { version: '0.5.0', movies: { count: libs.movies.length, when: '2026-11-07 21:14' }, tv: { count: libs.tv.length, when: '2026-11-06 09:02' }, halted, scanning: false, scanTab: '', mode: qs.get('mode') || 'standalone', theme: qs.get('hosttheme') || '', settings, plex, updateNote: null, debug: true };
+    case 'library.get': return empty ? { empty: true } : pack(libs[args.tab === 'tv' ? 'tv' : 'movies']);
+    case 'settings.set': settings[args.key] = args.value; return settings;
+    case 'plex.set': plex.url = args.url; if (args.token) plex.hasToken = true; return plex;
+    case 'scan.start': {
+      if (halted) throw new Error('Traffic is paused. Resume it first.');
+      let pct = 0;
+      clearInterval(scanTimer);
+      scanTimer = setInterval(() => {
+        pct += 7; traffic.requests += 3; traffic.bytes += 90000;
+        if (pct >= 100) { clearInterval(scanTimer); emit('scan', { running: false, tab: args.tab, count: libs[args.tab].length, new: 2, cancelled: false, error: null }); emit('library', { tab: args.tab, ready: true }); }
+        else emit('scan', { running: true, tab: args.tab, pct, text: pct < 30 ? 'Reading the library...' : pct < 80 ? `Details ${Math.round(pct * 1.2)} of 120...` : 'Saving...' });
+      }, 250);
+      return true;
+    }
+    case 'scan.cancel': clearInterval(scanTimer); later(100, () => emit('scan', { running: false, tab: 'movies', count: 0, new: 0, cancelled: true, error: null })); return true;
+    case 'summary.get': return { title: 'Recently added', items: [], updatedAt: null };
+    case 'traffic.get': return { ...traffic, stopped: halted, uptimeSec: Math.round(performance.now() / 1000) };
+    case 'traffic.stop': halted = true; clearInterval(scanTimer); emit('traffic', { stopped: true }); return true;
+    case 'traffic.resume': halted = false; emit('traffic', { stopped: false }); return true;
+    case 'update.check': later(600, () => emit('update', { running: false, action: 'Check', result: { status: 'current', current: '0.5.0', latest: '0.5.0' } })); return true;
+    case 'update.stage': case 'update.stagezip': later(600, () => emit('update', { running: false, action: 'Stage', result: { status: 'error', error: 'The browser preview cannot install updates.' } })); return true;
+    case 'update.cancel': case 'update.apply': return true;
+    case 'open.url': console.log('open.url', args.url); return true;
+    case 'picture.save': return `Pictures\\Modern Media Library Manager\\${args.name}.png`;
+    default: throw new Error(`unknown command: ${cmd}`);
+  }
+}

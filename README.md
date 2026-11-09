@@ -65,10 +65,20 @@ Collections work with both Plex and local scans. They are matched by IMDb or TMD
 
 ## Getting started
 
-1. Keep `Modern-Media-Library-Manager.ps1`, `dashboard-template.html`, `tv-template.html` and `Run-ModernMediaLibraryManager.cmd` together in one folder.
+1. Keep the whole folder together: `Modern-Media-Library-Manager.ps1`, the `modules`, `src` and `ui` folders, `Start-MMLM.bat`, `Start-MMLM.ps1`, `dash.json`, `dashboard-template.html`, `tv-template.html`, `Update-MMLM.ps1`, `Apply-Update.ps1`, `VERSION` and `Run-ModernMediaLibraryManager.cmd`.
 2. If Windows blocked the download, run once in PowerShell: `Get-ChildItem . -Recurse | Unblock-File`
 3. Double-click `Run-ModernMediaLibraryManager.cmd`. It starts PowerShell in the mode WinForms needs.
 4. Pick a source, then click **Scan Media**.
+
+### The new page (preview)
+
+`Start-MMLM.bat` opens the library as one web page in its own window: the same page will become the app's tab in DashLauncher. It reads the libraries your scans already saved, so it opens straight onto them.
+
+- **Movies** and **TV Shows**: a poster wall or a grid, with Sort By and the search box in the bar. TV shows one tile per show; its grid is Show > Season > Episode with **Expand all**. Click a poster or row for the title card (save it as a picture into `Pictures\Modern Media Library Manager`).
+- **Stats**: the dashboard (charts, HDR and device compatibility, largest files, library health) for either tab.
+- The circular arrow in the bar (or F5) scans the open tab from Plex. The status button next to the search pauses all data traffic until you resume. The gear opens Settings (theme, Plex server and token, updates).
+
+The window app stays as it is for now and shares the same library, settings and token. Local-folder scans, **Fetch info**, **Edit info**, collections and CSV export are still done there.
 
 ### Using Plex
 
@@ -132,7 +142,9 @@ Everything the app does write is its own working data:
 | Fetched and typed-in values | `...\metadata\store.json` | **Fetch info** and **Edit info**; applied on top of every scan, so they survive cache rebuilds |
 | IMDb ratings file | `...\datasets\` | downloaded weekly for **Fetch info** |
 | Full MediaInfo text per file | `...\Inform\` | reference for source-clue research |
-| Live dashboard page | `...\Dashboard\` | the dashboard shown inside the app |
+| Live dashboard page | `...\Dashboard\` | the dashboard shown inside the app, and the new page's copy of each library (no file paths) |
+| The new page's settings, browser profile and log | `...\page-settings.json`, `...\WebView2Page\`, `...\Logs\` | the new page (`Start-MMLM.bat`) |
+| Saved title cards | `Pictures\Modern Media Library Manager\` | only when you click **Save as picture** on a card in the new page |
 | WebView2 DLLs | `lib\` next to the script | downloaded once for the embedded dashboard |
 | The `Get-MediaInfo` PowerShell module | your PowerShell module folder (current user) | installed on first local scan if missing |
 | Files you ask for | where you choose | **Export CSV** and **Save HTML** (a saved dashboard also gets a `thumbs` folder beside it unless posters are embedded) |
@@ -162,11 +174,11 @@ The app connects only to the places below. Nothing is sent anywhere else, and th
 
 | Connects to | When | What is sent or fetched | How to avoid it |
 | --- | --- | --- | --- |
-| **nuget.org** | First time the dashboard is shown in the app window, if the three WebView2 files are missing | Downloads the Microsoft.Web.WebView2 package and extracts three DLLs into `lib\` | Copy `Microsoft.Web.WebView2.Core.dll`, `Microsoft.Web.WebView2.WinForms.dll` and `WebView2Loader.dll` into `lib\` yourself; or use **Save HTML** and open the file in your browser |
+| **nuget.org** | First time the dashboard is shown in the app window, or the first time `Start-MMLM.bat` runs, if the three WebView2 files are missing | Downloads the Microsoft.Web.WebView2 package and extracts three DLLs into `lib\` | Copy `Microsoft.Web.WebView2.Core.dll`, `Microsoft.Web.WebView2.WinForms.dll` and `WebView2Loader.dll` into `lib\` yourself; or use **Save HTML** and open the file in your browser |
 | **PowerShell Gallery** | First local-folder scan, if the `Get-MediaInfo` module is not installed | Installs the module for the current user (Windows PowerShell may also offer to install its NuGet provider) | Install it yourself first: `Install-Module Get-MediaInfo -Scope CurrentUser`; Plex scans do not need it |
 | **datasets.imdbws.com** | **Fetch info**, about once a week | Downloads IMDb's public ratings file. Nothing about your library is sent | Do not use **Fetch info** |
 | **themoviedb.org** and **omdbapi.com** | **Fetch info**, only if you pasted a key | Titles, years and IMDb or TMDB ids, plus your own key | Leave the keys empty |
-| **api.github.com** and **github.com** | Only when you click **Check for updates** (bottom right), and again if you then choose **Download update** | Asks for the latest release, then downloads its zip and `.sha256` checksum file. Nothing about you or your library is sent | Never click it |
+| **api.github.com** and **github.com** | Only when you click **Check for updates** (bottom right, or the version number in the new page), and again if you then choose **Download update**. The new page can also check at start-up if you turn that on in its Settings (off by default) | Asks for the latest release, then downloads its zip and `.sha256` checksum file. Nothing about you or your library is sent | Never click it |
 | **Your Plex server** | Plex scans | Read-only requests with your token, to the address you entered | Use a local-folder scan |
 
 Local-folder scans and the saved HTML dashboards make no connections of their own. Your files, paths and file names are never uploaded.

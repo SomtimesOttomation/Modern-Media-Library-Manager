@@ -13,7 +13,7 @@ namespace Mmlm.Native
 {
     public static class TvData
     {
-        static object Get(PSObject o, string name)
+        internal static object Get(PSObject o, string name)
         {
             PSPropertyInfo p = o.Properties[name];
             if (p == null) return null;
@@ -27,7 +27,7 @@ namespace Mmlm.Native
             object v = Get(o, name); if (v == null) return 0;
             double d; return double.TryParse(Convert.ToString(v, CultureInfo.InvariantCulture), NumberStyles.Float, CultureInfo.InvariantCulture, out d) ? d : 0;
         }
-        static void JStr(StringBuilder sb, string s)
+        internal static void JStr(StringBuilder sb, string s)
         {
             if (string.IsNullOrEmpty(s)) { sb.Append("null"); return; }
             sb.Append('"');
@@ -239,6 +239,62 @@ namespace Mmlm.Native
                 }
                 return outp;
             }
+        }
+    }
+
+    public static class PageData
+    {
+        // The library for the HTML page: {"fields":[...],"rows":[[...],...]}, one array per record in field order.
+        // Poster paths are swapped for the page's own URLs (posterUrls: path -> "thumbs/x.jpg"); paths never reach the page.
+        public static string Rows(object[] records, string[] fields, IDictionary posterUrls, string fieldsJson)
+        {
+            var sb = new StringBuilder(records.Length * 400 + 1024);
+            sb.Append("{\"fields\":").Append(fieldsJson).Append(",\"rows\":[");
+            bool firstRec = true;
+            foreach (object rec in records)
+            {
+                PSObject o = rec as PSObject ?? PSObject.AsPSObject(rec);
+                if (!firstRec) sb.Append(',');
+                firstRec = false;
+                sb.Append('[');
+                for (int i = 0; i < fields.Length; i++)
+                {
+                    if (i > 0) sb.Append(',');
+                    if (fields[i] == "Poster")
+                    {
+                        object pp = TvData.Get(o, "PosterPath");
+                        string key = pp == null ? "" : Convert.ToString(pp, CultureInfo.InvariantCulture);
+                        object url = (key.Length > 0 && posterUrls != null && posterUrls.Contains(key)) ? posterUrls[key] : null;
+                        TvData.JStr(sb, url == null ? "" : Convert.ToString(url, CultureInfo.InvariantCulture));
+                        continue;
+                    }
+                    Val(sb, TvData.Get(o, fields[i]));
+                }
+                sb.Append(']');
+            }
+            sb.Append("]}");
+            return sb.ToString();
+        }
+        static void Val(StringBuilder sb, object v)
+        {
+            if (v == null || v is DBNull) { sb.Append("null"); return; }
+            if (v is string) { TvData.JStr(sb, (string)v); return; }
+            if (v is bool) { sb.Append((bool)v ? "true" : "false"); return; }
+            if (v is int || v is long || v is short || v is byte) { sb.Append(Convert.ToInt64(v).ToString(CultureInfo.InvariantCulture)); return; }
+            if (v is double || v is float || v is decimal)
+            {
+                double d = Convert.ToDouble(v, CultureInfo.InvariantCulture);
+                if (double.IsNaN(d) || double.IsInfinity(d)) { sb.Append("null"); return; }
+                sb.Append(d == 0 ? "0" : d.ToString("0.###", CultureInfo.InvariantCulture)); return;
+            }
+            if (v is DateTime) { TvData.JStr(sb, ((DateTime)v).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)); return; }
+            if (v is Array)
+            {
+                var parts = new List<string>();
+                foreach (object x in (Array)v) { object y = x is PSObject ? ((PSObject)x).BaseObject : x; if (y != null) parts.Add(Convert.ToString(y, CultureInfo.InvariantCulture)); }
+                TvData.JStr(sb, string.Join(", ", parts.ToArray())); return;
+            }
+            TvData.JStr(sb, Convert.ToString(v, CultureInfo.InvariantCulture));
         }
     }
 }

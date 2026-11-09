@@ -24,6 +24,18 @@ Suspend-DashWorker
 Check ($e -match '"count":7') 'movie scan finished with 7 titles'
 Check ((Get-DashStatus).Badge.Count -eq 7) 'badge counts 7 new while the tab is hidden'
 Check ((Cmd 2 'summary.get' @{ tab = 'movies' }) -match 'mmlm.cache/thumbs/') 'summary.get lists posters from the cache'
+$lib = Cmd 9 'library.get' @{ tab = 'movies' }
+Check ($lib -match '"rows":\[\[' -and $lib -match '"Poster"') 'library.get sends the movie rows with poster links'
+Check ($lib -notmatch 'FullPath|PosterPath|Directory') 'no file paths reach the page'
+Remove-Item -LiteralPath (Join-Path $data 'Dashboard\library-movies.json') -Force
+Check ((Cmd 10 'library.get' @{ tab = 'movies' }) -match '"pending":true') 'a missing page copy is rebuilt from the snapshot'
+$ev = ''; for ($k = 0; $k -lt 300 -and $ev -notmatch '"event":"library"'; $k++) { $ev += (@(Receive-DashEvents) -join ''); Start-Sleep -Milliseconds 100 }
+Check ($ev -match '"ready":true') 'the rebuilt library is announced'
+Check ((Cmd 11 'library.get' @{ tab = 'movies' }) -match '"rows":\[\[') 'and then sent'
+Check ((Cmd 12 'settings.set' @{ key = 'moviesView'; value = 'grid' }) -match '"moviesView":"grid"') 'page settings are saved'
+Check ((Cmd 13 'settings.set' @{ key = 'moviesView'; value = 'bogus' }) -match '"ok":false') 'bad setting values are refused'
+Check ((Cmd 14 'open.url' @{ url = 'http://example.com/' }) -match 'Only https') 'open.url refuses plain http'
+Check ((Cmd 15 'open.url' @{ url = 'https://evil.example/' }) -match 'not opened') 'open.url refuses unknown sites'
 [void](Cmd 3 'scan.start' @{ tab = 'tv' }); $e = Wait-Scan
 Check ($e -match '"count":10') 'TV scan finished with 10 episodes'
 Start-DashWorker

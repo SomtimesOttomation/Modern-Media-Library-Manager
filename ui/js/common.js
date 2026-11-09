@@ -26,10 +26,21 @@ export function posterHtml(r, title) {
   return r.Poster ? `<img loading="lazy" decoding="async" src="${esc(r.Poster)}" alt="">` : `<div class="ph">${esc(title || r.Title)}</div>`;
 }
 // One poster tile. data-k is the row index (movies) or the show name (TV).
-export function tileHtml({ key, poster, title, sub, res, hdr, rating }) {
+// Poster scores: the Rotten Tomatoes critics score (tomato or splat) and the Metacritic square; the IMDb star only when
+// neither is known.
+const TOM = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="9.2" r="6.4" fill="#E63428"/><path d="M8 5 4.8 2.2 8 3.2 11.4 1.4 10 5z" fill="#46AA46"/></svg>';
+const SPL = '<svg viewBox="0 0 16 16" aria-hidden="true"><g fill="#70A82C"><ellipse cx="8" cy="10" rx="6.6" ry="4.4"/><circle cx="8" cy="6" r="4"/><circle cx="2.4" cy="12.6" r="2.2"/><circle cx="13.6" cy="12" r="2.2"/></g></svg>';
+function scoreBadges(rt, mcScore, rating) {
+  const out = [];
+  if (num(rt) > 0) out.push(`<span class="sb-rt" title="Rotten Tomatoes critics">${num(rt) >= 60 ? TOM : SPL}${Math.round(num(rt))}%</span>`);
+  if (num(mcScore) > 0) { const n = Math.round(num(mcScore)), c = n >= 61 ? 'g' : n >= 40 ? 'y' : 'r'; out.push(`<span class="sb-mc ${c}" title="Metacritic">${n}</span>`); }
+  if (!out.length && num(rating) > 0) out.push(`<span class="sb-im" title="IMDb rating">\u2605 ${num(rating).toFixed(1)}</span>`);
+  return out.length ? `<div class="scores">${out.join('')}</div>` : '';
+}
+export function tileHtml({ key, poster, title, sub, res, hdr, rating, rt, mcScore }) {
   return `<button class="pc" type="button" data-k="${esc(key)}"><div class="pimg">${poster}`
     + `<div class="badges">${res ? `<span class="b">${esc(res)}</span>` : ''}${hdr && hdr !== 'SDR' ? `<span class="b b-hdr">${esc(hdr)}</span>` : ''}</div>`
-    + (num(rating) > 0 ? `<div class="rt">★ ${num(rating).toFixed(1)}</div>` : '') + `</div>`
+    + scoreBadges(rt, mcScore, rating) + `</div>`
     + `<div class="pt" title="${esc(title)}">${esc(title)}</div><div class="ps">${esc(sub)}</div></button>`;
 }
 // Search (see search.js): returns the matching rows and the chips that say what the query was read as.

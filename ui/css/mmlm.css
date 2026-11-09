@@ -57,6 +57,14 @@ body.dragging { cursor: ew-resize; user-select: none; }
 .b { font-size: 10.5px; font-weight: 700; letter-spacing: .3px; padding: 3px 7px; border-radius: 6px; background: var(--badge-bg); color: #fff; }
 .b-hdr { background: linear-gradient(135deg, var(--hdr-a), var(--hdr-b)); }
 .rt { position: absolute; right: 7px; bottom: 7px; font-size: 11.5px; font-weight: 700; padding: 3px 8px; border-radius: 999px; background: var(--badge-bg); color: #ffd166; }
+/* scores on a poster: RT tomato + %, Metacritic square (its own colours), or the IMDb star */
+.scores { position: absolute; right: 7px; bottom: 7px; display: flex; gap: 5px; align-items: center; }
+.scores > span { display: inline-flex; align-items: center; gap: 4px; height: 22px; font-size: 11.5px; font-weight: 700; border-radius: 6px; font-variant-numeric: tabular-nums; }
+.sb-rt, .sb-im { padding: 0 7px 0 5px; background: var(--badge-bg); color: #fff; }
+.sb-im { color: #ffd166; padding-left: 7px; }
+.sb-rt svg { width: 14px; height: 14px; }
+.sb-mc { min-width: 24px; justify-content: center; padding: 0 4px; border-radius: 4px !important; }
+.sb-mc.g { background: #66cc33; color: #fff; } .sb-mc.y { background: #ffcc33; color: #222; } .sb-mc.r { background: #ff0000; color: #fff; }
 .pt { margin-top: 8px; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ps { font-size: 11.5px; color: var(--muted); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wall-more { height: 1px; }

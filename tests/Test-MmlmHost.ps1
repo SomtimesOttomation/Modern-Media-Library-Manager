@@ -74,6 +74,9 @@ Check ($html -match 'Movie 7' -and $html -match 'data:image/jpeg;base64' -and $h
 Check ((Cmd 26 'tools.start' @{ kind = 'fetch'; tab = 'movies' }) -match 'Add a TMDB or OMDb key') 'Fetch info asks for a key first'
 [void](Cmd 27 'tools.start' @{ kind = 'fel'; tab = 'movies' }); $te = Wait-Tool
 Check ($te -match 'No dual-layer|needs ffmpeg') 'FEL/MEL check runs (nothing to check here)'
+$dash = @{ movies = @(@{ id = 'a1'; name = 'Mine'; widgets = @(@{ id = 'w1'; type = 'bar'; field = 'Genre'; op = 'count' }) }); tv = @() }
+[void](Cmd 28 'dashboards.save' @{ data = $dash })
+Check ((Cmd 29 'dashboards.get') -match '"name":"Mine"' -and (Test-Path -LiteralPath (Join-Path $data 'dashboards.json'))) 'your own dashboards are saved'
 [void](Cmd 3 'scan.start' @{ tab = 'tv' }); $e = Wait-Scan
 Check ($e -match '"count":10') 'TV scan finished with 10 episodes'
 $sr = Cmd 20 'series.open' @{ show = 'Show A'; ep = '1001' }

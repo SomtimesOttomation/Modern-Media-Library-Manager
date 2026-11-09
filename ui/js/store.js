@@ -122,6 +122,8 @@ export function itemFor(r, eps) {
   const first = eps ? eps.slice().sort((a, b) => (+a.Season || 99) - (+b.Season || 99) || (+a.Episode || 0) - (+b.Episode || 0))[0] : r;
   return { ids: [first.Rid].filter(Boolean), title: eps ? r.Show || r.Title : r.Title, year: r.Year || 0 };
 }
+// rows of a library matching a search (dashboards' per-chart filters)
+export const filterByQuery = (L, q) => filterRows(L.rows, parseQuery(q, L, state.collections));
 export function setQuery(q) { state.query = String(q || '').trim(); notify('query', 'queryset'); }
 
 // ---- scanning (Plex) ----------------------------------------------------------------------------------------

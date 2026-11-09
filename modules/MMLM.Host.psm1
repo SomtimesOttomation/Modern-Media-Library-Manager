@@ -946,6 +946,19 @@ $script:Commands = [ordered]@{
             Save-HostKeys -Tmdb $t -Omdb $o
             $k = Read-HostKeys; ConvertTo-PageJson @{ tmdb = [bool]$k.Tmdb; omdb = [bool]$k.Omdb } } }
     'folder.show'    = @{ Fetch = $false; Run = { param($a) Show-HostExport ([string]$a.path); 'true' } }
+    'dashboards.get' = @{ Fetch = $false; Run = {
+            # your own dashboards (charts you built), per tab: AppData\dashboards.json
+            param($a)
+            $p = Join-Path $script:AppData 'dashboards.json'
+            if (Test-Path -LiteralPath $p) { [IO.File]::ReadAllText($p) } else { '{"movies":[],"tv":[]}' } } }
+    'dashboards.save' = @{ Fetch = $false; Run = {
+            param($a)
+            $json = ConvertTo-Json -InputObject ([ordered]@{ movies = @($a.data.movies); tv = @($a.data.tv) }) -Depth 8 -Compress
+            if ($json.Length -gt 500KB) { throw 'That is too many charts to save.' }
+            $p = Join-Path $script:AppData 'dashboards.json'
+            [IO.File]::WriteAllText($p + '.tmp', $json, (New-Object Text.UTF8Encoding($false)))
+            Move-Item -LiteralPath ($p + '.tmp') -Destination $p -Force
+            $json } }
     'collections.get' = @{ Fetch = $false; Run = { param($a) ConvertTo-Json -InputObject (Get-PageCollections) -Depth 6 -Compress } }
     'collections.save' = @{ Fetch = $false; Run = { param($a) Save-PageCollections $a.collections; ConvertTo-Json -InputObject (Get-PageCollections) -Depth 6 -Compress } }
     'open.url'       = @{ Fetch = $false; Run = { param($a) Open-HostUrl ([string]$a.url); 'true' } }

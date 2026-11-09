@@ -76,6 +76,7 @@ function tv() {
   return out;
 }
 const libs = { movies: movies(), tv: tv() };
+let dashData = { movies: [], tv: [] };
 let collections = [
   { name: 'Weekend picks', type: 'manual', query: '', items: [0, 3, 7, 11].map((i) => ({ ids: ['p:' + (1000 + i)], title: '', year: 0 })) },
   { name: '80s 4K', type: 'rule', query: 'year:1980-1989 res:4k', items: [] },
@@ -123,6 +124,8 @@ export async function request(cmd, args = {}) {
       return true;
     }
     case 'tools.cancel': case 'folder.show': return true;
+    case 'dashboards.get': return dashData;
+    case 'dashboards.save': dashData = args.data; return dashData;
     case 'collections.get': return collections;
     case 'collections.save': collections = args.collections; return collections;
     case 'summary.get': return { title: 'Recently added', items: [], updatedAt: null };

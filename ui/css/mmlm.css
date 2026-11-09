@@ -167,11 +167,11 @@ body.dragging { cursor: ew-resize; user-select: none; }
 .hbar { display: grid; grid-template-columns: minmax(80px, 32%) 1fr 64px; gap: 10px; align-items: center; font-size: 12.5px; cursor: pointer; padding: 2px 4px; border-radius: 8px; }
 .hbar:hover { background: var(--surface2); }
 .hbar.dim { opacity: .38; }
-.bars.wide .hbar { grid-template-columns: minmax(150px, 62%) 1fr 40px; }
+.bars.wide .hbar { grid-template-columns: minmax(120px, 48%) 1fr minmax(44px, auto); }
 .bl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bt { height: 10px; border-radius: 6px; background: var(--surface2); overflow: hidden; }
 .bf { height: 100%; border-radius: 6px; }
-.bv { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.bv { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .cols { display: flex; align-items: flex-end; gap: 6px; min-height: 170px; }
 .col { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 5px; cursor: pointer; padding: 2px 0; border-radius: 8px; }
 .col:hover { background: var(--surface2); }
@@ -313,3 +313,29 @@ body.series-open { background: var(--s3-body, #0d1017); }
 .sortmenu button[disabled] { opacity: .45; cursor: default; }
 .alldet { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-top: 14px; }
 .alldet dd { font-variant-numeric: tabular-nums; }
+/* dashboards: Overview + your own */
+.dashstrip { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: -4px 0 16px; }
+.dashstrip .seg { max-width: 100%; overflow-x: auto; }
+.dashname { padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font: inherit; width: 200px; }
+.mydash h3 .wtools { display: flex; gap: 2px; opacity: 0; transition: opacity .15s; }
+.mydash:hover h3 .wtools, .mydash:focus-within h3 .wtools { opacity: 1; }
+.wtools button { border: 0; background: none; color: var(--muted); width: 26px; height: 26px; border-radius: 6px; font-size: 13px; }
+.wtools button:hover { background: var(--surface2); color: var(--text); }
+.wtools button[disabled] { opacity: .3; }
+.addw { display: grid; place-items: center; align-content: center; gap: 6px; min-height: 180px; border: 2px dashed var(--line); background: none; box-shadow: none; color: var(--muted); cursor: pointer; text-align: center; }
+.addw:hover { border-color: var(--accent); color: var(--accent); }
+.addw b { font-size: 15px; } .addw small { font-size: 12px; }
+.bignum { font-size: 44px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; padding: 18px 0 4px; }
+.bignum-sub { color: var(--muted); font-size: 12.5px; }
+.card.modal.adv-host.wide { width: min(1080px, 100%); }
+.wsugg { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 14px; }
+.wsugg .btn { font-size: 12px; padding: 5px 10px; }
+.wgrid { display: grid; grid-template-columns: minmax(260px, 340px) 1fr; gap: 18px; align-items: start; }
+.wform { display: flex; flex-direction: column; gap: 10px; }
+.wform label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); }
+.wform .seg { flex-wrap: wrap; }
+.wrow { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.wfind { padding: 6px 9px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface2); color: var(--text); font: inherit; font-size: 12.5px; }
+.wform input[type=text], .wform input[type=number] { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font: inherit; }
+.wprev { min-height: 260px; max-height: 62vh; overflow: auto; }
+@media (max-width: 760px) { .wgrid { grid-template-columns: 1fr; } }

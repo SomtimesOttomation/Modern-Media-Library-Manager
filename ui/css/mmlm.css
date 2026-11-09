@@ -255,16 +255,16 @@ body.series-open { background: var(--s3-body, #0d1017); }
 .sv-progress span { display: block; height: 100%; background: #fff; transition: width .3s; }
 .sv-error { background: rgba(225,29,72,.25); border: 1px solid rgba(255,77,106,.6); padding: 8px 12px; border-radius: 10px; margin-bottom: 12px; }
 .sv-head { display: grid; grid-template-columns: 220px 1fr; gap: 28px; align-items: start; }
-.sv-poster { position: relative; aspect-ratio: 2/3; border-radius: 6px; overflow: hidden; box-shadow: 0 18px 40px rgba(0,0,0,.45); background: rgba(255,255,255,.06); }
+.sv-poster { position: relative; aspect-ratio: 2/3; border-radius: 14px; overflow: hidden; box-shadow: 0 18px 40px rgba(0,0,0,.45); background: rgba(255,255,255,.06); }
 .sv-poster img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.sv-pnum { position: absolute; right: 6px; top: 6px; min-width: 20px; padding: 2px 6px; text-align: center; font-size: 11px; font-weight: 700; background: rgba(0,0,0,.75); border-radius: 4px; }
+.sv-pnum { position: absolute; right: 6px; top: 6px; min-width: 20px; padding: 2px 6px; text-align: center; font-size: 11px; font-weight: 700; background: rgba(0,0,0,.75); border-radius: 6px; }
 .sv-main { min-width: 0; }
 .sv-main h1 { font-size: 30px; font-weight: 700; letter-spacing: -.01em; text-wrap: balance; }
 .sv-main h2 { font-size: 18px; font-weight: 600; color: rgba(255,255,255,.88); margin-top: 4px; }
 .sv-meta { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: 10px 0 14px; color: rgba(255,255,255,.75); font-size: 13px; }
 .stars i { font-style: normal; color: rgba(255,255,255,.28); font-size: 15px; }
 .stars i.on { color: #ffd166; } .stars i.half { color: #ffd166; opacity: .55; }
-.sv-seasons { display: flex; gap: 2px; overflow-x: auto; padding-bottom: 4px; background: rgba(0,0,0,.18); border-radius: 4px; scrollbar-width: thin; }
+.sv-seasons { display: flex; gap: 2px; overflow-x: auto; padding-bottom: 4px; background: rgba(0,0,0,.18); border-radius: 10px; scrollbar-width: thin; }
 .sv-seasons button { flex: none; min-width: 120px; text-align: left; border: 0; background: none; color: #fff; padding: 9px 12px 8px; border-bottom: 2px solid transparent; font: inherit; display: flex; flex-direction: column; gap: 2px; }
 .sv-seasons button b { font-size: 12.5px; font-weight: 600; }
 .sv-seasons button small { font-size: 11.5px; color: rgba(255,255,255,.65); }
@@ -284,11 +284,11 @@ body.series-open { background: var(--s3-body, #0d1017); }
 .sv-eps { display: grid; grid-template-columns: repeat(auto-fill, minmax(calc(260px * var(--poster-scale, 1)), 1fr)); gap: 18px 16px; }
 .sv-ep { border: 0; background: none; color: #fff; padding: 0; text-align: left; cursor: pointer; min-width: 0; }
 .sv-ep.missing { opacity: .55; cursor: default; }
-.sv-still { position: relative; aspect-ratio: 16/9; border-radius: 4px; overflow: hidden; background: rgba(255,255,255,.06); box-shadow: 0 8px 20px rgba(0,0,0,.35); }
+.sv-still { position: relative; aspect-ratio: 16/9; border-radius: 10px; overflow: hidden; background: rgba(255,255,255,.06); box-shadow: 0 8px 20px rgba(0,0,0,.35); }
 .sv-still img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .2s; }
 .sv-ep:hover .sv-still img { transform: scale(1.03); }
 .sv-ep:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
-.sv-check { position: absolute; right: 6px; top: 6px; width: 22px; height: 22px; display: grid; place-items: center; font-size: 13px; font-weight: 700; background: rgba(0,0,0,.78); border-radius: 3px; }
+.sv-check { position: absolute; right: 6px; top: 6px; width: 22px; height: 22px; display: grid; place-items: center; font-size: 13px; font-weight: 700; background: rgba(0,0,0,.78); border-radius: 6px; }
 .sv-part { position: absolute; left: 0; bottom: 0; height: 4px; background: #e5a00d; }
 .sv-et { margin-top: 8px; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sv-es { font-size: 12px; color: rgba(255,255,255,.65); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -301,9 +301,9 @@ body.series-open { background: var(--s3-body, #0d1017); }
 .sv-related { display: flex; gap: 16px; overflow-x: auto; padding-bottom: 8px; scrollbar-width: thin; }
 .sv-rel { flex: none; width: 130px; border: 0; background: none; color: #fff; padding: 0; text-align: left; cursor: pointer; }
 .sv-rel.notlib { cursor: default; opacity: .7; }
-.sv-rp { position: relative; aspect-ratio: 2/3; border-radius: 4px; overflow: hidden; background: rgba(255,255,255,.06); box-shadow: 0 8px 20px rgba(0,0,0,.35); }
+.sv-rp { position: relative; aspect-ratio: 2/3; border-radius: 10px; overflow: hidden; background: rgba(255,255,255,.06); box-shadow: 0 8px 20px rgba(0,0,0,.35); }
 .sv-rp img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.sv-badge { position: absolute; right: 5px; top: 5px; font-size: 10.5px; font-weight: 700; padding: 2px 6px; background: rgba(0,0,0,.8); border-radius: 3px; }
+.sv-badge { position: absolute; right: 5px; top: 5px; font-size: 10.5px; font-weight: 700; padding: 2px 6px; background: rgba(0,0,0,.8); border-radius: 6px; }
 .sv-rel b { display: block; margin-top: 6px; font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sv-rel small { color: rgba(255,255,255,.65); font-size: 11.5px; }
 .series .addcol .colpop { color: var(--text); }

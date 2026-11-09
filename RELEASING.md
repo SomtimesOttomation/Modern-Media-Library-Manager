@@ -12,7 +12,7 @@ A release is built by GitHub, not on a laptop, so the zip, its hash and the scan
 
 ## Each release
 
-Bump `$script:AppVersion` near the top of `Modern-Media-Library-Manager.ps1` to the new version (for tag `v1.2.0` it is `'1.2.0'`) and merge that to the default branch. The release workflow stops with a clear message if the number and the tag disagree, because the in-app updater compares them.
+Set the new version in two places: the `VERSION` file (`1.2.0`) and `$script:AppVersion` near the top of `Modern-Media-Library-Manager.ps1` (`'1.2.0'`; copies of v0.3.1 and older read this line when they update). Merge that to the default branch. The release workflow stops with a clear message if either disagrees with the tag.
 
 Merge or commit the changes to the default branch first. Then pick one way to start the release. Both end the same way.
 
@@ -30,7 +30,8 @@ Merge or commit the changes to the default branch first. Then pick one way to st
 
 Either way, open the Actions tab and watch the "Release" run. When it finishes (a green tick), the release has:
 - the zip, named `Modern-Media-Library-Manager-v1.2.0.zip`
-- `SHA256SUMS.txt`
+- `Modern-Media-Library-Manager-v1.2.0.zip.sha256` (used by the updater from v0.4.0 on, and by drop-in updates)
+- `SHA256SUMS.txt` (used by the updater of v0.3.1 and older)
 - your description, followed by the zip's SHA-256, the VirusTotal link and result, and the attestation command
 
 If you created the release in the browser, the workflow keeps what you wrote and adds the files and the verification block to it.

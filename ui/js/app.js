@@ -189,12 +189,12 @@ document.addEventListener('keydown', (e) => { if (e.key === 'F5') { e.preventDef
 let qTimer = 0;
 $('#psearch').addEventListener('input', (e) => {
   clearTimeout(qTimer);
-  qTimer = setTimeout(() => setQuery(e.target.value), 160);
+  qTimer = setTimeout(() => setQuery(e.target.value, { typing: true }), 160);
 });
 // A search that names the other kind ("90s sitcoms", "tv shows", "films") opens that tab.
-export function setQuery(q) {
+export function setQuery(q, { typing = false } = {}) {
   S.state.query = String(q || '').trim();
-  $('#psearch').value = S.state.query;
+  if (!typing) $('#psearch').value = S.state.query;     // never rewrite the box while you type (it would eat spaces)
   focusQueryTab();
 }
 function focusQueryTab(tell = true) {

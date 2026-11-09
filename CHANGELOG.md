@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.7.0
+
+**Feature**
+- Movie posters show the Rotten Tomatoes critics score (tomato or splat) and the Metacritic score on its coloured square instead of the IMDb star; movie cards always list Metacritic, or say it has not been fetched yet.
+
+**Bug/Fix**
+- The search box deleted a space as soon as it was typed.
+
+**Redesign**
+- TV series view: rounded corners on the posters, episode stills, related shows and the season strip.
+
 ## 0.6.0
 
 **Feature**

@@ -2,7 +2,7 @@
 // expand / collapse-all column to the right of Title. Click a show for its seasons and episodes, an episode for its card.
 import * as S from '../store.js';
 import { h } from '../util.js';
-import { esc, num, fmtSize, posterHtml, tileHtml, matchQuery, fillWall, sortMenu } from '../common.js';
+import { esc, num, fmtSize, posterHtml, tileHtml, searchRows, chipsHtml, fillWall, sortMenu } from '../common.js';
 import * as dashboard from './stats.js';
 import { openCard, openShow, showSummary } from './card.js';
 import { vgrid } from './vgrid.js';
@@ -51,8 +51,8 @@ export function mount(ctx) {
     const all = shows(L);
     const q = S.state.query;
     let list = all;
-    let epFilter = null;
-    if (q) { const hit = new Set(matchQuery(L.rows, q)); epFilter = hit; list = all.filter((sh) => sh.eps.some((e) => hit.has(e))); }
+    let epFilter = null, chipList = [];
+    if (q) { const f = searchRows(L.rows, q, L, S.state.collections); chipList = f.chips; const hit = new Set(f.rows); epFilter = hit; list = all.filter((sh) => sh.eps.some((e) => hit.has(e))); }
     const sortDef = TV_SORTS.find((x) => x[0] === s.tvSort) || TV_SORTS[0];
     list = list.slice().sort(sortDef[2]);
     if (s.tvSortRev) list.reverse();
@@ -64,7 +64,8 @@ export function mount(ctx) {
         mode === 'grid' ? h('button', { class: 'btn', type: 'button', onclick: () => chooseColumns(L, draw) }, 'Columns') : null,
         viewSeg(mode, 'tvView', draw)));
     const body = h('div');
-    ctx.el.replaceChildren(head, body);
+    const chips = h('div'); chips.innerHTML = chipsHtml(chipList);
+    ctx.el.replaceChildren(head, chips, body);
     if (!list.length) { body.append(h('div', { class: 'state' }, h('p', null, q ? `Nothing matches “${q}”.` : 'Nothing to show.'))); return; }
     const byKey = new Map(list.map((sh) => [sh.name, sh]));
     if (mode === 'posters') {

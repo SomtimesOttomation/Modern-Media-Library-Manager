@@ -32,11 +32,15 @@ export function tileHtml({ key, poster, title, sub, res, hdr, rating }) {
     + (num(rating) > 0 ? `<div class="rt">★ ${num(rating).toFixed(1)}</div>` : '') + `</div>`
     + `<div class="pt" title="${esc(title)}">${esc(title)}</div><div class="ps">${esc(sub)}</div></button>`;
 }
-// Search: every word must appear somewhere in the title, show, genre, cast, studio, director, year or collection.
-export function matchQuery(rows, q) {
-  const terms = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
-  if (!terms.length) return rows;
-  return rows.filter((r) => terms.every((t) => r._search.includes(t)));
+// Search (see search.js): returns the matching rows and the chips that say what the query was read as.
+import { parse, filterRows } from './search.js';
+export function searchRows(rows, q, L, collections) {
+  const p = parse(q, L, collections);
+  return { rows: filterRows(rows, p), chips: p.chips, tab: p.tab };
+}
+// "Showing: 1990s - Comedy series" under the title, so a smart search never surprises
+export function chipsHtml(chips) {
+  return chips.length ? `<div class="qchips" title="How the search was read"><span>Showing:</span>${chips.map((c) => `<b>${esc(c)}</b>`).join('')}</div>` : '';
 }
 /* One title can be in the library several times (a 4K and a 1080p copy). The key is the IMDb id, else the TMDB id, else
    title + year; the copy kept is the biggest file, so the best-quality one stands in for the rest. */

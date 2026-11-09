@@ -2,7 +2,7 @@
 // Click a poster or a row for its card.
 import * as S from '../store.js';
 import { h } from '../util.js';
-import { esc, num, fmtSize, hdrLabel, posterHtml, tileHtml, matchQuery, dedupe, fillWall, sortMenu } from '../common.js';
+import { esc, num, fmtSize, hdrLabel, posterHtml, tileHtml, searchRows, chipsHtml, dedupe, fillWall, sortMenu } from '../common.js';
 import * as dashboard from './stats.js';
 import { openCard } from './card.js';
 import { overlay } from './settings.js';
@@ -118,7 +118,8 @@ export function mount(ctx) {
       stopDash = dashboard.mount({ el: body, arg: 'movies', toast: ctx.toast, embedded: true });
       return;
     }
-    let rows = matchQuery(L.rows, S.state.query);
+    const found = searchRows(L.rows, S.state.query, L, S.state.collections);
+    let rows = found.rows;
     const before = rows.length;
     if (s.hideDupes) rows = dedupe(rows);
     const sortDef = MOVIE_SORTS.find((x) => x[0] === s.moviesSort) || MOVIE_SORTS[0];
@@ -136,7 +137,8 @@ export function mount(ctx) {
         mode === 'grid' ? h('button', { class: 'btn', type: 'button', onclick: () => chooseColumns(L, draw) }, 'Columns') : null,
         viewSeg(mode, 'moviesView', draw)));
     const body = h('div');
-    ctx.el.replaceChildren(head, body);
+    const chips = h('div'); chips.innerHTML = chipsHtml(found.chips);
+    ctx.el.replaceChildren(head, chips, body);
     if (!rows.length) { body.append(h('div', { class: 'state' }, h('p', null, S.state.query ? `Nothing matches “${S.state.query}”.` : 'Nothing to show.'))); return; }
     if (mode === 'posters') {
       const wall = h('div', { class: 'wall' });

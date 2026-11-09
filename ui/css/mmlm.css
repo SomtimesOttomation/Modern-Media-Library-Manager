@@ -41,6 +41,10 @@ body.dragging { cursor: ew-resize; user-select: none; }
 .fchip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px 4px 11px; border-radius: 999px; font-size: 12px; background: color-mix(in srgb, var(--accent) 14%, var(--surface)); border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); }
 .fchip button { border: 0; background: color-mix(in srgb, var(--text) 10%, transparent); width: 18px; height: 18px; border-radius: 50%; font-size: 11px; line-height: 1; padding: 0; }
 
+/* how the search was read */
+.qchips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: -6px 0 14px; font-size: 12px; color: var(--muted); }
+.qchips b { font-weight: 600; color: var(--text); padding: 3px 10px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 14%, var(--surface)); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+
 /* poster wall */
 .wall { display: grid; grid-template-columns: repeat(auto-fill, minmax(calc(150px * var(--poster-scale, 1)), 1fr)); gap: calc(18px * var(--poster-scale, 1)); }
 .pc { cursor: pointer; transition: transform .16s; min-width: 0; background: none; border: 0; padding: 0; text-align: left; }
@@ -210,3 +214,12 @@ body.dragging { cursor: ew-resize; user-select: none; }
   #topbar { gap: 10px; padding: 10px 12px; overflow-x: auto; }
   .brand-text { display: none; }
 }
+/* advanced search */
+.card.modal.adv-host { width: min(820px, 100%); }
+.adv-rows { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+.adv-row { display: grid; grid-template-columns: minmax(150px, 1.2fr) minmax(120px, .9fr) 1.4fr auto auto; gap: 8px; align-items: center; }
+.adv-row input:not([hidden]) + input[hidden] + button { grid-column: 5; }
+.adv select, .adv input[type=text] { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font: inherit; min-width: 0; }
+.adv-label { display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
+.adv-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+@media (max-width: 640px) { .adv-row { grid-template-columns: 1fr 1fr; } }

@@ -21,6 +21,7 @@ export const state = {
   dropped: null,          // { file, version }: an update zip saved into the updates folder (standalone only)
   halted: false,
   query: '',              // the navigation bar's search box
+  collections: [],        // { name, kind, ids:Set, has(r) } (filled from the window app's collections)
 };
 
 // ---- change notification (NBADash's) ----------------------------------------------------------------------

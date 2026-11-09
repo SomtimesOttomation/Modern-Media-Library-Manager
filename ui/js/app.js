@@ -9,6 +9,8 @@ import * as tv from './views/tv.js';
 import { openSettings } from './views/settings.js';
 import { openTraffic } from './views/traffic.js';
 import { openUpdate } from './views/update.js';
+import { openAdvanced } from './views/advanced.js';
+import { parse } from './search.js';
 
 const $ = (s) => document.querySelector(s);
 const view = $('#view');
@@ -166,11 +168,20 @@ document.addEventListener('keydown', (e) => { if (e.key === 'F5') { e.preventDef
 let qTimer = 0;
 $('#psearch').addEventListener('input', (e) => {
   clearTimeout(qTimer);
-  qTimer = setTimeout(() => { S.state.query = e.target.value.trim(); S.notify('query'); }, 120);
+  qTimer = setTimeout(() => setQuery(e.target.value), 160);
 });
+// A search that names the other kind ("90s sitcoms", "tv shows", "films") opens that tab.
+export function setQuery(q) {
+  S.state.query = String(q || '').trim();
+  $('#psearch').value = S.state.query;
+  const tab = currentTab(), hint = S.state.query ? parse(S.state.query, S.state.libs[tab], S.state.collections).tab : '';
+  if (hint && hint !== tab && S.state.libs[hint].status === 'ready') { location.hash = `#/${hint}`; return; }
+  S.notify('query');
+}
 document.addEventListener('keydown', (e) => {
   if (e.key === '/' && !e.target.closest('input,textarea,select')) { e.preventDefault(); $('#psearch').focus(); }
 });
+$('#btn-filter').addEventListener('click', () => openAdvanced(currentTab(), setQuery));
 
 // ---- content width: full, a preset (the width a 16:9 / 21:9 / 32:9 screen of this height would have) or custom ----
 const frame = $('#frame');

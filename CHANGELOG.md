@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.4.0
+
+**Feature**
+- Updater uses the same design as the dash modules: it backs up, installs, restarts, and puts the old version back if the new one does not start.
+- Drop-in updates: save the release zip (and its .sha256) into the updates folder next to the app and it offers to install it, for when the repository is private.
+
+**Housekeeping**
+- VERSION file; release zips get a .sha256 beside them (SHA256SUMS.txt is still published so older copies can update).
+
 ## 0.3.1
 
 **Bug/Fix**

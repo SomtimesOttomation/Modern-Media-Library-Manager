@@ -4,6 +4,7 @@ import * as S from '../store.js';
 import { h } from '../util.js';
 import { esc, num, fmtSize, hdrLabel, posterHtml, tileHtml, searchRows, chipsHtml, dedupe, fillWall, sortMenu } from '../common.js';
 import * as dashboard from './stats.js';
+import { collectionMenu } from './collections.js';
 import { openCard } from './card.js';
 import { overlay } from './settings.js';
 import { vgrid } from './vgrid.js';
@@ -133,6 +134,7 @@ export function mount(ctx) {
         h('small', null, `${rows.length.toLocaleString()}${rows.length !== L.rows.length ? ' of ' + L.rows.length.toLocaleString() : ''} titles${hidden > 0 ? ` · ${hidden} duplicate${hidden === 1 ? '' : 's'} hidden` : ''} · ${fmtSize(total)}`)),
       h('div', { class: 'lib-tools' },
         h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: s.hideDupes ? true : null, onchange: (e) => S.saveSettings({ hideDupes: e.target.checked }).then(draw) }), 'Hide duplicates'),
+        collectionMenu('movies'),
         sortMenu(MOVIE_SORTS, sortDef[0], !!s.moviesSortRev, (k, rev) => { sort = { col: '', dir: 1 }; S.saveSettings({ moviesSort: k, moviesSortRev: rev }).then(draw); }),
         mode === 'grid' ? h('button', { class: 'btn', type: 'button', onclick: () => chooseColumns(L, draw) }, 'Columns') : null,
         viewSeg(mode, 'moviesView', draw)));
@@ -165,5 +167,5 @@ export function mount(ctx) {
 export function update(topics, ctx) {
   const L = S.state.libs.movies, changed = ctx.seen && (ctx.seen.status !== L.status || ctx.seen.rows !== L.rows);
   if (changed) ctx.seen = { status: L.status, rows: L.rows };
-  if (changed || topics.has('query') || (L.status !== 'ready' && (topics.has('plex') || topics.has('traffic') || topics.has('scan')))) ctx.redraw?.();
+  if (changed || topics.has('query') || topics.has('collections') || (L.status !== 'ready' && (topics.has('plex') || topics.has('traffic') || topics.has('scan')))) ctx.redraw?.();
 }

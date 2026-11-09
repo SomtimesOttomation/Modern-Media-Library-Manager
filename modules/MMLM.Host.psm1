@@ -180,7 +180,17 @@ function Export-PageLibrary {
         $names.Add([string]$f.Name); $defs.Add([ordered]@{ n = [string]$f.Name; t = [string]$f.Type; g = [string]$f.Group; s = [bool]$f.Show })
     }
     $names.Add('Poster'); $defs.Add([ordered]@{ n = 'Poster'; t = 'string'; g = 'Library'; s = $false })
-    $json = [Mmlm.Native.PageData]::Rows([object[]]$Recs, $names.ToArray(), $urls, (ConvertTo-Json -InputObject $defs.ToArray() -Compress))
+    # collection ids: Plex titles keep "p:<key>"; a local file gets "h:<hash of its path>", and the path behind each hash is
+    # kept in Library\idmap-<tab>.json (never in the folder the page can read) so collections saved from the page keep the window app's ids
+    $names.Add('Rid'); $defs.Add([ordered]@{ n = 'Rid'; t = 'string'; g = 'Library'; s = $false })
+    $local = @{}; $idmap = [ordered]@{}
+    foreach ($r in $Recs) {
+        if ([string]$r.PlexKey -or -not [string]$r.FullPath) { continue }
+        $fp = [string]$r.FullPath
+        if (-not $local.ContainsKey($fp)) { $h = 'h:' + (Get-MmlmStringHash $fp).Substring(0, 16); $local[$fp] = $h; $idmap[$h] = 'f:' + $fp }
+    }
+    try { [IO.File]::WriteAllText((Join-Path (Split-Path $Job.Snapshot) ('idmap-' + $Tab + '.json')), (ConvertTo-Json -InputObject $idmap -Compress), (New-Object Text.UTF8Encoding($false))) } catch { }
+    $json = [Mmlm.Native.PageData]::Rows([object[]]$Recs, $names.ToArray(), $urls, (ConvertTo-Json -InputObject $defs.ToArray() -Compress), $local)
     $file = Join-Path $Job.CacheDir ('library-' + $Tab + '.json')
     [IO.File]::WriteAllText($file + '.tmp', $json, (New-Object Text.UTF8Encoding($false)))
     if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file -Force }
@@ -434,6 +444,54 @@ function Watch-DropFolder {
     }
 }
 
+# ---------------------------------------------------------------- collections (the window app's collections.json, shared)
+# A file path never reaches the page: local ids ("f:<path>") go out as "h:<hash>" and come back through the id maps.
+function ConvertTo-PageId { param([string]$Id) if ($Id.StartsWith('f:')) { 'h:' + (Get-MmlmStringHash $Id.Substring(2)).Substring(0, 16) } else { $Id } }
+function Read-HostCollections {
+    $p = Join-Path $script:AppData 'collections.json'
+    if (-not (Test-Path -LiteralPath $p)) { return @() }
+    try { return @(([IO.File]::ReadAllText($p, [Text.Encoding]::UTF8) | ConvertFrom-Json).Collections) } catch { Write-HostLog 'collections read' $_; return @() }
+}
+function Get-PageCollections {
+    $out = @()
+    foreach ($c in (Read-HostCollections)) {
+        if ($null -eq $c -or -not $c.Name) { continue }
+        $items = @(foreach ($it in @($c.Items)) { if ($it -and $it.Ids) { [ordered]@{ ids = @(@($it.Ids) | ForEach-Object { ConvertTo-PageId ([string]$_) }); title = [string]$it.Title; year = [int]$it.Year } } })
+        $out += [ordered]@{ name = [string]$c.Name; type = $(if ([string]$c.Type -eq 'rule') { 'rule' } else { 'manual' }); query = [string]$c.Query; sortBy = [string]$c.SortBy
+            sortDesc = [bool]$c.SortDesc; byDate = [bool]$c.ByDate; limit = [int]$c.Limit; items = $items; created = [string]$c.Created; modified = [string]$c.Modified }
+    }
+    , $out
+}
+function Save-PageCollections {
+    param($List)
+    # every hashed id we know: from both libraries' id maps and from the collections already saved
+    $back = @{}
+    foreach ($tab in 'movies', 'tv') {
+        $m = Join-Path (Split-Path (Get-SnapshotFile $tab)) ('idmap-' + $tab + '.json')
+        if (Test-Path -LiteralPath $m) { try { foreach ($pr in ([IO.File]::ReadAllText($m) | ConvertFrom-Json).PSObject.Properties) { $back[$pr.Name] = [string]$pr.Value } } catch { Write-HostLog 'idmap' $_ } }
+    }
+    foreach ($c in (Read-HostCollections)) { foreach ($it in @($c.Items)) { foreach ($id in @($it.Ids)) { $id = [string]$id; if ($id.StartsWith('f:')) { $back[(ConvertTo-PageId $id)] = $id } } } }
+    $now = (Get-Date).ToString('yyyy-MM-dd HH:mm')
+    $out = New-Object System.Collections.Generic.List[object]
+    $names = @{}
+    foreach ($c in @($List)) {
+        $name = ([string]$c.name).Trim()
+        if (-not $name -or $name.Length -gt 80 -or $names.ContainsKey($name.ToLowerInvariant())) { continue }
+        $names[$name.ToLowerInvariant()] = $true
+        $items = New-Object System.Collections.Generic.List[object]
+        foreach ($it in @($c.items)) {
+            $ids = @(foreach ($id in @($it.ids)) { $id = [string]$id; if ($id.StartsWith('h:')) { if ($back.ContainsKey($id)) { $back[$id] } } elseif ($id -match '^(p|s):') { $id } })
+            if ($ids.Count -gt 0) { $items.Add([ordered]@{ Ids = $ids; Title = [string]$it.title; Year = [int]$it.year }) }
+        }
+        $out.Add([ordered]@{ Name = $name; Type = $(if ([string]$c.type -eq 'rule') { 'rule' } else { 'manual' }); Items = $items.ToArray(); Query = [string]$c.query
+            SortBy = [string]$c.sortBy; SortDesc = [bool]$c.sortDesc; ByDate = [bool]$c.byDate; Limit = [int]$c.limit
+            Created = $(if ($c.created) { [string]$c.created } else { $now }); Modified = $now })
+    }
+    $p = Join-Path $script:AppData 'collections.json'
+    [IO.File]::WriteAllText($p + '.tmp', (ConvertTo-Json -InputObject @{ Version = 1; Collections = $out.ToArray() } -Depth 6), (New-Object Text.UTF8Encoding($false)))
+    Move-Item -LiteralPath ($p + '.tmp') -Destination $p -Force
+}
+
 # ---------------------------------------------------------------- page helpers
 $script:AllowedLinkHosts = @('imdb.com', 'themoviedb.org', 'rottentomatoes.com', 'metacritic.com', 'github.com', 'plex.tv', 'youtube.com')
 function Open-HostUrl {
@@ -565,6 +623,8 @@ $script:Commands = [ordered]@{
             $tok = ([string]$a.token).Trim()
             if ($tok) { Save-HostPlexSettings -Url $url -TokenProtected (Protect-MmlmPlexToken $tok) } else { Save-HostPlexSettings -Url $url -KeepToken }
             ConvertTo-PageJson (Get-PlexInfo) } }
+    'collections.get' = @{ Fetch = $false; Run = { param($a) ConvertTo-Json -InputObject (Get-PageCollections) -Depth 6 -Compress } }
+    'collections.save' = @{ Fetch = $false; Run = { param($a) Save-PageCollections $a.collections; ConvertTo-Json -InputObject (Get-PageCollections) -Depth 6 -Compress } }
     'open.url'       = @{ Fetch = $false; Run = { param($a) Open-HostUrl ([string]$a.url); 'true' } }
     'picture.save'   = @{ Fetch = $false; Run = { param($a) ConvertTo-PageJson (Save-HostPicture ([string]$a.name) ([string]$a.png)) } }
     'update.check'   = @{ Fetch = $false; Run = { param($a) ConvertTo-PageJson (Start-Updater 'Check') } }

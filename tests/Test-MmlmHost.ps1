@@ -13,6 +13,8 @@ New-Item -ItemType Directory -Path $data -Force | Out-Null
 # a Metacritic score saved the way Fetch info saves it, for "Movie 1" (2001)
 New-Item -ItemType Directory -Path (Join-Path $data 'metadata') -Force | Out-Null
 [IO.File]::WriteAllText((Join-Path $data 'metadata\store.json'), '{"t:movie 1|2001":{"Manual":{},"Scraped":{"Metascore":74},"Sources":{"Metascore":"OMDb"},"Force":[],"At":"2026-11-08"}}')
+# the window app's collections: one hand-picked (a Plex movie and a local file), one rule
+[IO.File]::WriteAllText((Join-Path $data 'collections.json'), '{"Version":1,"Collections":[{"Name":"Faves","Type":"manual","Items":[{"Ids":["p:101"],"Title":"Movie 1","Year":2001},{"Ids":["f:D:\\Films\\Local.mkv"],"Title":"Local","Year":1999}],"Query":"","SortBy":"","SortDesc":false,"ByDate":false,"Limit":0,"Created":"2026-10-21 10:00","Modified":"2026-10-21 10:00"},{"Name":"Old","Type":"rule","Items":[],"Query":"year:<2003","SortBy":"","SortDesc":false,"ByDate":false,"Limit":0,"Created":"2026-10-21","Modified":"2026-10-21"}]}')
 Import-Module (Join-Path $root 'modules\MMLM.Host.psm1') -DisableNameChecking
 $posted = New-Object System.Collections.Generic.List[string]
 $ctx = [pscustomobject]@{ Mode = 'standalone'; Root = $root; Post = { param($j) $posted.Add($j) }.GetNewClosure(); Close = { }; Relaunch = ''; HostPid = $PID; Theme = ''; LauncherVersion = ''; Debug = $true }
@@ -49,6 +51,14 @@ Check ((Cmd 12 'settings.set' @{ key = 'moviesView'; value = 'grid' }) -match '"
 Check ((Cmd 13 'settings.set' @{ key = 'moviesView'; value = 'bogus' }) -match '"ok":false') 'bad setting values are refused'
 Check ((Cmd 14 'open.url' @{ url = 'http://example.com/' }) -match 'Only https') 'open.url refuses plain http'
 Check ((Cmd 15 'open.url' @{ url = 'https://evil.example/' }) -match 'not opened') 'open.url refuses unknown sites'
+$cg = Cmd 18 'collections.get'
+Check ($cg -match '"name":"Faves"' -and $cg -match '"p:101"' -and $cg -match '"h:[0-9A-F]{16}"' -and $cg -notmatch 'Local\.mkv"\]|D:') 'collections reach the page with local paths hashed'
+Check ($lib -match '"p:10\d"') 'each title carries its collection id'
+$cols = ($cg | ConvertFrom-Json).data
+$cols[0].items += [pscustomobject]@{ ids = @('p:102'); title = 'Movie 2'; year = 2002 }
+$saved = Cmd 19 'collections.save' @{ collections = $cols }
+$file = [IO.File]::ReadAllText((Join-Path $data 'collections.json'))
+Check ($file -match 'D:\\\\Films\\\\Local.mkv' -and $file -match 'p:102' -and $file -match '"Type":\s*"rule"') 'saving from the page keeps the window app''s ids and format'
 [void](Cmd 3 'scan.start' @{ tab = 'tv' }); $e = Wait-Scan
 Check ($e -match '"count":10') 'TV scan finished with 10 episodes'
 Start-DashWorker

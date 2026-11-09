@@ -223,3 +223,16 @@ body.dragging { cursor: ew-resize; user-select: none; }
 .adv-label { display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
 .adv-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 @media (max-width: 640px) { .adv-row { grid-template-columns: 1fr 1fr; } }
+/* collections */
+.colpop { position: absolute; z-index: 45; min-width: 260px; margin-top: 6px; gap: 2px; }
+.colrow { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 7px; font-size: 13px; cursor: pointer; }
+.colrow:hover { background: var(--surface2); }
+.colnew { display: flex; gap: 6px; padding: 4px; }
+.colnew input, .colmgr-row input { flex: 1; min-width: 0; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font: inherit; }
+.colpop hr, .adv hr { border: 0; border-top: 1px solid var(--line); margin: 6px 0; }
+.colmgr { display: flex; flex-direction: column; gap: 6px; max-height: 46vh; overflow: auto; }
+.colmgr-row { display: grid; grid-template-columns: 1fr 1.4fr auto auto auto; gap: 8px; align-items: center; }
+.colmgr-row small { white-space: nowrap; }
+.addcol { position: relative; display: inline-block; }
+.addcol .colpop { left: 0; top: 100%; }
+@media (max-width: 640px) { .colmgr-row { grid-template-columns: 1fr 1fr; } }

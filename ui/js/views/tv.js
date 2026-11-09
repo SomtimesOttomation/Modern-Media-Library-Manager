@@ -4,6 +4,7 @@ import * as S from '../store.js';
 import { h } from '../util.js';
 import { esc, num, fmtSize, posterHtml, tileHtml, searchRows, chipsHtml, fillWall, sortMenu } from '../common.js';
 import * as dashboard from './stats.js';
+import { collectionMenu } from './collections.js';
 import { openCard, openShow, showSummary } from './card.js';
 import { vgrid } from './vgrid.js';
 import { stateBox, gridColumns, cellHtml, colLabel, chooseColumns, viewSeg, viewMode } from './library.js';
@@ -60,6 +61,7 @@ export function mount(ctx) {
       h('div', { class: 'lib-title' }, h('h1', null, 'TV Shows'),
         h('small', null, `${list.length.toLocaleString()}${list.length !== all.length ? ' of ' + all.length.toLocaleString() : ''} shows · ${L.rows.length.toLocaleString()} episodes · ${fmtSize(L.rows.reduce((a, r) => a + num(r.FileSizeGB), 0))}`)),
       h('div', { class: 'lib-tools' },
+        collectionMenu('tv'),
         sortMenu(TV_SORTS, sortDef[0], !!s.tvSortRev, (k, rev) => S.saveSettings({ tvSort: k, tvSortRev: rev }).then(draw)),
         mode === 'grid' ? h('button', { class: 'btn', type: 'button', onclick: () => chooseColumns(L, draw) }, 'Columns') : null,
         viewSeg(mode, 'tvView', draw)));
@@ -139,5 +141,5 @@ export function mount(ctx) {
 export function update(topics, ctx) {
   const L = S.state.libs.tv, changed = ctx.seen && (ctx.seen.status !== L.status || ctx.seen.rows !== L.rows);
   if (changed) ctx.seen = { status: L.status, rows: L.rows };
-  if (changed || topics.has('query') || (L.status !== 'ready' && (topics.has('plex') || topics.has('traffic') || topics.has('scan')))) ctx.redraw?.();
+  if (changed || topics.has('query') || topics.has('collections') || (L.status !== 'ready' && (topics.has('plex') || topics.has('traffic') || topics.has('scan')))) ctx.redraw?.();
 }

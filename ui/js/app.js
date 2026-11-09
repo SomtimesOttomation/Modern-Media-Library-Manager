@@ -174,9 +174,12 @@ $('#psearch').addEventListener('input', (e) => {
 export function setQuery(q) {
   S.state.query = String(q || '').trim();
   $('#psearch').value = S.state.query;
+  focusQueryTab();
+}
+function focusQueryTab(tell = true) {
   const tab = currentTab(), hint = S.state.query ? parse(S.state.query, S.state.libs[tab], S.state.collections).tab : '';
   if (hint && hint !== tab && S.state.libs[hint].status === 'ready') { location.hash = `#/${hint}`; return; }
-  S.notify('query');
+  if (tell) S.notify('query');
 }
 document.addEventListener('keydown', (e) => {
   if (e.key === '/' && !e.target.closest('input,textarea,select')) { e.preventDefault(); $('#psearch').focus(); }
@@ -246,6 +249,7 @@ document.addEventListener('mousedown', (e) => { if (!pop.hidden && !pop.contains
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !pop.hidden) pop.hidden = true; });
 
 S.subscribe((topics) => {
+  if (topics.has('queryset')) { $('#psearch').value = S.state.query; focusQueryTab(false); }
   if (topics.has('settings')) { applyWidth(); applyPosterScale(S.state.settings.posterScale); sizeButton(); }
   if (topics.has('theme') || topics.has('settings')) themeIcon();
   if (topics.has('traffic')) { haltBar(); liveStatus(); }

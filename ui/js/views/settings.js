@@ -29,6 +29,14 @@ function generalTab(close, repaint) {
       : h('p', null, h('b', null, 'Theme '),
         [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([t, label]) => h('button', { class: `btn ${s.theme === t ? 'primary' : ''}`, type: 'button', style: { marginRight: '6px' }, onclick: () => { S.saveSettings({ theme: t }); repaint(); } }, label))),
     hr(),
+    h('p', null, h('b', null, 'Width '), h('small', null, 'How wide the posters and grids spread. A preset uses the width a screen of that shape would have at this window height, centred.')),
+    h('p', null, [['full', 'Full width'], ['16:9', '16:9'], ['21:9', '21:9'], ['32:9', '32:9']].map(([k, label]) => h('button', {
+      class: `btn ${s.widthPreset === k && !(s.customWidth && s.contentWidth > 0) ? 'primary' : ''}`, type: 'button', style: { marginRight: '6px' },
+      onclick: () => { S.saveSettings({ widthPreset: k, contentWidth: 0 }); repaint(); } }, label))),
+    h('p', null, h('label', null, h('input', { type: 'checkbox', checked: s.customWidth ? true : null, onchange: (e) => { S.saveSettings({ customWidth: e.target.checked }); repaint(); } }),
+      ' Allow a custom width: drag either edge of the posters or grid (both sides move together; double-click an edge to go back to the preset)'),
+      s.customWidth && s.contentWidth > 0 ? h('small', null, ` Now ${s.contentWidth} px.`) : null),
+    hr(),
     h('p', null, h('b', null, 'Updates')),
     h('p', null, h('label', null, h('input', { type: 'checkbox', checked: s.updateCheck ? true : null, onchange: (e) => S.saveSettings({ updateCheck: e.target.checked }) }),
       ' Also check GitHub when the app starts (off by default: it checks only when you click the version)'), ' ',
@@ -61,12 +69,28 @@ function plexTab(repaint) {
 }
 
 function dataTab() {
+  const tm = h('input', { type: 'password', placeholder: 'TMDB API key or read token', autocomplete: 'off' });
+  const om = h('input', { type: 'password', placeholder: 'OMDb API key', autocomplete: 'off' });
+  const kmsg = h('small', null, '');
+  S.keysInfo().then((k) => { tm.placeholder = k.tmdb ? 'saved (type a new one to replace it)' : tm.placeholder; om.placeholder = k.omdb ? 'saved (type a new one to replace it)' : om.placeholder; }).catch(() => {});
+  const saveKeys = async () => {
+    try { const k = await S.saveKeys(tm.value.trim() || null, om.value.trim() || null); tm.value = ''; om.value = ''; kmsg.textContent = `Saved. TMDB ${k.tmdb ? 'set' : 'not set'}, OMDb ${k.omdb ? 'set' : 'not set'}.`; }
+    catch (e) { kmsg.textContent = e.message; }
+  };
   return [
+    h('p', null, h('b', null, 'Fetch info keys '), h('small', null, 'Your own free keys from themoviedb.org and omdbapi.com, stored encrypted for your Windows account (shared with the window app). Used only when you run Tools > Fetch info.')),
+    h('div', { class: 'form-row' }, h('label', null, 'TMDB'), tm),
+    h('div', { class: 'form-row' }, h('label', null, 'OMDb'), om),
+    h('p', null, h('button', { class: 'btn primary', type: 'button', onclick: saveKeys }, 'Save keys'), ' ', kmsg),
+    hr(),
+    h('p', null, h('label', null, h('input', { type: 'checkbox', checked: S.state.settings.detectFel ? true : null, onchange: (e) => S.saveSettings({ detectFel: e.target.checked }) }),
+      ' Check FEL / MEL during Plex scans (dual-layer Dolby Vision files this PC can open; needs ffmpeg and dovi_tool in the lib folder; slower)')),
+    hr(),
     h('p', null, h('b', null, 'Where the data comes from')),
     h('ul', null,
       h('li', null, 'Your Plex server: titles, file details and posters, when you scan.'),
       h('li', null, 'GitHub: the update check, only as set under General.'),
-      h('li', null, 'TMDB, OMDb and IMDb ratings and box office: fetched by the window app (Fetch info) for now; they show here after the next scan.')),
+      h('li', null, 'TMDB, OMDb and the IMDb ratings file: only when you run Tools > Fetch info.')),
     h('p', null, h('small', null, 'Nothing is fetched automatically. The live status button in the bar pauses all data traffic.')),
     h('p', null, h('button', { class: 'btn', type: 'button', onclick: () => openTraffic() }, 'Traffic details')),
   ];

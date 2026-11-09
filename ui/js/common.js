@@ -32,11 +32,15 @@ export function tileHtml({ key, poster, title, sub, res, hdr, rating }) {
     + (num(rating) > 0 ? `<div class="rt">★ ${num(rating).toFixed(1)}</div>` : '') + `</div>`
     + `<div class="pt" title="${esc(title)}">${esc(title)}</div><div class="ps">${esc(sub)}</div></button>`;
 }
-// Search: every word must appear somewhere in the title, show, genre, cast, studio, director, year or collection.
-export function matchQuery(rows, q) {
-  const terms = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
-  if (!terms.length) return rows;
-  return rows.filter((r) => terms.every((t) => r._search.includes(t)));
+// Search (see search.js): returns the matching rows and the chips that say what the query was read as.
+import { parse, filterRows } from './search.js';
+export function searchRows(rows, q, L, collections) {
+  const p = parse(q, L, collections);
+  return { rows: filterRows(rows, p), chips: p.chips, tab: p.tab };
+}
+// "Showing: 1990s - Comedy series" under the title, so a smart search never surprises
+export function chipsHtml(chips) {
+  return chips.length ? `<div class="qchips" title="How the search was read"><span>Showing:</span>${chips.map((c) => `<b>${esc(c)}</b>`).join('')}</div>` : '';
 }
 /* One title can be in the library several times (a 4K and a 1080p copy). The key is the IMDb id, else the TMDB id, else
    title + year; the copy kept is the biggest file, so the best-quality one stands in for the rest. */
@@ -68,4 +72,28 @@ export function fillWall(wall, items, render, batch = 90) {
     io.observe(sentinel);
   }
   return () => { if (io) io.disconnect(); sentinel.remove(); };
+}
+
+/* Sort By: a button with a menu (a <select> cannot tell when the same option is picked again). Picking the current
+   option flips its direction; the arrow shows which way it runs. */
+export function sortMenu(sorts, key, rev, onPick) {
+  const cur = sorts.find((x) => x[0] === key) || sorts[0];
+  const wrap = document.createElement('div'); wrap.className = 'sortbtn';
+  const arrow = (k) => (k === cur[0] ? (rev ? ' ↑' : ' ↓') : '');
+  wrap.innerHTML = `<button type="button" aria-haspopup="menu" aria-expanded="false" title="Sort by (pick it again to reverse)">Sort: ${esc(cur[1])}<span aria-hidden="true">${rev ? '↑' : '↓'}</span></button>`;
+  const btn = wrap.firstChild;
+  let menu = null;
+  const close = () => { menu?.remove(); menu = null; btn.setAttribute('aria-expanded', 'false'); document.removeEventListener('mousedown', outside, true); document.removeEventListener('keydown', escKey, true); };
+  const outside = (e) => { if (!wrap.contains(e.target)) close(); };
+  const escKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); btn.focus(); } };
+  btn.addEventListener('click', () => {
+    if (menu) { close(); return; }
+    menu = document.createElement('div'); menu.className = 'sortmenu card'; menu.setAttribute('role', 'menu');
+    menu.innerHTML = sorts.map(([k, label]) => `<button type="button" role="menuitem" data-k="${k}" class="${k === cur[0] ? 'on' : ''}">${esc(label)}<small>${k === cur[0] ? (rev ? 'reversed' + arrow(k) : 'click to reverse' + arrow(k)) : ''}</small></button>`).join('');
+    menu.addEventListener('click', (e) => { const b = e.target.closest('button[data-k]'); if (!b) return; close(); onPick(b.dataset.k, b.dataset.k === cur[0] ? !rev : false); });
+    wrap.append(menu); btn.setAttribute('aria-expanded', 'true');
+    document.addEventListener('mousedown', outside, true); document.addEventListener('keydown', escKey, true);
+    menu.querySelector('.on')?.focus();
+  });
+  return wrap;
 }

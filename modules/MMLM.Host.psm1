@@ -25,6 +25,7 @@ $script:Root = Split-Path $PSScriptRoot
 $script:Mutex = $null
 $script:Version = '0.0.0'
 $script:AppData = Join-Path $env:LOCALAPPDATA $script:AppName
+$script:MetaStore = Join-Path $script:AppData 'metadata\store.json'      # fetched + hand-typed values (shared with the window app)
 $script:CacheDir = ''
 $script:WebViewDataDir = ''
 $script:Settings = $null
@@ -40,6 +41,8 @@ $script:Visible = $false
 $script:Exports = @{}
 $script:PageSettings = $null
 $script:UpdProc = $null
+$script:Series = $null
+$script:Tool = $null
 
 # the data modules, by full path (an already loaded copy is reused)
 foreach ($m0 in @('MMLM.Library.psm1', 'MMLM.Plex.psm1', 'MMLM.Fetch.psm1')) { Import-Module (Join-Path $PSScriptRoot $m0) -DisableNameChecking }
@@ -92,7 +95,8 @@ function Save-HostPlexSettings {
 }
 
 # The page's own settings (theme, view and sort per tab, grid columns), kept apart from the app's settings.json.
-$script:PageDefaults = [ordered]@{ theme = 'system'; updateCheck = $false; moviesView = 'posters'; tvView = 'posters'; moviesSort = 'added'; tvSort = 'title'; columns = @(); hideDupes = $false }
+$script:PageDefaults = [ordered]@{ theme = 'system'; updateCheck = $false; moviesView = 'posters'; tvView = 'posters'; moviesSort = 'added'; tvSort = 'title'; moviesSortRev = $false; tvSortRev = $false
+    columns = @(); hideDupes = $false; detectFel = $false; posterScale = 100; widthPreset = 'full'; customWidth = $false; contentWidth = 0 }
 function Read-PageSettings {
     $s = [ordered]@{}; foreach ($k in $script:PageDefaults.Keys) { $s[$k] = $script:PageDefaults[$k] }
     $p = Join-Path $script:AppData 'page-settings.json'
@@ -103,11 +107,18 @@ function Read-PageSettings {
 }
 function Set-PageSetting {
     param([string]$Key, $Value)
-    $views = @('posters', 'grid')
+    $views = @('posters', 'grid', 'dashboard')
     $ok = switch ($Key) {
         'theme'       { @('system', 'light', 'dark') -contains [string]$Value }
         'updateCheck' { $Value = [bool]$Value; $true }
         'hideDupes'   { $Value = [bool]$Value; $true }
+        'moviesSortRev' { $Value = [bool]$Value; $true }
+        'tvSortRev'   { $Value = [bool]$Value; $true }
+        'customWidth' { $Value = [bool]$Value; $true }
+        'detectFel'   { $Value = [bool]$Value; $true }
+        'posterScale' { $n = 0; if ([int]::TryParse([string]$Value, [ref]$n) -and $n -ge 50 -and $n -le 200) { $Value = $n; $true } else { $false } }
+        'contentWidth' { $n = 0; if ([int]::TryParse([string]$Value, [ref]$n) -and $n -ge 0 -and $n -le 20000) { $Value = $n; $true } else { $false } }
+        'widthPreset' { @('full', '16:9', '21:9', '32:9') -contains [string]$Value }
         'moviesView'  { $views -contains [string]$Value }
         'tvView'      { $views -contains [string]$Value }
         'moviesSort'  { [string]$Value -match '^[a-zA-Z]{1,30}$' }
@@ -172,7 +183,17 @@ function Export-PageLibrary {
         $names.Add([string]$f.Name); $defs.Add([ordered]@{ n = [string]$f.Name; t = [string]$f.Type; g = [string]$f.Group; s = [bool]$f.Show })
     }
     $names.Add('Poster'); $defs.Add([ordered]@{ n = 'Poster'; t = 'string'; g = 'Library'; s = $false })
-    $json = [Mmlm.Native.PageData]::Rows([object[]]$Recs, $names.ToArray(), $urls, (ConvertTo-Json -InputObject $defs.ToArray() -Compress))
+    # collection ids: Plex titles keep "p:<key>"; a local file gets "h:<hash of its path>", and the path behind each hash is
+    # kept in Library\idmap-<tab>.json (never in the folder the page can read) so collections saved from the page keep the window app's ids
+    $names.Add('Rid'); $defs.Add([ordered]@{ n = 'Rid'; t = 'string'; g = 'Library'; s = $false })
+    $local = @{}; $idmap = [ordered]@{}
+    foreach ($r in $Recs) {
+        if ([string]$r.PlexKey -or -not [string]$r.FullPath) { continue }
+        $fp = [string]$r.FullPath
+        if (-not $local.ContainsKey($fp)) { $h = 'h:' + (Get-MmlmStringHash $fp).Substring(0, 16); $local[$fp] = $h; $idmap[$h] = 'f:' + $fp }
+    }
+    try { [IO.File]::WriteAllText((Join-Path (Split-Path $Job.Snapshot) ('idmap-' + $Tab + '.json')), (ConvertTo-Json -InputObject $idmap -Compress), (New-Object Text.UTF8Encoding($false))) } catch { }
+    $json = [Mmlm.Native.PageData]::Rows([object[]]$Recs, $names.ToArray(), $urls, (ConvertTo-Json -InputObject $defs.ToArray() -Compress), $local)
     $file = Join-Path $Job.CacheDir ('library-' + $Tab + '.json')
     [IO.File]::WriteAllText($file + '.tmp', $json, (New-Object Text.UTF8Encoding($false)))
     if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file -Force }
@@ -186,6 +207,7 @@ try {
         # no scan: turn the saved snapshot into the page's copy
         Set-MmlmProgress -Text 'Opening the library...'
         $recs = @([Mmlm.Native.Snapshot]::Load($Job.Snapshot))
+        try { Merge-MmlmMetaStore -Records $recs -Path $Job.MetaStore } catch { }      # scores fetched or typed in since the scan
         Export-PageLibrary -Recs $recs -Tab $Job.Tab
         $S.Count = $recs.Count
         return
@@ -197,12 +219,13 @@ try {
         foreach ($r in [Mmlm.Native.Snapshot]::Load($Job.Snapshot)) { if ($r.PlexKey) { $prior[[string]$r.PlexKey] = $r } }
     }
     $use = $(if ($Job.Rebuild) { @{} } else { $prior })
-    $recs = @(Invoke-MmlmPlexScan -BaseUrl $Job.BaseUrl -Token $Job.Token -Movies (-not $tv) -Shows $tv -Rebuild ([bool]$Job.Rebuild) -DetectFel $false -Prior $use)
+    $recs = @(Invoke-MmlmPlexScan -BaseUrl $Job.BaseUrl -Token $Job.Token -Movies (-not $tv) -Shows $tv -Rebuild ([bool]$Job.Rebuild) -DetectFel ([bool]$Job.DetectFel) -Prior $use)
     if ($S.Cancel) { $S.Cancelled = $true; return }
     $new = @($recs | Where-Object { -not $prior.ContainsKey([string]$_.PlexKey) })
     Set-MmlmProgress -Text 'Saving...'
     $dir = Split-Path -Parent $Job.Snapshot
     if (-not (Test-Path -LiteralPath $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
+    try { Merge-MmlmMetaStore -Records $recs -Path $Job.MetaStore } catch { }          # fetched scores (Metacritic, RT, box office) and hand edits
     [Mmlm.Native.Snapshot]::Save([object[]]$recs, $Job.Snapshot, ('{0}|{1}' -f $recs.Count, (Get-Date).ToString('yyyy-MM-dd HH:mm')))
     Export-PageLibrary -Recs $recs -Tab $Job.Tab
     # Today-page card: the six most recently added titles (episodes collapse to their show), posters copied into the cache dir
@@ -250,7 +273,7 @@ function Start-HostExport {
     param([ValidateSet('movies', 'tv')][string]$Tab)
     if ($script:Exports.ContainsKey($Tab)) { return }
     $sync = [hashtable]::Synchronized(@{ Text = 'Opening the library...'; Value = 0; Max = 0; Cancel = $false; Done = $false; Error = $null; PhaseLo = 0.0; PhaseHi = 1.0; Count = 0; New = 0; Cancelled = $false })
-    $job = @{ Kind = 'export'; Tab = $Tab; Snapshot = (Get-SnapshotFile $Tab); CacheDir = $script:CacheDir; Hidden = $script:HiddenFields }
+    $job = @{ Kind = 'export'; Tab = $Tab; Snapshot = (Get-SnapshotFile $Tab); CacheDir = $script:CacheDir; Hidden = $script:HiddenFields; MetaStore = $script:MetaStore }
     $ps = [powershell]::Create()
     [void]$ps.AddScript($script:ScanScript).AddArgument(@(Get-HostModuleFiles)).AddArgument((New-WorkerContext $sync)).AddArgument($job)
     $script:Exports[$Tab] = @{ Ps = $ps; Async = $ps.BeginInvoke(); Sync = $sync }
@@ -262,7 +285,10 @@ function Get-LibraryState {
     $snap = Get-SnapshotFile $Tab
     $page = Join-Path $script:CacheDir ('library-' + $Tab + '.json')
     if (-not (Test-Path -LiteralPath $snap)) { return $(if (Test-Path -LiteralPath $page) { 'ready' } else { 'empty' }) }
-    if ((Test-Path -LiteralPath $page) -and (Get-Item -LiteralPath $page).LastWriteTimeUtc -ge (Get-Item -LiteralPath $snap).LastWriteTimeUtc) { return 'ready' }
+    # stale when the scan or the saved scores (Fetch info, Edit info in the window app) are newer than the page's copy
+    $newest = (Get-Item -LiteralPath $snap).LastWriteTimeUtc
+    if (Test-Path -LiteralPath $script:MetaStore) { $m = (Get-Item -LiteralPath $script:MetaStore).LastWriteTimeUtc; if ($m -gt $newest) { $newest = $m } }
+    if ((Test-Path -LiteralPath $page) -and (Get-Item -LiteralPath $page).LastWriteTimeUtc -ge $newest) { return 'ready' }
     'stale'
 }
 
@@ -281,7 +307,7 @@ function Start-HostScan {
     $script:Sync = [hashtable]::Synchronized(@{ Text = 'Starting...'; Value = 0; Max = 0; Cancel = $false; Done = $false; Error = $null; PhaseLo = 0.0; PhaseHi = 1.0; Count = 0; New = 0; Cancelled = $false })
     $ctx = New-WorkerContext $script:Sync
     foreach ($d in $ctx.CacheFolder, $ctx.ThumbFolder) { if (-not (Test-Path -LiteralPath $d)) { New-Item -Path $d -ItemType Directory -Force | Out-Null } }
-    $job = @{ Kind = 'scan'; Tab = $Tab; Rebuild = $Rebuild; BaseUrl = $set.PlexUrl; Token = $token; Snapshot = (Get-SnapshotFile $Tab); CacheDir = $script:CacheDir; Hidden = $script:HiddenFields }
+    $job = @{ Kind = 'scan'; Tab = $Tab; Rebuild = $Rebuild; DetectFel = [bool]$script:PageSettings.detectFel; BaseUrl = $set.PlexUrl; Token = $token; Snapshot = (Get-SnapshotFile $Tab); CacheDir = $script:CacheDir; Hidden = $script:HiddenFields; MetaStore = $script:MetaStore }
     $ps = [powershell]::Create()
     [void]$ps.AddScript($script:ScanScript).AddArgument(@(Get-HostModuleFiles)).AddArgument($ctx).AddArgument($job)
     $script:ScanPs = $ps
@@ -421,6 +447,352 @@ function Watch-DropFolder {
     }
 }
 
+# ---------------------------------------------------------------- series view (one show's details from Plex, on demand)
+# Opening a show in the page asks your Plex server for what a scan does not keep: episode stills, summaries, watched
+# marks, cast and related shows. Saved in Dashboard\series (the page reads it from there); opening it again uses the
+# saved copy until you press Refresh. Counts as data traffic, so the pause switch stops it.
+$script:SeriesScript = {
+    param($ModuleFiles, $Ctx, $Job)
+    foreach ($m in $ModuleFiles) { Import-Module $m -DisableNameChecking }
+    Set-MmlmContext -Values $Ctx; Set-MmlmPlexContext -Values $Ctx
+    $S = $Ctx.Sync
+    $u = $Job.BaseUrl; $t = $Job.Token
+    $tag = { param($n, $c) @($n.SelectNodes($c) | ForEach-Object { $_.GetAttribute('tag') } | Where-Object { $_ }) }
+    $attr = { param($n, $a) [string]$n.GetAttribute($a) }
+    $int = { param($x) $v = 0; [void][int]::TryParse([string]$x, [ref]$v); $v }
+    try {
+        $S.Text = 'Finding the show on Plex...'
+        $showKey = [string]$Job.ShowKey
+        if (-not $showKey) {
+            $ep = (Get-MmlmPlexXml -BaseUrl $u -Path ('/library/metadata/' + $Job.EpKey) -Token $t).MediaContainer.SelectSingleNode('Video')
+            if ($null -eq $ep) { throw 'Plex no longer has this episode. Scan TV Shows again.' }
+            $showKey = $ep.GetAttribute('grandparentRatingKey')
+        }
+        $S.Text = 'Reading the show...'
+        $sx = (Get-MmlmPlexXml -BaseUrl $u -Path ('/library/metadata/' + $showKey) -Query @{ includeRelated = 1 } -Token $t).MediaContainer
+        $show = $sx.SelectSingleNode('Directory')
+        if ($null -eq $show) { throw 'Plex did not return the show.' }
+        $seasons = @((Get-MmlmPlexXml -BaseUrl $u -Path ('/library/metadata/' + $showKey + '/children') -Token $t).MediaContainer.SelectNodes('Directory') | Where-Object { $_.GetAttribute('type') -eq 'season' })
+        $S.Text = 'Reading the episodes...'
+        $eps = @((Get-MmlmPlexXml -BaseUrl $u -Path ('/library/metadata/' + $showKey + '/allLeaves') -Token $t).MediaContainer.SelectNodes('Video'))
+        $img = Join-Path $Job.CacheDir 'series\img'
+        if (-not (Test-Path -LiteralPath $img)) { New-Item -ItemType Directory -Path $img -Force | Out-Null }
+        $pic = { param($p, $w, $hgt) $f = Save-MmlmPlexImage -BaseUrl $u -Token $t -ThumbPath $p -Width $w -Height $hgt -Folder $img; if ($f) { 'series/img/' + $f } else { '' } }
+        # cast and related shows from the show page
+        $cast = @(foreach ($r in @($show.SelectNodes('Role') | Select-Object -First 30)) { [ordered]@{ name = & $attr $r 'tag'; role = & $attr $r 'role'; thumb = & $attr $r 'thumb' } })
+        $related = New-Object System.Collections.Generic.List[object]
+        foreach ($hub in @($sx.SelectNodes('Hub') + $show.SelectNodes('Related/Hub'))) {
+            foreach ($d in @($hub.SelectNodes('Directory'))) {
+                if ($related.Count -ge 24 -or (& $attr $d 'type') -ne 'show' -or (& $attr $d 'ratingKey') -eq $showKey) { continue }
+                if (@($related | Where-Object { $_.key -eq (& $attr $d 'ratingKey') }).Count) { continue }
+                $related.Add([ordered]@{ key = & $attr $d 'ratingKey'; title = & $attr $d 'title'; year = & $int (& $attr $d 'year'); seasons = & $int (& $attr $d 'childCount')
+                    unwatched = [Math]::Max(0, (& $int (& $attr $d 'leafCount')) - (& $int (& $attr $d 'viewedLeafCount'))); thumb = & $attr $d 'thumb' })
+            }
+        }
+        # images: posters first (they show at the top), then the episode stills, then faces
+        $total = 1 + $seasons.Count + $eps.Count + $cast.Count + $related.Count; $n = 0
+        $step = { $script:n++; $S.Pct = [int](100 * $script:n / [Math]::Max(1, $total)) }
+        $S.Text = 'Fetching pictures...'
+        $data = [ordered]@{
+            key = $showKey; title = & $attr $show 'title'; year = & $int (& $attr $show 'year'); summary = & $attr $show 'summary'; studio = & $attr $show 'studio'
+            rated = & $attr $show 'contentRating'; rating = & $attr $show 'rating'; audienceRating = & $attr $show 'audienceRating'; genres = @(& $tag $show 'Genre')
+            firstAired = & $attr $show 'originallyAvailableAt'; poster = (& $pic (& $attr $show 'thumb') 300 450); fetchedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm')
+        }
+        & $step
+        $data.seasons = @(foreach ($se in $seasons) {
+            if ($S.Cancel) { break }
+            $o = [ordered]@{ key = & $attr $se 'ratingKey'; index = & $int (& $attr $se 'index'); title = & $attr $se 'title'; episodes = & $int (& $attr $se 'leafCount')
+                watched = & $int (& $attr $se 'viewedLeafCount'); poster = (& $pic (& $attr $se 'thumb') 300 450) }
+            & $step; $o })
+        $data.episodes = @(foreach ($e in $eps) {
+            if ($S.Cancel) { break }
+            $o = [ordered]@{ key = & $attr $e 'ratingKey'; season = & $int (& $attr $e 'parentIndex'); index = & $int (& $attr $e 'index'); title = & $attr $e 'title'
+                summary = & $attr $e 'summary'; aired = & $attr $e 'originallyAvailableAt'; minutes = [int]((& $int (& $attr $e 'duration')) / 60000)
+                watched = ((& $int (& $attr $e 'viewCount')) -gt 0); progress = $(if ((& $int (& $attr $e 'duration')) -gt 0) { [int](100 * (& $int (& $attr $e 'viewOffset')) / (& $int (& $attr $e 'duration'))) } else { 0 })
+                thumb = (& $pic (& $attr $e 'thumb') 400 225) }
+            & $step; $o })
+        $data.cast = @(foreach ($c in $cast) { if ($S.Cancel) { break }; $c.photo = (& $pic $c.thumb 200 200); $c.Remove('thumb'); & $step; $c })
+        $data.related = @(foreach ($r in $related) { if ($S.Cancel) { break }; $r.poster = (& $pic $r.thumb 200 300); $r.Remove('thumb'); & $step; $r })
+        if ($S.Cancel) { $S.Cancelled = $true; return }
+        $dir = Join-Path $Job.CacheDir 'series'
+        $file = Join-Path $dir ($showKey + '.json')
+        [IO.File]::WriteAllText($file, (ConvertTo-Json -InputObject $data -Depth 6 -Compress), (New-Object Text.UTF8Encoding($false)))
+        $S.ShowKey = $showKey
+    }
+    catch { $S.Error = $_.Exception.Message }
+    finally { $S.Done = $true }
+}
+
+function Get-SeriesIndex {
+    # show name -> Plex show key, learnt on the first open (Library\series-index.json)
+    $p = Join-Path (Split-Path (Get-SnapshotFile 'tv')) 'series-index.json'
+    $o = @{}
+    if (Test-Path -LiteralPath $p) { try { foreach ($pr in ([IO.File]::ReadAllText($p) | ConvertFrom-Json).PSObject.Properties) { $o[$pr.Name] = [string]$pr.Value } } catch { Write-HostLog 'series index' $_ } }
+    $o
+}
+function Start-HostSeries {
+    param([string]$Show, [string]$EpKey, [bool]$Refresh)
+    if ($script:Series -and -not $script:Series.Sync.Done) {
+        if ($script:Series.Show -eq $Show) { return 'loading' }
+        $script:Series.Sync.Cancel = $true
+    }
+    $idx = Get-SeriesIndex
+    $key = [string]$idx[$Show]
+    if ($key -and -not $Refresh) {
+        $f = Join-Path $script:CacheDir ('series\' + $key + '.json')
+        if (Test-Path -LiteralPath $f) { return [IO.File]::ReadAllText($f) }
+    }
+    if ($script:Traffic.Halted) { throw 'Traffic is paused. Resume it first.' }
+    if (-not $EpKey -and -not $key) { throw 'This show was not scanned from Plex, so there is nothing more to fetch.' }
+    $set = Read-HostSettings
+    $token = ''
+    try { $token = Unprotect-MmlmPlexToken $set.PlexTokenProtected } catch { Write-HostLog 'token' $_ }
+    if ($script:Ctx.Debug -and $env:MMLM_HOST_TEST_TOKEN) { $token = $env:MMLM_HOST_TEST_TOKEN }
+    if (-not $set.PlexUrl -or -not $token) { throw 'Add your Plex server and token in Settings first.' }
+    $sync = [hashtable]::Synchronized(@{ Text = 'Starting...'; Pct = 0; Cancel = $false; Done = $false; Error = $null; Cancelled = $false; ShowKey = ''; Value = 0; Max = 0; PhaseLo = 0.0; PhaseHi = 1.0 })
+    $job = @{ BaseUrl = $set.PlexUrl; Token = $token; EpKey = $EpKey; ShowKey = $key; CacheDir = $script:CacheDir }
+    $ps = [powershell]::Create()
+    [void]$ps.AddScript($script:SeriesScript).AddArgument(@(Get-HostModuleFiles)).AddArgument((New-WorkerContext $sync)).AddArgument($job)
+    $script:Series = @{ Ps = $ps; Async = $ps.BeginInvoke(); Sync = $sync; Show = $Show; Last = '' }
+    'loading'
+}
+function Get-SeriesEvents {
+    $x = $script:Series
+    if (-not $x) { return }
+    $s = $x.Sync
+    if ($s.Done) {
+        $script:Series = $null
+        try { $x.Ps.Dispose() } catch { Write-HostLog 'series dispose' $_ }
+        if ($s.ShowKey) {
+            $idx = Get-SeriesIndex; $idx[$x.Show] = $s.ShowKey
+            try { [IO.File]::WriteAllText((Join-Path (Split-Path (Get-SnapshotFile 'tv')) 'series-index.json'), (ConvertTo-Json -InputObject $idx -Compress), (New-Object Text.UTF8Encoding($false))) } catch { Write-HostLog 'series index' $_ }
+        }
+        Push-HostEvent 'series' ([ordered]@{ show = $x.Show; running = $false; error = $s.Error; cancelled = [bool]$s.Cancelled })
+        return
+    }
+    $d = [ordered]@{ show = $x.Show; running = $true; pct = [int]$s.Pct; text = [string]$s.Text }
+    $j = ConvertTo-PageJson $d
+    if ($j -ne $x.Last) { $x.Last = $j; Push-HostEvent 'series' $d }
+}
+
+# ---------------------------------------------------------------- tools: Fetch info, FEL/MEL probe, CSV and HTML export
+# One background job at a time. Each works on the titles the page names (its current view) or the whole tab.
+#   fetch: ratings, Metacritic, RT and box office from TMDB / OMDb / IMDb (your keys) into metadata\store.json, as the
+#          window app's Fetch info does. Only when you start it. Counts as data traffic.
+#   fel:   tells Dolby Vision FEL from MEL with ffmpeg + dovi_tool (lib folder), for dual-layer files this PC can open.
+#   csv / html: the titles as a spreadsheet, or as the old standalone dashboard page (posters inside), in
+#          Documents\Modern Media Library Manager. File locations are left out of both.
+$script:ToolScript = {
+    param($ModuleFiles, $Ctx, $Job)
+    foreach ($m in $ModuleFiles) { Import-Module $m -DisableNameChecking }
+    Set-MmlmContext -Values $Ctx; Set-MmlmPlexContext -Values $Ctx; Set-MmlmFetchContext -Values $Ctx
+    $S = $Ctx.Sync
+    try {
+        Initialize-MmlmNative
+        Set-MmlmProgress -Text 'Opening the library...'
+        $recs = @([Mmlm.Native.Snapshot]::Load($Job.Snapshot))
+        try { Merge-MmlmMetaStore -Records $recs -Path $Job.MetaStore } catch { }
+        $rid = { param($r) if ([string]$r.PlexKey) { 'p:' + [string]$r.PlexKey } elseif ([string]$r.FullPath) { 'h:' + (Get-MmlmStringHash ([string]$r.FullPath)).Substring(0, 16) } else { '' } }
+        $want = $null
+        if (@($Job.Rids).Count -gt 0) { $want = New-Object 'System.Collections.Generic.HashSet[string]'; foreach ($x in $Job.Rids) { [void]$want.Add([string]$x) } }
+        $idx = New-Object System.Collections.Generic.List[int]
+        for ($i = 0; $i -lt $recs.Count; $i++) { if ($null -eq $want -or $want.Contains((& $rid $recs[$i]))) { $idx.Add($i) } }
+        $outDir = [Environment]::GetFolderPath('MyDocuments')
+        $outDir = $(if ($outDir) { Join-Path $outDir 'Modern Media Library Manager' } else { Join-Path $Ctx.AppData 'Exports' })
+        $safe = (([string]$Job.Name) -replace '[^A-Za-z0-9 ._()-]', '').Trim(); if (-not $safe) { $safe = 'Library' }
+        switch ($Job.Kind) {
+            'fetch' {
+                $S.Partial = New-Object System.Collections.ArrayList
+                Invoke-MmlmMetadataScrape -Records $recs -Indexes $idx.ToArray() -TmdbKey $Job.TmdbKey -OmdbKey $Job.OmdbKey -Overwrite ([bool]$Job.Overwrite) -DataFolder $Job.DataFolder -StorePath $Job.MetaStore
+                $S.Summary = [string]$S.Summary
+                $S.Library = $true
+            }
+            'fel' {
+                $targets = @($idx | Where-Object { [string]$recs[$_].DVLayer -eq 'Dual layer' })
+                $tools = (Find-MmlmTool 'ffmpeg.exe') -and (Find-MmlmTool 'dovi_tool.exe')
+                if (-not $tools) { throw 'The FEL/MEL check needs ffmpeg.exe and dovi_tool.exe in the lib folder (or on PATH).' }
+                $fel = 0; $mel = 0; $unk = 0; $away = 0; $n = 0
+                foreach ($i in $targets) {
+                    if ($S.Cancel) { break }
+                    $n++; $r = $recs[$i]
+                    Set-MmlmProgress -Text ('Checking {0} of {1}: {2}' -f $n, $targets.Count, $r.Title) -Value $n -Max $targets.Count
+                    if (-not [string]$r.FullPath -or -not (Test-Path -LiteralPath ([string]$r.FullPath) -ErrorAction SilentlyContinue)) { $away++; continue }
+                    $t = Get-MmlmDolbyVisionLayerType -Path ([string]$r.FullPath) -DurationSec ([int]([double]$r.RuntimeMin * 60))
+                    if ($t) {
+                        Set-MmlmRecField $r 'DVLayer' $t
+                        Set-MmlmRecField $r 'HDRStack' (([string]$r.HDRStack) -replace ' \(dual layer\)', (' ' + $t))
+                        if ($t -eq 'FEL') { $fel++ } else { $mel++ }
+                    } else { $unk++ }
+                }
+                if ($fel + $mel -gt 0) { [Mmlm.Native.Snapshot]::Save([object[]]$recs, $Job.Snapshot, ('{0}|{1}' -f $recs.Count, (Get-Date).ToString('yyyy-MM-dd HH:mm'))) }
+                $S.Summary = $(if ($targets.Count -eq 0) { 'No dual-layer Dolby Vision titles here: nothing to check.' } else {
+                    ('Checked {0}: {1} FEL, {2} MEL, {3} could not tell{4}.' -f ($n - $away), $fel, $mel, $unk, $(if ($away) { ", $away not reachable from this PC" } else { '' })) })
+                $S.Library = ($fel + $mel -gt 0)
+            }
+            'csv' {
+                if (-not (Test-Path -LiteralPath $outDir)) { New-Item -ItemType Directory -Path $outDir -Force | Out-Null }
+                $cols = @(@($Job.Columns) | Where-Object { $Job.Hidden -notcontains $_ -and ($Ctx.Fields | Where-Object Name -eq $_) })
+                if ($cols.Count -eq 0) { $cols = @($Ctx.Fields | Where-Object { $_.Group -ne 'Clues' -and $Job.Hidden -notcontains $_.Name } | ForEach-Object { $_.Name }) }
+                if ($cols -notcontains 'Title') { $cols = @('Title') + $cols }
+                $file = Join-Path $outDir ($safe + '.csv'); $k = 2
+                while (Test-Path -LiteralPath $file) { $file = Join-Path $outDir ('{0} ({1}).csv' -f $safe, $k); $k++ }
+                @($idx | ForEach-Object { $recs[$_] | Select-Object -Property $cols }) | Export-Csv -LiteralPath $file -NoTypeInformation -Encoding UTF8
+                $S.Path = $file; $S.Summary = ('{0} titles saved.' -f $idx.Count)
+            }
+            'html' {
+                if (-not (Test-Path -LiteralPath $outDir)) { New-Item -ItemType Directory -Path $outDir -Force | Out-Null }
+                $tpl = Join-Path $Ctx.AppRoot 'dashboard-template.html'
+                if (-not (Test-Path -LiteralPath $tpl)) { throw 'dashboard-template.html is missing from the program folder.' }
+                $clues = @($Ctx.Fields | Where-Object { $_.Group -eq 'Clues' } | ForEach-Object { $_.Name })
+                $rows = New-Object System.Collections.Generic.List[object]; $n = 0
+                foreach ($i in $idx) {
+                    $n++; $r = $recs[$i]
+                    if (($n % 25) -eq 0) { Set-MmlmProgress -Text ('Building the page: {0} of {1}' -f $n, $idx.Count) -Value $n -Max $idx.Count }
+                    $row = [ordered]@{}
+                    foreach ($p in $r.PSObject.Properties) { if ($Job.Hidden -notcontains $p.Name -and $clues -notcontains $p.Name) { $row[$p.Name] = $p.Value } }
+                    $row['Poster'] = ''
+                    $pp = [string]$r.PosterPath
+                    if ($pp) {
+                        $leaf = $(if ($pp.StartsWith($Ctx.ThumbFolder, [StringComparison]::OrdinalIgnoreCase)) { [IO.Path]::GetFileName($pp) } else { (Get-MmlmStringHash $pp) + [IO.Path]::GetExtension($pp).ToLowerInvariant() })
+                        $th = Join-Path $Job.CacheDir ('thumbs\' + $leaf)
+                        if (Test-Path -LiteralPath $th) { $row['Poster'] = 'data:image/jpeg;base64,' + [Convert]::ToBase64String([IO.File]::ReadAllBytes($th)) }
+                    }
+                    $rows.Add([pscustomobject]$row)
+                }
+                $json = (ConvertTo-Json -InputObject $rows.ToArray() -Depth 4 -Compress).Replace('</', '<\/')
+                $meta = ConvertTo-Json -Compress -InputObject @{ generated = (Get-Date -Format 'yyyy-MM-dd HH:mm'); library = [string]$Job.Library; collection = [string]$Job.Name; dateOrder = $false }
+                $html = [IO.File]::ReadAllText($tpl, [Text.Encoding]::UTF8).Replace('__META__', $meta).Replace('__DATA__', $json)
+                $file = Join-Path $outDir ($safe + '.html'); $k = 2
+                while (Test-Path -LiteralPath $file) { $file = Join-Path $outDir ('{0} ({1}).html' -f $safe, $k); $k++ }
+                [IO.File]::WriteAllText($file, $html, (New-Object Text.UTF8Encoding($false)))
+                $S.Path = $file; $S.Summary = ('{0} titles in one page (posters included).' -f $idx.Count)
+            }
+        }
+    }
+    catch { $S.Error = $_.Exception.Message }
+    finally { $S.Done = $true }
+}
+
+function Read-HostKeys {
+    # the TMDB / OMDb keys the window app saved (or the page's Settings > Data)
+    $p = Join-Path $script:AppData 'settings.json'
+    $k = @{ Tmdb = ''; Omdb = '' }
+    if (Test-Path -LiteralPath $p) {
+        try {
+            $j = [IO.File]::ReadAllText($p) | ConvertFrom-Json
+            if ($j.TmdbKeyProtected) { $k.Tmdb = Unprotect-MmlmPlexToken ([string]$j.TmdbKeyProtected) }
+            if ($j.OmdbKeyProtected) { $k.Omdb = Unprotect-MmlmPlexToken ([string]$j.OmdbKeyProtected) }
+        } catch { Write-HostLog 'keys' $_ }
+    }
+    $k
+}
+function Save-HostKeys {
+    # Writes only the two key fields (encrypted for this Windows user, as the window app does); other keys stay.
+    param([string]$Tmdb, [string]$Omdb)
+    $p = Join-Path $script:AppData 'settings.json'
+    $o = [ordered]@{}
+    if (Test-Path -LiteralPath $p) { try { foreach ($pr in ([IO.File]::ReadAllText($p) | ConvertFrom-Json).PSObject.Properties) { $o[$pr.Name] = $pr.Value } } catch { Write-HostLog 'settings read' $_ } }
+    if ($null -ne $Tmdb) { $o['TmdbKeyProtected'] = $(if ($Tmdb) { Protect-MmlmPlexToken $Tmdb } else { '' }) }
+    if ($null -ne $Omdb) { $o['OmdbKeyProtected'] = $(if ($Omdb) { Protect-MmlmPlexToken $Omdb } else { '' }) }
+    [IO.File]::WriteAllText($p, (ConvertTo-Json -InputObject $o -Depth 6), (New-Object Text.UTF8Encoding($false)))
+}
+function Start-HostTool {
+    param($A)
+    $kind = [string]$A.kind
+    if (@('fetch', 'fel', 'csv', 'html') -notcontains $kind) { throw 'Unknown tool.' }
+    if ($script:Tool -and -not $script:Tool.Sync.Done) { throw 'Another tool is still running. Wait for it or cancel it.' }
+    $tab = $(if ([string]$A.tab -eq 'tv') { 'tv' } else { 'movies' })
+    if (-not (Test-Path -LiteralPath (Get-SnapshotFile $tab))) { throw 'Scan this tab first.' }
+    if (@('fetch', 'fel') -contains $kind -and $script:Traffic.Halted) { throw 'Traffic is paused. Resume it first.' }
+    $job = @{ Kind = $kind; Tab = $tab; Snapshot = (Get-SnapshotFile $tab); CacheDir = $script:CacheDir; Hidden = $script:HiddenFields; MetaStore = $script:MetaStore
+        Rids = @(@($A.rids) | ForEach-Object { [string]$_ } | Where-Object { $_ -match '^(p|h):' }); Columns = @(@($A.columns) | ForEach-Object { [string]$_ })
+        Name = [string]$A.name; Library = $(if ($tab -eq 'tv') { 'TV Shows' } else { 'Movies' }); Overwrite = [bool]$A.overwrite; DataFolder = (Join-Path $script:AppData 'datasets') }
+    if ($kind -eq 'fetch') {
+        if ($tab -eq 'tv') { throw 'Fetch info works on movies (as in the window app).' }
+        $k = Read-HostKeys
+        if (-not $k.Tmdb -and -not $k.Omdb) { throw 'Add a TMDB or OMDb key in Settings > Data first.' }
+        $job.TmdbKey = $k.Tmdb; $job.OmdbKey = $k.Omdb
+    }
+    $sync = [hashtable]::Synchronized(@{ Text = 'Starting...'; Value = 0; Max = 0; Cancel = $false; Done = $false; Error = $null; PhaseLo = 0.0; PhaseHi = 1.0; Summary = ''; Path = ''; Library = $false; Total = 0; Partial = $null })
+    $ps = [powershell]::Create()
+    [void]$ps.AddScript($script:ToolScript).AddArgument(@(Get-HostModuleFiles)).AddArgument((New-WorkerContext $sync)).AddArgument($job)
+    $script:Tool = @{ Ps = $ps; Async = $ps.BeginInvoke(); Sync = $sync; Kind = $kind; Tab = $tab; Last = '' }
+    $true
+}
+function Get-ToolEvents {
+    $x = $script:Tool
+    if (-not $x) { return }
+    $s = $x.Sync
+    if ($s.Done) {
+        $script:Tool = $null
+        try { $x.Ps.Dispose() } catch { Write-HostLog 'tool dispose' $_ }
+        Push-HostEvent 'tool' ([ordered]@{ kind = $x.Kind; tab = $x.Tab; running = $false; error = $s.Error; summary = [string]$s.Summary; path = [string]$s.Path; cancelled = [bool]$s.Cancel })
+        if ($s.Library -and -not $s.Error) { Push-HostEvent 'library' @{ tab = $x.Tab; ready = $true; error = $null } }
+        return
+    }
+    $pct = $(if ($s.Max -gt 0) { [int](100 * $s.Value / $s.Max) } else { 0 })
+    $d = [ordered]@{ kind = $x.Kind; tab = $x.Tab; running = $true; pct = $pct; text = [string]$s.Text }
+    $j = ConvertTo-PageJson $d
+    if ($j -ne $x.Last) { $x.Last = $j; Push-HostEvent 'tool' $d }
+}
+function Show-HostExport {
+    # "Show in folder": only files in the export folder.
+    param([string]$Path)
+    $docs = [Environment]::GetFolderPath('MyDocuments')
+    $dir = $(if ($docs) { Join-Path $docs 'Modern Media Library Manager' } else { Join-Path $script:AppData 'Exports' })
+    $full = [IO.Path]::GetFullPath($Path)
+    if (-not $full.StartsWith($dir + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $full)) { throw 'Only exported files can be shown.' }
+    Start-Process -FilePath 'explorer.exe' -ArgumentList ('/select,"{0}"' -f $full)
+}
+
+# ---------------------------------------------------------------- collections (the window app's collections.json, shared)
+# A file path never reaches the page: local ids ("f:<path>") go out as "h:<hash>" and come back through the id maps.
+function ConvertTo-PageId { param([string]$Id) if ($Id.StartsWith('f:')) { 'h:' + (Get-MmlmStringHash $Id.Substring(2)).Substring(0, 16) } else { $Id } }
+function Read-HostCollections {
+    $p = Join-Path $script:AppData 'collections.json'
+    if (-not (Test-Path -LiteralPath $p)) { return @() }
+    try { return @(([IO.File]::ReadAllText($p, [Text.Encoding]::UTF8) | ConvertFrom-Json).Collections) } catch { Write-HostLog 'collections read' $_; return @() }
+}
+function Get-PageCollections {
+    $out = @()
+    foreach ($c in (Read-HostCollections)) {
+        if ($null -eq $c -or -not $c.Name) { continue }
+        $items = @(foreach ($it in @($c.Items)) { if ($it -and $it.Ids) { [ordered]@{ ids = @(@($it.Ids) | ForEach-Object { ConvertTo-PageId ([string]$_) }); title = [string]$it.Title; year = [int]$it.Year } } })
+        $out += [ordered]@{ name = [string]$c.Name; type = $(if ([string]$c.Type -eq 'rule') { 'rule' } else { 'manual' }); query = [string]$c.Query; sortBy = [string]$c.SortBy
+            sortDesc = [bool]$c.SortDesc; byDate = [bool]$c.ByDate; limit = [int]$c.Limit; items = $items; created = [string]$c.Created; modified = [string]$c.Modified }
+    }
+    , $out
+}
+function Save-PageCollections {
+    param($List)
+    # every hashed id we know: from both libraries' id maps and from the collections already saved
+    $back = @{}
+    foreach ($tab in 'movies', 'tv') {
+        $m = Join-Path (Split-Path (Get-SnapshotFile $tab)) ('idmap-' + $tab + '.json')
+        if (Test-Path -LiteralPath $m) { try { foreach ($pr in ([IO.File]::ReadAllText($m) | ConvertFrom-Json).PSObject.Properties) { $back[$pr.Name] = [string]$pr.Value } } catch { Write-HostLog 'idmap' $_ } }
+    }
+    foreach ($c in (Read-HostCollections)) { foreach ($it in @($c.Items)) { foreach ($id in @($it.Ids)) { $id = [string]$id; if ($id.StartsWith('f:')) { $back[(ConvertTo-PageId $id)] = $id } } } }
+    $now = (Get-Date).ToString('yyyy-MM-dd HH:mm')
+    $out = New-Object System.Collections.Generic.List[object]
+    $names = @{}
+    foreach ($c in @($List)) {
+        $name = ([string]$c.name).Trim()
+        if (-not $name -or $name.Length -gt 80 -or $names.ContainsKey($name.ToLowerInvariant())) { continue }
+        $names[$name.ToLowerInvariant()] = $true
+        $items = New-Object System.Collections.Generic.List[object]
+        foreach ($it in @($c.items)) {
+            $ids = @(foreach ($id in @($it.ids)) { $id = [string]$id; if ($id.StartsWith('h:')) { if ($back.ContainsKey($id)) { $back[$id] } } elseif ($id -match '^(p|s):') { $id } })
+            if ($ids.Count -gt 0) { $items.Add([ordered]@{ Ids = $ids; Title = [string]$it.title; Year = [int]$it.year }) }
+        }
+        $out.Add([ordered]@{ Name = $name; Type = $(if ([string]$c.type -eq 'rule') { 'rule' } else { 'manual' }); Items = $items.ToArray(); Query = [string]$c.query
+            SortBy = [string]$c.sortBy; SortDesc = [bool]$c.sortDesc; ByDate = [bool]$c.byDate; Limit = [int]$c.limit
+            Created = $(if ($c.created) { [string]$c.created } else { $now }); Modified = $now })
+    }
+    $p = Join-Path $script:AppData 'collections.json'
+    [IO.File]::WriteAllText($p + '.tmp', (ConvertTo-Json -InputObject @{ Version = 1; Collections = $out.ToArray() } -Depth 6), (New-Object Text.UTF8Encoding($false)))
+    Move-Item -LiteralPath ($p + '.tmp') -Destination $p -Force
+}
+
 # ---------------------------------------------------------------- page helpers
 $script:AllowedLinkHosts = @('imdb.com', 'themoviedb.org', 'rottentomatoes.com', 'metacritic.com', 'github.com', 'plex.tv', 'youtube.com')
 function Open-HostUrl {
@@ -552,6 +924,43 @@ $script:Commands = [ordered]@{
             $tok = ([string]$a.token).Trim()
             if ($tok) { Save-HostPlexSettings -Url $url -TokenProtected (Protect-MmlmPlexToken $tok) } else { Save-HostPlexSettings -Url $url -KeepToken }
             ConvertTo-PageJson (Get-PlexInfo) } }
+    'series.open'    = @{ Fetch = $false; Run = {
+            # the saved copy when there is one (no network); otherwise a Plex fetch starts and 'series' events follow
+            param($a)
+            $r = Start-HostSeries -Show ([string]$a.show) -EpKey ([string]$a.ep) -Refresh ([bool]$a.refresh)
+            if ($r -eq 'loading') { '{"loading":true}' } else { $r } } }
+    'image.data'     = @{ Fetch = $false; Run = {
+            # a cached picture as a data: URL, so the page can read its colours (series view background)
+            param($a)
+            $rel = ([string]$a.path) -replace '/', '\'
+            if ($rel -notmatch '^(series\\img|thumbs)\\[A-Za-z0-9._-]+\.(jpg|png)$') { throw 'Not a cached picture.' }
+            $f = Join-Path $script:CacheDir $rel
+            if (-not (Test-Path -LiteralPath $f) -or (Get-Item -LiteralPath $f).Length -gt 2MB) { return 'null' }
+            ConvertTo-PageJson ('data:image/jpeg;base64,' + [Convert]::ToBase64String([IO.File]::ReadAllBytes($f))) } }
+    'tools.start'    = @{ Fetch = $false; Run = { param($a) ConvertTo-PageJson (Start-HostTool $a) } }
+    'tools.cancel'   = @{ Fetch = $false; Run = { param($a) if ($script:Tool) { $script:Tool.Sync.Cancel = $true }; 'true' } }
+    'keys.get'       = @{ Fetch = $false; Run = { param($a) $k = Read-HostKeys; ConvertTo-PageJson @{ tmdb = [bool]$k.Tmdb; omdb = [bool]$k.Omdb } } }
+    'keys.set'       = @{ Fetch = $false; Run = {
+            param($a)
+            $t = $(if ($null -ne $a.tmdb) { ([string]$a.tmdb).Trim() } else { $null }); $o = $(if ($null -ne $a.omdb) { ([string]$a.omdb).Trim() } else { $null })
+            Save-HostKeys -Tmdb $t -Omdb $o
+            $k = Read-HostKeys; ConvertTo-PageJson @{ tmdb = [bool]$k.Tmdb; omdb = [bool]$k.Omdb } } }
+    'folder.show'    = @{ Fetch = $false; Run = { param($a) Show-HostExport ([string]$a.path); 'true' } }
+    'dashboards.get' = @{ Fetch = $false; Run = {
+            # your own dashboards (charts you built), per tab: AppData\dashboards.json
+            param($a)
+            $p = Join-Path $script:AppData 'dashboards.json'
+            if (Test-Path -LiteralPath $p) { [IO.File]::ReadAllText($p) } else { '{"movies":[],"tv":[]}' } } }
+    'dashboards.save' = @{ Fetch = $false; Run = {
+            param($a)
+            $json = ConvertTo-Json -InputObject ([ordered]@{ movies = @($a.data.movies); tv = @($a.data.tv) }) -Depth 8 -Compress
+            if ($json.Length -gt 500KB) { throw 'That is too many charts to save.' }
+            $p = Join-Path $script:AppData 'dashboards.json'
+            [IO.File]::WriteAllText($p + '.tmp', $json, (New-Object Text.UTF8Encoding($false)))
+            Move-Item -LiteralPath ($p + '.tmp') -Destination $p -Force
+            $json } }
+    'collections.get' = @{ Fetch = $false; Run = { param($a) ConvertTo-Json -InputObject (Get-PageCollections) -Depth 6 -Compress } }
+    'collections.save' = @{ Fetch = $false; Run = { param($a) Save-PageCollections $a.collections; ConvertTo-Json -InputObject (Get-PageCollections) -Depth 6 -Compress } }
     'open.url'       = @{ Fetch = $false; Run = { param($a) Open-HostUrl ([string]$a.url); 'true' } }
     'picture.save'   = @{ Fetch = $false; Run = { param($a) ConvertTo-PageJson (Save-HostPicture ([string]$a.name) ([string]$a.png)) } }
     'update.check'   = @{ Fetch = $false; Run = { param($a) ConvertTo-PageJson (Start-Updater 'Check') } }
@@ -625,6 +1034,8 @@ function Receive-DashEvents {
         Push-HostEvent 'library' @{ tab = $tab; ready = (-not $x.Sync.Error); error = $x.Sync.Error }
     }
     try { Get-UpdateEvents; Watch-DropFolder } catch { Write-HostLog 'updates' $_ }
+    try { Get-SeriesEvents } catch { Write-HostLog 'series' $_ }
+    try { Get-ToolEvents } catch { Write-HostLog 'tools' $_ }
     # one drain for every event source; whatever is over the cap waits for the next call (callers wrap the result in @())
     try {
         $msg = $null
@@ -654,6 +1065,8 @@ function Stop-DashTraffic {
     if (-not $script:Traffic) { return }
     $script:Traffic.Halted = $true
     Stop-HostScan -Wait 0
+    if ($script:Series -and $script:Series.Sync) { $script:Series.Sync.Cancel = $true }
+    if ($script:Tool -and @('fetch', 'fel') -contains $script:Tool.Kind) { $script:Tool.Sync.Cancel = $true }
     Send-HostEventNow 'traffic' @{ stopped = $true }
 }
 

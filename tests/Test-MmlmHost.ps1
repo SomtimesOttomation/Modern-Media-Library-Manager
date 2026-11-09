@@ -10,6 +10,11 @@ $data = Join-Path $env:LOCALAPPDATA 'Modern-Media-Library-Manager'
 Remove-Item -LiteralPath (Join-Path $data 'Library') -Recurse -Force -ErrorAction SilentlyContinue   # start from an empty library every run
 New-Item -ItemType Directory -Path $data -Force | Out-Null
 [IO.File]::WriteAllText((Join-Path $data 'settings.json'), '{"PlexUrl":"http://127.0.0.1:32499","PlexTokenProtected":""}')
+# a Metacritic score saved the way Fetch info saves it, for "Movie 1" (2001)
+New-Item -ItemType Directory -Path (Join-Path $data 'metadata') -Force | Out-Null
+[IO.File]::WriteAllText((Join-Path $data 'metadata\store.json'), '{"t:movie 1|2001":{"Manual":{},"Scraped":{"Metascore":74},"Sources":{"Metascore":"OMDb"},"Force":[],"At":"2026-11-08"}}')
+# the window app's collections: one hand-picked (a Plex movie and a local file), one rule
+[IO.File]::WriteAllText((Join-Path $data 'collections.json'), '{"Version":1,"Collections":[{"Name":"Faves","Type":"manual","Items":[{"Ids":["p:101"],"Title":"Movie 1","Year":2001},{"Ids":["f:D:\\Films\\Local.mkv"],"Title":"Local","Year":1999}],"Query":"","SortBy":"","SortDesc":false,"ByDate":false,"Limit":0,"Created":"2026-10-21 10:00","Modified":"2026-10-21 10:00"},{"Name":"Old","Type":"rule","Items":[],"Query":"year:<2003","SortBy":"","SortDesc":false,"ByDate":false,"Limit":0,"Created":"2026-10-21","Modified":"2026-10-21"}]}')
 Import-Module (Join-Path $root 'modules\MMLM.Host.psm1') -DisableNameChecking
 $posted = New-Object System.Collections.Generic.List[string]
 $ctx = [pscustomobject]@{ Mode = 'standalone'; Root = $root; Post = { param($j) $posted.Add($j) }.GetNewClosure(); Close = { }; Relaunch = ''; HostPid = $PID; Theme = ''; LauncherVersion = ''; Debug = $true }
@@ -27,6 +32,16 @@ Check ((Cmd 2 'summary.get' @{ tab = 'movies' }) -match 'mmlm.cache/thumbs/') 's
 $lib = Cmd 9 'library.get' @{ tab = 'movies' }
 Check ($lib -match '"rows":\[\[' -and $lib -match '"Poster"') 'library.get sends the movie rows with poster links'
 Check ($lib -notmatch 'FullPath|PosterPath|Directory') 'no file paths reach the page'
+$fn = @(($lib | ConvertFrom-Json).data.fields.n); $mi = [array]::IndexOf($fn, 'Metascore'); $ti = [array]::IndexOf($fn, 'Title')
+function Find-Row($json, $title) { foreach ($r in ($json | ConvertFrom-Json).data.rows) { if ($r[$ti] -eq $title) { return , $r } } }
+$m1 = Find-Row $lib 'Movie 1'
+Check ($m1[$mi] -eq 74) 'fetched Metacritic score reaches the page after a scan'
+Start-Sleep -Milliseconds 1100; [IO.File]::WriteAllText((Join-Path $data 'metadata\store.json'), '{"t:movie 1|2001":{"Manual":{"Metascore":81},"Scraped":{"Metascore":74},"Sources":{"Metascore":"OMDb"},"Force":[],"At":"2026-11-08"}}')
+Check ((Cmd 16 'library.get' @{ tab = 'movies' }) -match '"pending":true') 'a score edited in the window app makes the page copy rebuild'
+$ev = ''; for ($k = 0; $k -lt 300 -and $ev -notmatch '"event":"library"'; $k++) { $ev += (@(Receive-DashEvents) -join ''); Start-Sleep -Milliseconds 100 }
+$lib2 = Cmd 17 'library.get' @{ tab = 'movies' }
+$m1 = Find-Row $lib2 'Movie 1'
+Check ($m1[$mi] -eq 81) 'and the edited score shows'
 Remove-Item -LiteralPath (Join-Path $data 'Dashboard\library-movies.json') -Force
 Check ((Cmd 10 'library.get' @{ tab = 'movies' }) -match '"pending":true') 'a missing page copy is rebuilt from the snapshot'
 $ev = ''; for ($k = 0; $k -lt 300 -and $ev -notmatch '"event":"library"'; $k++) { $ev += (@(Receive-DashEvents) -join ''); Start-Sleep -Milliseconds 100 }
@@ -36,8 +51,45 @@ Check ((Cmd 12 'settings.set' @{ key = 'moviesView'; value = 'grid' }) -match '"
 Check ((Cmd 13 'settings.set' @{ key = 'moviesView'; value = 'bogus' }) -match '"ok":false') 'bad setting values are refused'
 Check ((Cmd 14 'open.url' @{ url = 'http://example.com/' }) -match 'Only https') 'open.url refuses plain http'
 Check ((Cmd 15 'open.url' @{ url = 'https://evil.example/' }) -match 'not opened') 'open.url refuses unknown sites'
+$cg = Cmd 18 'collections.get'
+Check ($cg -match '"name":"Faves"' -and $cg -match '"p:101"' -and $cg -match '"h:[0-9A-F]{16}"' -and $cg -notmatch 'Local\.mkv"\]|D:') 'collections reach the page with local paths hashed'
+Check ($lib -match '"p:10\d"') 'each title carries its collection id'
+$cols = ($cg | ConvertFrom-Json).data
+$cols[0].items += [pscustomobject]@{ ids = @('p:102'); title = 'Movie 2'; year = 2002 }
+$saved = Cmd 19 'collections.save' @{ collections = $cols }
+$file = [IO.File]::ReadAllText((Join-Path $data 'collections.json'))
+Check ($file -match 'D:\\\\Films\\\\Local.mkv' -and $file -match 'p:102' -and $file -match '"Type":\s*"rule"') 'saving from the page keeps the window app''s ids and format'
+function Wait-Tool { $all = ''; for ($k = 0; $k -lt 300; $k++) { $all += (@(Receive-DashEvents) -join ''); if ($all -match '"event":"tool","data":\{[^}]*"running":false') { return $all }; Start-Sleep -Milliseconds 100 }; $all }
+$env:USERPROFILE = $data; $env:HOME = $data
+Check ((Cmd 24 'tools.start' @{ kind = 'csv'; tab = 'movies'; rids = @('p:101', 'p:102'); name = 'Two films'; columns = @('Year', 'Genre', 'FullPath') }) -match '"ok":true') 'CSV export starts'
+$te = Wait-Tool
+$csvPath = ([regex]::Match($te, '"path":"([^"]+)"').Groups[1].Value) -replace '\\\\', '\'
+$csv = $(if ($csvPath -and (Test-Path -LiteralPath $csvPath)) { [IO.File]::ReadAllText($csvPath) } else { '' })
+Check ($csv -match 'Movie 1' -and $csv -match 'Movie 2' -and $csv -notmatch 'Movie 3' -and $csv -notmatch 'FullPath|/m/') 'CSV has the chosen titles and columns, no file paths'
+Check ((Cmd 25 'tools.start' @{ kind = 'html'; tab = 'movies'; name = 'All films' }) -match '"ok":true') 'HTML export starts'
+$te = Wait-Tool
+$htmlPath = ([regex]::Match($te, '"path":"([^"]+)"').Groups[1].Value) -replace '\\\\', '\'
+$html = $(if ($htmlPath -and (Test-Path -LiteralPath $htmlPath)) { [IO.File]::ReadAllText($htmlPath) } else { '' })
+Check ($html -match 'Movie 7' -and $html -match 'data:image/jpeg;base64' -and $html -notmatch '__DATA__|/m/Movie') 'HTML dashboard has every title with posters inside, no file paths'
+Check ((Cmd 26 'tools.start' @{ kind = 'fetch'; tab = 'movies' }) -match 'Add a TMDB or OMDb key') 'Fetch info asks for a key first'
+[void](Cmd 27 'tools.start' @{ kind = 'fel'; tab = 'movies' }); $te = Wait-Tool
+Check ($te -match 'No dual-layer|needs ffmpeg') 'FEL/MEL check runs (nothing to check here)'
+$dash = @{ movies = @(@{ id = 'a1'; name = 'Mine'; widgets = @(@{ id = 'w1'; type = 'bar'; field = 'Genre'; op = 'count' }) }); tv = @() }
+[void](Cmd 28 'dashboards.save' @{ data = $dash })
+Check ((Cmd 29 'dashboards.get') -match '"name":"Mine"' -and (Test-Path -LiteralPath (Join-Path $data 'dashboards.json'))) 'your own dashboards are saved'
 [void](Cmd 3 'scan.start' @{ tab = 'tv' }); $e = Wait-Scan
 Check ($e -match '"count":10') 'TV scan finished with 10 episodes'
+$sr = Cmd 20 'series.open' @{ show = 'Show A'; ep = '1001' }
+Check ($sr -match '"loading":true') 'opening a show fetches it from Plex'
+$ev = ''; for ($k = 0; $k -lt 300 -and $ev -notmatch '"event":"series","data":\{"show":"Show A","running":false'; $k++) { $ev += (@(Receive-DashEvents) -join ''); Start-Sleep -Milliseconds 100 }
+Check ($ev -match '"running":false,"error":null') 'the show fetch finishes'
+$sr = Cmd 21 'series.open' @{ show = 'Show A'; ep = '1001' }
+$sd = ($sr | ConvertFrom-Json).data
+Check ($sd.seasons.Count -eq 2 -and $sd.episodes.Count -eq 5 -and $sd.cast.Count -eq 5 -and $sd.related.Count -eq 2) 'seasons, episodes, cast and related shows'
+Check ($sd.episodes[0].watched -eq $true -and $sd.episodes[4].watched -eq $false -and $sd.episodes[0].thumb -match '^series/img/') 'watched marks and episode stills'
+Check (Test-Path -LiteralPath (Join-Path $data ('Dashboard\' + ($sd.cast[0].photo -replace '/', '\')))) 'cast photos saved in the cache'
+Check ((Cmd 22 'image.data' @{ path = $sd.seasons[0].poster }) -match 'data:image/jpeg;base64') 'a season poster can be read for its colours'
+Check ((Cmd 23 'image.data' @{ path = '..\settings.json' }) -match '"ok":false') 'image.data only reads cached pictures'
 Start-DashWorker
 Check ($null -eq (Get-DashStatus).Badge.Count) 'badge clears when the tab is shown'
 [void](Cmd 4 'scan.start' @{ tab = 'movies'; rebuild = $true }); Start-Sleep -Milliseconds 150; Stop-DashTraffic; $e = Wait-Scan

@@ -6,32 +6,34 @@ import * as bridge from './bridge.js';
 import { h, ago } from './util.js';
 import * as library from './views/library.js';
 import * as tv from './views/tv.js';
-import * as stats from './views/stats.js';
 import { openSettings } from './views/settings.js';
 import { openTraffic } from './views/traffic.js';
 import { openUpdate } from './views/update.js';
+import { openAdvanced } from './views/advanced.js';
+import { parse } from './search.js';
 
 const $ = (s) => document.querySelector(s);
 const view = $('#view');
 let current = null; // { mod, ctx, cleanup }
 
-export function toast(msg) {
-  const t = h('div', { class: 'toast' }, msg);
+export function toast(msg, action) {
+  const t = h('div', { class: 'toast' }, msg, action ? h('button', { class: 'btn', type: 'button', style: { marginLeft: '10px' }, onclick: () => { action.fn(); t.remove(); } }, action.label) : null);
   $('#toasts').append(t);
-  setTimeout(() => t.remove(), 4000);
+  setTimeout(() => t.remove(), action ? 12000 : 4000);
 }
+S.setToast(toast);
 
 export function currentTab() {
   const name = location.hash.replace(/^#\/?/, '').split('/')[0];
   if (name === 'tv') return 'tv';
-  if (name === 'stats') return location.hash.split('/')[2] === 'tv' ? 'tv' : 'movies';
   return 'movies';
 }
 
 function route() {
   const hash = location.hash.replace(/^#\/?/, '');
   const [name, arg] = hash.split('/');
-  const map = { '': library, movies: library, tv, stats };
+  if (name === 'stats') { location.replace(`#/${arg === 'tv' ? 'tv' : 'movies'}`); S.saveSettings({ [`${arg === 'tv' ? 'tv' : 'movies'}View`]: 'dashboard' }); return; }   // old link
+  const map = { '': library, movies: library, tv };
   const mod = map[name] || library;
   const routeName = map[name] ? (name || 'movies') : 'movies';
   document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.route === routeName));
@@ -41,7 +43,7 @@ function route() {
   const ctx = { el: view, arg: arg ? decodeURIComponent(arg) : '', toast };
   current = { mod, ctx, cleanup: mod.mount(ctx) };
   $('#psearch').value = S.state.query;
-  liveStatus();
+  liveStatus(); sizeButton();
   window.scrollTo(0, 0);
 }
 
@@ -61,6 +63,26 @@ function updateToast() {
 // ---- scan progress strip --------------------------------------------------------------------------------------
 let lastRunning = false;
 const tabName = (t) => (t === 'tv' ? 'TV Shows' : 'Movies');
+// A tool (Fetch info, FEL check, export) uses the same strip when no scan is running.
+const TOOL_NAMES = { fetch: 'Fetch info', fel: 'FEL / MEL check', csv: 'CSV export', html: 'HTML export' };
+let toolShown = false;
+function toolBar() {
+  const t = S.state.tool, bar = $('#syncbar');
+  if (!t || S.state.scan.running) return;
+  const fill = bar.querySelector('.syncbar-fill'), txt = bar.querySelector('.syncbar-text');
+  if (t.running) {
+    toolShown = true; bar.hidden = false; bar.classList.remove('fail'); bar.classList.toggle('indeterminate', !t.pct);
+    fill.style.width = `${t.pct || 0}%`;
+    txt.textContent = `${TOOL_NAMES[t.kind] || 'Working'} \u00b7 ${t.pct ? t.pct + '% \u00b7 ' : ''}${t.text || ''}`;
+  } else if (toolShown) {
+    toolShown = false;
+    bar.classList.remove('indeterminate'); bar.classList.toggle('fail', !!t.error); fill.style.width = '100%';
+    txt.textContent = t.error ? `${TOOL_NAMES[t.kind]} failed \u00b7 ${t.error}` : t.cancelled ? `${TOOL_NAMES[t.kind]} stopped` : `${TOOL_NAMES[t.kind]} \u00b7 ${t.summary || 'done'}`;
+    if (t.path) toast(`Saved: ${t.path}`, S.state.host ? { label: 'Show in folder', fn: () => bridge.request('folder.show', { path: t.path }).catch((e) => toast(e.message)) } : null);
+    else toast(txt.textContent);
+    setTimeout(() => { if (!S.state.scan.running && !(S.state.tool && S.state.tool.running)) bar.hidden = true; }, 6000);
+  }
+}
 function syncBar() {
   const bar = $('#syncbar'), sc = S.state.scan;
   const fill = bar.querySelector('.syncbar-fill'), txt = bar.querySelector('.syncbar-text');
@@ -167,16 +189,93 @@ document.addEventListener('keydown', (e) => { if (e.key === 'F5') { e.preventDef
 let qTimer = 0;
 $('#psearch').addEventListener('input', (e) => {
   clearTimeout(qTimer);
-  qTimer = setTimeout(() => { S.state.query = e.target.value.trim(); S.notify('query'); }, 120);
+  qTimer = setTimeout(() => setQuery(e.target.value), 160);
 });
+// A search that names the other kind ("90s sitcoms", "tv shows", "films") opens that tab.
+export function setQuery(q) {
+  S.state.query = String(q || '').trim();
+  $('#psearch').value = S.state.query;
+  focusQueryTab();
+}
+function focusQueryTab(tell = true) {
+  const tab = currentTab(), hint = S.state.query ? parse(S.state.query, S.state.libs[tab], S.state.collections).tab : '';
+  if (hint && hint !== tab && S.state.libs[hint].status === 'ready') { location.hash = `#/${hint}`; return; }
+  if (tell) S.notify('query');
+}
 document.addEventListener('keydown', (e) => {
   if (e.key === '/' && !e.target.closest('input,textarea,select')) { e.preventDefault(); $('#psearch').focus(); }
 });
+$('#btn-filter').addEventListener('click', () => openAdvanced(currentTab(), setQuery));
+
+// ---- content width: full, a preset (the width a 16:9 / 21:9 / 32:9 screen of this height would have) or custom ----
+const frame = $('#frame');
+function contentWidth() {
+  const st = S.state.settings, W = window.innerWidth;
+  if (st.customWidth && st.contentWidth > 0) return Math.min(st.contentWidth, W);
+  const r = { '16:9': 16 / 9, '21:9': 21 / 9, '32:9': 32 / 9 }[st.widthPreset];
+  return r ? Math.min(Math.round(window.innerHeight * r), W) : 0;
+}
+function applyWidth() {
+  const w = contentWidth();
+  document.documentElement.style.setProperty('--content-w', w ? `${w}px` : '100%');
+  frame.querySelectorAll('.wgrip').forEach((g) => { g.hidden = !S.state.settings.customWidth; });
+}
+window.addEventListener('resize', applyWidth);
+// Invisible grips at both edges of the content: drag either one and both sides move (the content stays centred).
+frame.addEventListener('mousedown', (e) => {
+  const g = e.target.closest('.wgrip'); if (!g || e.button !== 0) return;
+  e.preventDefault();
+  const x0 = e.clientX, w0 = frame.getBoundingClientRect().width, sign = g.dataset.side === 'right' ? 1 : -1;
+  g.classList.add('drag'); document.body.classList.add('dragging');
+  let w = w0;
+  const move = (m) => {
+    w = Math.max(480, Math.min(window.innerWidth, Math.round(w0 + 2 * sign * (m.clientX - x0))));
+    document.documentElement.style.setProperty('--content-w', `${w}px`);
+  };
+  const up = () => {
+    document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up);
+    g.classList.remove('drag'); document.body.classList.remove('dragging');
+    S.saveSettings({ contentWidth: w >= window.innerWidth - 2 ? 0 : w });
+  };
+  document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
+});
+frame.addEventListener('dblclick', (e) => { if (e.target.closest('.wgrip')) S.saveSettings({ contentWidth: 0 }); });
+
+// ---- poster size (50% to 200%), only while a poster wall is showing ----
+const pop = $('#sizepop'), range = $('#size-range');
+function applyPosterScale(v) {
+  document.documentElement.style.setProperty('--poster-scale', String((v || 100) / 100));
+  $('#size-val').textContent = `${v || 100}%`; range.value = String(v || 100);
+}
+function sizeButton() {
+  const tab = currentTab(), posters = (S.state.settings[`${tab}View`] || 'posters') === 'posters';
+  $('#btn-size').hidden = !posters;
+  if (!posters) pop.hidden = true;
+}
+let sizeTimer = 0;
+range.addEventListener('input', () => {
+  applyPosterScale(+range.value);
+  clearTimeout(sizeTimer); sizeTimer = setTimeout(() => S.saveSettings({ posterScale: +range.value }), 300);
+});
+$('#size-reset').addEventListener('click', () => { applyPosterScale(100); S.saveSettings({ posterScale: 100 }); });
+$('#btn-size').addEventListener('click', (e) => {
+  if (!pop.hidden) { pop.hidden = true; return; }
+  const r = e.currentTarget.getBoundingClientRect();
+  pop.hidden = false;
+  pop.style.top = `${r.bottom + 8}px`;
+  pop.style.left = `${Math.max(8, Math.min(window.innerWidth - pop.offsetWidth - 8, r.left + r.width / 2 - pop.offsetWidth / 2))}px`;
+  range.focus();
+});
+document.addEventListener('mousedown', (e) => { if (!pop.hidden && !pop.contains(e.target) && !e.target.closest('#btn-size')) pop.hidden = true; });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !pop.hidden) pop.hidden = true; });
 
 S.subscribe((topics) => {
+  if (topics.has('queryset')) { $('#psearch').value = S.state.query; focusQueryTab(false); }
+  if (topics.has('settings')) { applyWidth(); applyPosterScale(S.state.settings.posterScale); sizeButton(); }
   if (topics.has('theme') || topics.has('settings')) themeIcon();
   if (topics.has('traffic')) { haltBar(); liveStatus(); }
   if (topics.has('dropped')) dropBar();
+  if (topics.has('tool')) toolBar();
   if (topics.has('scan')) { syncBar(); liveStatus(); if (!S.state.scan.running) $('#btn-refresh').classList.remove('spin'); else $('#btn-refresh').classList.add('spin'); }
   if (topics.has('counts') || topics.has('library')) { liveStatus(); navCounts(); }
   if (topics.has('update')) { versionChip(); updateToast(); }
@@ -188,7 +287,7 @@ window.addEventListener('hashchange', route);
 S.init().then(() => {
   if (S.inLauncher()) $('#btn-theme').hidden = true;      // the launcher owns the theme
   haltBar(); dropBar();
-  themeIcon(); route(); versionChip(); syncBar();
+  themeIcon(); applyWidth(); applyPosterScale(S.state.settings.posterScale); route(); versionChip(); syncBar();
   for (const t of S.TABS) S.loadLibrary(t);               // both libraries load once, from the saved scan (no network)
   const n = S.state.update.note;
   if (n) toast(n.ok ? `Updated to v${n.to}.` : `The update to v${n.to} did not work (${n.reason || 'unknown reason'}). v${n.from} was restored.`);

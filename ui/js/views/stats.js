@@ -1,9 +1,11 @@
-// Stats: the old dashboard page (KPIs, charts, HDR and device compatibility, largest files, library health) for the
+// Dashboard: the old dashboard page (KPIs, charts, HDR and device compatibility, largest files, library health) for the
 // open tab. Click any slice, bar or chip to filter; the filters stack and show as chips. Click a title for its card.
 import * as S from '../store.js';
 import { h } from '../util.js';
 import { esc, num, v, fmtInt, fmtSize, fmtRun } from '../common.js';
 import { openCard } from './card.js';
+import { searchRows } from '../common.js';
+import { loadDashboards, dashboards, renderDashboard, newDashboard, saveDashboards } from './mydash.js';
 import { STATUS, ST_ORDER, DEVICE_GROUPS, ALL_DEVICES, hdrClass, deviceStatus } from './devices.js';
 
 const splitList = (s) => String(s || '').split(/\s*;\s*/).filter(Boolean);
@@ -73,7 +75,7 @@ const KPIS = [
 const decade = (r) => (r.Year > 0 ? Math.floor(r.Year / 10) * 10 + 's' : 'Unknown');
 CHARTS.find((c) => c.id === 'decade').keys = (r) => [decade(r)];
 
-const fmtVal = (cfg, n) => (cfg.measure === 'size' ? fmtSize(n) : fmtInt(n));
+const fmtVal = (cfg, n) => (cfg.fmt ? cfg.fmt(n) : cfg.measure === 'size' ? fmtSize(n) : fmtInt(n));
 function counts(cfg, rows) {
   const m = new Map();
   for (const r of rows) { const w = cfg.measure === 'size' ? num(r.FileSizeGB) : 1; for (const k of new Set(cfg.keys(r))) m.set(k, (m.get(k) || 0) + w); }
@@ -88,7 +90,7 @@ function ordered(cfg, m, sel) {
   if (sel && !e.some((x) => x[0] === sel)) e.push([sel, m.get(sel) || 0]);
   return e;
 }
-function donut(cfg, entries, sel) {
+export function donut(cfg, entries, sel) {
   const total = entries.reduce((a, e) => a + e[1], 0) || 1;
   const R = 54, C = 2 * Math.PI * R; let off = 0, segs = '', legend = '';
   entries.forEach(([k, val], i) => {
@@ -98,16 +100,16 @@ function donut(cfg, entries, sel) {
     legend += `<div class="lg${dim}" data-chart="${cfg.id}" data-key="${esc(k)}"><span class="dot" style="background:${col}"></span><span class="n">${esc(k)}</span><span class="c">${fmtVal(cfg, val)} · ${(frac * 100).toFixed(0)}%</span></div>`;
     off += frac * C;
   });
-  return `<div class="donut-wrap"><svg viewBox="0 0 140 140" class="donut">${segs}<text x="70" y="68" class="dc-num">${fmtVal(cfg, total)}</text><text x="70" y="83" class="dc-sub">${cfg.measure === 'size' ? 'total' : 'titles'}</text></svg><div class="legend">${legend}</div></div>`;
+  return `<div class="donut-wrap"><svg viewBox="0 0 140 140" class="donut">${segs}<text x="70" y="68" class="dc-num">${cfg.center !== undefined ? esc(cfg.center) : fmtVal(cfg, total)}</text><text x="70" y="83" class="dc-sub">${esc(cfg.sub || (cfg.measure === 'size' ? 'total' : 'titles'))}</text></svg><div class="legend">${legend}</div></div>`;
 }
-function bars(cfg, entries, sel) {
+export function bars(cfg, entries, sel) {
   const max = Math.max(...entries.map((e) => e[1]), 1);
   return `<div class="bars${cfg.wide ? ' wide' : ''}">` + entries.map(([k, val], i) => {
     const c = colorFor(k, i), dim = sel && sel !== k ? ' dim' : '';
     return `<div class="hbar${dim}" data-chart="${cfg.id}" data-key="${esc(k)}"><span class="bl" title="${esc(k)}">${esc(k)}</span><div class="bt"><div class="bf" style="width:${(val / max * 100).toFixed(1)}%;background:${c}"></div></div><span class="bv">${fmtVal(cfg, val)}</span></div>`;
   }).join('') + '</div>';
 }
-function cols(cfg, entries, sel) {
+export function cols(cfg, entries, sel) {
   const max = Math.max(...entries.map((e) => e[1]), 1);
   return '<div class="cols">' + entries.map(([k, val]) => {
     const dim = sel && sel !== k ? ' dim' : '';
@@ -121,10 +123,32 @@ const filtersByTab = { movies: new Map(), tv: new Map() };
 export function mount(ctx) {
   const tab = ctx.arg === 'tv' ? 'tv' : 'movies';
   const L = S.state.libs[tab], filters = filtersByTab[tab];
-  const base = () => { const rows = L.rows; const vid = rows.filter((r) => r.Type === 'Video'); return vid.length ? vid : rows; };
+  // the titles the tab shows: the search box and collections narrow the dashboard too
+  const shown = () => searchRows(L.rows, S.state.query, L, S.state.collections).rows;
+  const base = () => { const rows = shown(); const vid = rows.filter((r) => r.Type === 'Video'); return vid.length ? vid : rows; };
+  const KEY = `mmlm.dash.${tab}`;
+  let active = 'overview';
+  try { active = localStorage.getItem(KEY) || 'overview'; } catch { /* ignore */ }
+  const setActive = (id) => { active = id; try { localStorage.setItem(KEY, id); } catch { /* ignore */ } draw(); };
+  // Overview | your dashboards | + New
+  const strip = () => {
+    const mine = dashboards(tab);
+    if (active !== 'overview' && !mine.some((d) => d.id === active)) active = 'overview';
+    const cur = mine.find((d) => d.id === active);
+    return h('div', { class: 'dashstrip' },
+      h('div', { class: 'seg', role: 'tablist', 'aria-label': 'Dashboards' },
+        h('button', { type: 'button', class: active === 'overview' ? 'active' : '', onclick: () => setActive('overview') }, 'Overview'),
+        ...mine.map((d) => h('button', { type: 'button', class: active === d.id ? 'active' : '', onclick: () => setActive(d.id) }, d.name))),
+      h('button', { class: 'btn', type: 'button', onclick: () => { const d = newDashboard(tab, `My dashboard ${mine.length + 1}`, mine.length === 0); setActive(d.id); } }, '+ New dashboard'),
+      cur ? h('input', { class: 'dashname', type: 'text', value: cur.name, 'aria-label': 'Dashboard name', maxlength: '40', onchange: (e) => { cur.name = e.target.value.trim() || cur.name; saveDashboards(); draw(); } }) : null,
+      cur ? h('button', { class: 'btn', type: 'button', title: 'Delete this dashboard (click twice)', onclick: (e) => {
+        if (!e.currentTarget.dataset.sure) { e.currentTarget.dataset.sure = '1'; e.currentTarget.textContent = 'Sure?'; return; }
+        const list = dashboards(tab); list.splice(list.indexOf(cur), 1); saveDashboards(); setActive('overview');
+      } }, 'Delete') : null);
+  };
   const filtered = (rows, except) => rows.filter((r) => { for (const [id, f] of filters) if (id !== except && !f.pred(r)) return false; return true; });
   const draw = () => {
-    const head = h('div', { class: 'lib-head' },
+    const head = ctx.embedded ? h('span') : h('div', { class: 'lib-head' },
       h('div', { class: 'lib-title' }, h('h1', null, 'Stats'), h('small', null, tab === 'tv' ? 'TV Shows (episodes)' : 'Movies')),
       h('div', { class: 'lib-tools' }, h('div', { class: 'seg', role: 'tablist', 'aria-label': 'Library' }, [['movies', 'Movies'], ['tv', 'TV Shows']].map(([k, label]) =>
         h('a', { href: `#/stats/${k}`, class: `btn ${tab === k ? 'primary' : ''}`, style: { border: 0, borderRadius: 0 }, 'aria-selected': tab === k ? 'true' : 'false' }, label)))));
@@ -132,8 +156,14 @@ export function mount(ctx) {
       ctx.el.replaceChildren(head, h('div', { class: 'state' }, h('h2', null, L.status === 'empty' ? 'Nothing scanned yet' : L.status === 'error' ? 'Could not open the library' : 'Opening the library...'), h('p', null, L.error || '')));
       return;
     }
-    const all = base(), rows = filtered(all);
     const box = document.createElement('div');
+    const custom = dashboards(tab).find((d) => d.id === active);
+    if (custom) {
+      ctx.el.replaceChildren(head, strip(), box);
+      renderDashboard(box, tab, custom, shown(), L, draw, (rows, q) => { const set = new Set(S.filterByQuery(L, q)); return rows.filter((r) => set.has(r)); });
+      return;
+    }
+    const all = base(), rows = filtered(all);
     const chips = filters.size ? [...filters.entries()].map(([id, f]) => `<span class="fchip">${esc(f.label)}<button type="button" data-remove="${id}" title="Remove">✕</button></span>`).join('') + '<button class="btn" type="button" data-clear="1">Clear all</button>' : '';
     const chartHtml = (cfg) => {
       const sel = filters.get(cfg.id)?.key, entries = ordered(cfg, counts(cfg, filtered(all, cfg.id)), sel);
@@ -165,9 +195,10 @@ export function mount(ctx) {
         <div class="st-card"><h3>Largest files <small>click to open</small></h3><ul class="rank">${big.map((r) => li(r, fmtSize(r.FileSizeGB))).join('') || '<div class="empty-s">No data</div>'}</ul></div>
         <div class="st-card"><h3>Lowest bits per pixel <small>possible quality concern</small></h3><ul class="rank">${low.map((r) => li(r, num(r.BitsPerPixel).toFixed(3) + ' bpp')).join('') || '<div class="empty-s">No data</div>'}</ul></div>
         <div class="st-card"><h3>Library health <small>click to filter</small></h3><div class="health">${health}</div></div></div>`;
-    ctx.el.replaceChildren(head, box);
+    ctx.el.replaceChildren(head, strip(), box);
   };
   ctx.el.addEventListener('click', ctx.onClick = (e) => {
+    if (dashboards(tab).some((d) => d.id === active)) return;        // your own dashboards handle their own clicks
     const t = e.target.closest('[data-chart],[data-dev],[data-open],[data-health],[data-remove],[data-clear]');
     if (!t) return;
     if (t.dataset.open !== undefined) { openCard(L.rows[+t.dataset.open], ctx.toast); return; }
@@ -184,6 +215,7 @@ export function mount(ctx) {
     draw();
   });
   draw();
+  loadDashboards().then(() => { if (ctx.el.isConnected) draw(); });
   ctx.redraw = draw;
   ctx.seen = { status: L.status, rows: L.rows };
   return () => ctx.el.removeEventListener('click', ctx.onClick);

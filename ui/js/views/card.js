@@ -4,6 +4,7 @@ import * as S from '../store.js';
 import { overlay } from './settings.js';
 import { esc, num, v, fmtInt, fmtMoney, fmtSize, fmtHMS, fmtRun, hdrLabel, posterHtml } from '../common.js';
 import { hdrClass, deviceStatus, ALL_DEVICES, STATUS } from './devices.js';
+import { addToCollection } from './collections.js';
 
 function spec(title, pairs) {
   const p = pairs.filter((x) => x[1] !== '' && x[1] != null && x[1] !== 0 && x[1] !== '0');
@@ -28,11 +29,27 @@ function scoreCards(r) {
   const has = (rows) => rows.some((x) => x[1]);
   return (has(rating) ? spec('Ratings', rating) : '') + (has(money) ? spec('Box office', money) : '');
 }
+const ADDCOL = '<span class="addcol"><button type="button" data-addcol="1" title="Add to a collection">+ Collection</button></span>';
+const ALLDET = '<button type="button" data-alldet="1" title="Every detail of this file, as in the window app\'s detail view">All details</button>';
+// The detailed view: every field the scan knows, grouped as in the window app (file locations left out).
+const SKIP_DET = new Set(['Poster', 'Rid', 'PlexKey', 'PlexThumb', 'MetaSources']);
+function allDetails(r) {
+  const L = S.state.libs[r._tab] || S.state.libs.movies;
+  const groups = new Map();
+  for (const f of L.fields) {
+    if (SKIP_DET.has(f.n)) continue;
+    const x = r[f.n];
+    if (x === undefined || x === null || x === '' || x === false || (typeof x === 'number' && x === 0 && f.t !== 'bool')) continue;
+    if (!groups.has(f.g)) groups.set(f.g, []);
+    groups.get(f.g).push([f.n.replace(/([a-z])([A-Z])/g, '$1 $2'), x === true ? 'Yes' : typeof x === 'number' && !Number.isInteger(x) ? String(Math.round(x * 1000) / 1000) : String(x)]);
+  }
+  return `<div class="alldet">${[...groups.entries()].map(([g, rows]) => `<div class="spec"><h4>${esc(g)}</h4><dl>${rows.map(([k, x]) => `<dt>${esc(k)}</dt><dd>${esc(x)}</dd>`).join('')}</dl></div>`).join('')}</div>`;
+}
 function links(r) {
   const out = [];
   if (r.IMDBID) out.push(['IMDb', `https://www.imdb.com/title/${encodeURIComponent(r.IMDBID)}/`]);
   if (r.TMDBID) out.push(['TMDB', `https://www.themoviedb.org/${r.Show ? 'tv' : 'movie'}/${encodeURIComponent(r.TMDBID)}`]);
-  return out.length ? `<div class="links">${out.map(([n, u]) => `<button type="button" data-url="${esc(u)}">${n} ↗</button>`).join('')}</div>` : '';
+  return `<div class="links">${out.map(([n, u]) => `<button type="button" data-url="${esc(u)}">${n} \u2197</button>`).join('')}${ADDCOL}${r.__show ? '' : ALLDET}</div>`;
 }
 const EXPORT_BTN = '<button class="xp" type="button" data-export="1" title="Save this card as a picture in Pictures\\Modern Media Library Manager"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v8M4.5 6.8 8 10.3l3.5-3.5M2.5 13.5h11"/></svg><span>Save as picture</span></button>';
 
@@ -92,7 +109,7 @@ function showSheet(name, eps) {
     <div><h2>${esc(name)}</h2>
       <div class="meta">${[years, first.Studio, first.MPAARating].filter(Boolean).map(esc).join(' · ')}</div>
       <div class="gchips">${first._genres.map((g) => `<span>${esc(g)}</span>`).join('')}</div>
-      ${links({ IMDBID: '', TMDBID: '', Show: name })}
+      ${links({ IMDBID: '', TMDBID: '', Show: name, __show: true })}
       <div class="eps">${seasonsHtml}</div>
     </div></div>`;
 }
@@ -155,8 +172,15 @@ export function openCard(r, toast, back) {
     const box = document.createElement('div');
     box.innerHTML = titleSheet(r);
     box.addEventListener('click', (e) => {
-      const t = e.target.closest('[data-close],[data-export],[data-url]');
+      const t = e.target.closest('[data-close],[data-export],[data-url],[data-addcol],[data-alldet]');
       if (!t) return;
+      if (t.dataset.alldet) {
+        const specs = box.querySelector('.specs'), have = box.querySelector('.alldet');
+        if (have) { have.remove(); specs.hidden = false; t.textContent = 'All details'; }
+        else { specs.insertAdjacentHTML('afterend', allDetails(r)); specs.hidden = true; t.textContent = 'Summary'; }
+        return;
+      }
+      if (t.dataset.addcol) { if (!t.parentElement.querySelector('.colpop')) addToCollection(t, r); return; }
       if (t.dataset.close) { close(); if (back) back(); }
       else if (t.dataset.export) exportCard(box.querySelector('.sheet'), t, r, toast);
       else if (t.dataset.url) S.openUrl(t.dataset.url).catch((err) => toast(err.message));
@@ -169,8 +193,9 @@ export function openShow(name, eps, toast) {
     const box = document.createElement('div');
     box.innerHTML = showSheet(name, eps);
     box.addEventListener('click', (e) => {
-      const t = e.target.closest('[data-close],[data-ep]');
+      const t = e.target.closest('[data-close],[data-ep],[data-addcol]');
       if (!t) return;
+      if (t.dataset.addcol) { if (!t.parentElement.querySelector('.colpop')) addToCollection(t, eps[0], eps); return; }
       if (t.dataset.close) close();
       else { const ep = S.state.libs.tv.rows[+t.dataset.ep]; close(); openCard(ep, toast, () => openShow(name, eps, toast)); }
     });

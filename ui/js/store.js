@@ -11,7 +11,8 @@ export const state = {
   version: '',
   hostMode: 'standalone',
   hostTheme: '',
-  settings: { theme: 'system', updateCheck: false, moviesView: 'posters', tvView: 'posters', moviesSort: 'added', tvSort: 'title', columns: [], hideDupes: false },
+  settings: { theme: 'system', updateCheck: false, moviesView: 'posters', tvView: 'posters', moviesSort: 'added', tvSort: 'title', moviesSortRev: false, tvSortRev: false,
+    columns: [], hideDupes: false, posterScale: 100, widthPreset: 'full', customWidth: false, contentWidth: 0 },
   plex: { url: '', hasToken: false },
   counts: { movies: { count: 0, when: '' }, tv: { count: 0, when: '' } },
   libs: { movies: lib(), tv: lib() },
@@ -20,7 +21,10 @@ export const state = {
   dropped: null,          // { file, version }: an update zip saved into the updates folder (standalone only)
   halted: false,
   query: '',              // the navigation bar's search box
+  collections: [],        // { name, kind, ids:Set, has(r) } (filled from the window app's collections)
+  tool: null,             // the running tool (Fetch info, FEL check, export): { kind, running, pct, text } or its result
 };
+export let toast = null; export function setToast(fn) { toast = fn; }
 
 // ---- change notification (NBADash's) ----------------------------------------------------------------------
 const subs = new Set();
@@ -73,6 +77,54 @@ function onLibrary(d) {
   if (d.ready) { L.status = 'idle'; loadLibrary(d.tab); }
   else { L.status = 'error'; L.error = d.error || 'The library could not be opened.'; notify('library'); }
 }
+
+// ---- collections (shared with the window app's collections.json) -------------------------------------------------------
+// Hand-picked: a list of title ids ("p:<Plex key>", "h:<hashed local file>"; a TV show counts when any of its episodes
+// is listed, which is how the window app stores shows). Rule: a saved search, read with the same syntax as the search box.
+import { parse as parseQuery, filterRows } from './search.js';
+function buildCollections(list) {
+  return (list || []).map((c) => {
+    const ids = new Set((c.items || []).flatMap((it) => it.ids || []));
+    const shows = { rows: null, set: null };
+    const rule = { tab: {}, };
+    const has = c.type === 'rule'
+      ? (r) => {
+        const L = state.libs[r._tab];
+        let t = rule.tab[r._tab];
+        if (!t || t.rows !== L.rows) {
+          // comma = either part (as in the window app)
+          const parts = String(c.query || '').split(',').map((x) => x.trim()).filter(Boolean).map((q) => parseQuery(q, L, []));
+          t = rule.tab[r._tab] = { rows: L.rows, set: new Set(parts.length ? parts.flatMap((p) => filterRows(L.rows, p)) : []) };
+        }
+        return t.set.has(r);
+      }
+      : (r) => {
+        if (ids.has(r.Rid)) return true;
+        if (!r.Show) return false;
+        const L = state.libs.tv;
+        if (shows.rows !== L.rows) { shows.rows = L.rows; shows.set = new Set(L.rows.filter((e) => ids.has(e.Rid)).map((e) => e.Show)); }
+        return shows.set.has(r.Show) || ids.has('s:' + r.Show);
+      };
+    return { ...c, ids, has };
+  });
+}
+export async function loadCollections() {
+  try { state.collections = buildCollections(await bridge.request('collections.get')); } catch (e) { console.warn(e.message); }
+  notify('collections');
+}
+export async function saveCollections(list) {
+  const plain = list.map(({ name, type, query, sortBy, sortDesc, byDate, limit, items, created }) => ({ name, type, query, sortBy, sortDesc, byDate, limit, items, created }));
+  state.collections = buildCollections(await bridge.request('collections.save', { collections: plain }));
+  notify('collections', 'query');
+}
+// The id a title is saved under in a collection (a show: its first episode, as the window app does).
+export function itemFor(r, eps) {
+  const first = eps ? eps.slice().sort((a, b) => (+a.Season || 99) - (+b.Season || 99) || (+a.Episode || 0) - (+b.Episode || 0))[0] : r;
+  return { ids: [first.Rid].filter(Boolean), title: eps ? r.Show || r.Title : r.Title, year: r.Year || 0 };
+}
+// rows of a library matching a search (dashboards' per-chart filters)
+export const filterByQuery = (L, q) => filterRows(L.rows, parseQuery(q, L, state.collections));
+export function setQuery(q) { state.query = String(q || '').trim(); notify('query', 'queryset'); }
 
 // ---- scanning (Plex) ----------------------------------------------------------------------------------------
 export async function startScan(tab, rebuild = false) {
@@ -162,6 +214,8 @@ export async function savePlex(url, token) {
 // The live status button: same as the launcher's kill switch, started from inside the dash.
 export async function stopTraffic() { await bridge.request('traffic.stop'); state.halted = true; notify('traffic'); }
 export async function resumeTraffic() { await bridge.request('traffic.resume'); state.halted = false; notify('traffic'); }
+export const keysInfo = () => bridge.request('keys.get');
+export const saveKeys = (tmdb, omdb) => bridge.request('keys.set', { tmdb, omdb });
 export const openUrl = (url) => bridge.request('open.url', { url });
 export const savePicture = (name, png) => bridge.request('picture.save', { name, png }, 60000);
 
@@ -187,9 +241,11 @@ export async function init() {
   bridge.on('scan', onScan);
   bridge.on('library', onLibrary);
   bridge.on('update', onUpdate);
+  bridge.on('tool', (d) => { state.tool = d; notify('tool'); });
   bridge.on('update.dropped', (d) => { state.dropped = d; notify('dropped'); });
 
   state.ready = true;
+  loadCollections();
   notify('counts');
   if (state.host && state.settings.updateCheck && !state.update.note && !inLauncher()) setTimeout(() => checkUpdate({ quiet: true }), 4000);
   return state;

@@ -246,7 +246,8 @@ namespace Mmlm.Native
     {
         // The library for the HTML page: {"fields":[...],"rows":[[...],...]}, one array per record in field order.
         // Poster paths are swapped for the page's own URLs (posterUrls: path -> "thumbs/x.jpg"); paths never reach the page.
-        public static string Rows(object[] records, string[] fields, IDictionary posterUrls, string fieldsJson)
+        // "Rid" is each title's id for collections: "p:<Plex key>", or for a local file the hashed id in localIds (path -> "h:...").
+        public static string Rows(object[] records, string[] fields, IDictionary posterUrls, string fieldsJson, IDictionary localIds)
         {
             var sb = new StringBuilder(records.Length * 400 + 1024);
             sb.Append("{\"fields\":").Append(fieldsJson).Append(",\"rows\":[");
@@ -260,6 +261,17 @@ namespace Mmlm.Native
                 for (int i = 0; i < fields.Length; i++)
                 {
                     if (i > 0) sb.Append(',');
+                    if (fields[i] == "Rid")
+                    {
+                        object pk = TvData.Get(o, "PlexKey");
+                        string k = pk == null ? "" : Convert.ToString(pk, CultureInfo.InvariantCulture);
+                        if (k.Length > 0) { TvData.JStr(sb, "p:" + k); continue; }
+                        object fp = TvData.Get(o, "FullPath");
+                        string f = fp == null ? "" : Convert.ToString(fp, CultureInfo.InvariantCulture);
+                        object rid = (f.Length > 0 && localIds != null && localIds.Contains(f)) ? localIds[f] : null;
+                        TvData.JStr(sb, rid == null ? "" : Convert.ToString(rid, CultureInfo.InvariantCulture));
+                        continue;
+                    }
                     if (fields[i] == "Poster")
                     {
                         object pp = TvData.Get(o, "PosterPath");

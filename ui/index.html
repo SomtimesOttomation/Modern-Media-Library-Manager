@@ -23,7 +23,6 @@
       <nav id="nav" class="nav" aria-label="Sections">
         <a href="#/movies" data-route="movies">Movies <span class="nav-count" id="count-movies"></span></a>
         <a href="#/tv" data-route="tv">TV Shows <span class="nav-count" id="count-tv"></span></a>
-        <a href="#/stats" data-route="stats">Stats</a>
       </nav>
       <div class="topbar-right">
         <button id="btn-version" class="ver-btn" type="button" hidden title="Check for updates"></button>
@@ -41,15 +40,26 @@
         <button id="btn-refresh" class="np-btn" type="button" title="Scan this library from Plex (F5)" aria-label="Scan from Plex"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         <span class="np-sep" aria-hidden="true"></span>
         <div class="psearch">
-          <input id="psearch" type="search" placeholder="Search title, genre, cast, studio..." autocomplete="off" spellcheck="false" aria-label="Search the library">
+          <input id="psearch" type="search" placeholder="Search: 90s sitcoms, 4k atmos, genre:action ..." autocomplete="off" spellcheck="false" aria-label="Search the library">
         </div>
+        <button id="btn-filter" class="np-btn" type="button" title="Advanced search: build your own filters" aria-label="Advanced search"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></button>
+        <button id="btn-size" class="np-btn" type="button" title="Poster size" aria-label="Poster size" hidden><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M4 5h6v8H4zM14 5h6v14h-6zM4 16h6v3H4z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/></svg></button>
         <span class="np-sep" aria-hidden="true"></span>
         <button id="live-status" class="live-status np-live" type="button" title=""></button>
         <button id="btn-settings" class="np-btn" type="button" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4zM19.4 13.5l1.6 1.2-1.8 3.1-1.9-.7a7.6 7.6 0 0 1-1.7 1l-.3 2h-3.6l-.3-2a7.6 7.6 0 0 1-1.7-1l-1.9.7-1.8-3.1 1.6-1.2a7.7 7.7 0 0 1 0-2l-1.6-1.2 1.8-3.1 1.9.7a7.6 7.6 0 0 1 1.7-1l.3-2h3.6l.3 2a7.6 7.6 0 0 1 1.7 1l1.9-.7 1.8 3.1-1.6 1.2a7.7 7.7 0 0 1 0 2z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       </div>
     </div>
     </div>
-    <main id="view" class="view" tabindex="-1"></main>
+    <div id="frame" class="view-frame">
+      <div class="wgrip left" data-side="left" title="Drag to change the width" hidden></div>
+      <main id="view" class="view" tabindex="-1"></main>
+      <div class="wgrip right" data-side="right" title="Drag to change the width" hidden></div>
+    </div>
+    <div id="sizepop" class="sizepop card" hidden>
+      <label for="size-range">Poster size <b id="size-val">100%</b></label>
+      <input id="size-range" type="range" min="50" max="200" step="5" value="100">
+      <button id="size-reset" class="btn" type="button">100%</button>
+    </div>
   </div>
   <div id="overlay-root"></div>
   <div id="toasts" class="toasts" aria-live="polite"></div>

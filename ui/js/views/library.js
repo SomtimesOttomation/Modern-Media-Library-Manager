@@ -2,7 +2,10 @@
 // Click a poster or a row for its card.
 import * as S from '../store.js';
 import { h } from '../util.js';
-import { esc, num, fmtSize, hdrLabel, posterHtml, tileHtml, matchQuery, dedupe, fillWall } from '../common.js';
+import { esc, num, fmtSize, hdrLabel, posterHtml, tileHtml, searchRows, chipsHtml, dedupe, fillWall, sortMenu } from '../common.js';
+import * as dashboard from './stats.js';
+import { collectionMenu } from './collections.js';
+import { toolsMenu, viewRids } from './tools.js';
 import { openCard } from './card.js';
 import { overlay } from './settings.js';
 import { vgrid } from './vgrid.js';
@@ -95,34 +98,52 @@ export function stateBox(tab, L, toast) {
   return null;
 }
 
+// The view switch shared by both tabs: Posters | Grid | Dashboard
+export function viewSeg(mode, key, redraw) {
+  return h('div', { class: 'seg', role: 'tablist', 'aria-label': 'View' }, [['posters', 'Posters'], ['grid', 'Grid'], ['dashboard', 'Dashboard']].map(([k, label]) =>
+    h('button', { type: 'button', class: mode === k ? 'active' : '', 'aria-selected': mode === k ? 'true' : 'false', onclick: () => S.saveSettings({ [key]: k }).then(redraw) }, label)));
+}
+export const viewMode = (v) => (v === 'grid' || v === 'dashboard' ? v : 'posters');
+
 export function mount(ctx) {
   const L = S.state.libs.movies;
-  let grid = null, stopWall = null, sort = { col: '', dir: 1 };
+  let grid = null, stopWall = null, stopDash = null, sort = { col: '', dir: 1 };
   const draw = () => {
-    stopWall?.(); stopWall = null; grid?.destroy(); grid = null;
+    stopWall?.(); stopWall = null; grid?.destroy(); grid = null; stopDash?.(); stopDash = null;
     const st = stateBox('movies', L, ctx.toast);
     if (st) { ctx.el.replaceChildren(st); return; }
-    const s = S.state.settings, mode = s.moviesView === 'grid' ? 'grid' : 'posters';
-    let rows = matchQuery(L.rows, S.state.query);
+    const s = S.state.settings, mode = viewMode(s.moviesView);
+    if (mode === 'dashboard') {
+      const body = h('div');
+      ctx.el.replaceChildren(h('div', { class: 'lib-head' }, h('div', { class: 'lib-title' }, h('h1', null, 'Movies'), h('small', null, 'Dashboard')),
+        h('div', { class: 'lib-tools' }, viewSeg(mode, 'moviesView', draw))), body);
+      stopDash = dashboard.mount({ el: body, arg: 'movies', toast: ctx.toast, embedded: true });
+      return;
+    }
+    const found = searchRows(L.rows, S.state.query, L, S.state.collections);
+    let rows = found.rows;
     const before = rows.length;
     if (s.hideDupes) rows = dedupe(rows);
     const sortDef = MOVIE_SORTS.find((x) => x[0] === s.moviesSort) || MOVIE_SORTS[0];
     rows = rows.slice().sort(sortDef[2]);
+    if (s.moviesSortRev) rows.reverse();
     if (mode === 'grid' && sort.col) sortByColumn(rows, sort.col, sort.dir, L);
     const hidden = before - rows.length;
+    viewRids.movies = rows;
     const total = L.rows.reduce((a, r) => a + num(r.FileSizeGB), 0);
     const head = h('div', { class: 'lib-head' },
       h('div', { class: 'lib-title' }, h('h1', null, 'Movies'),
         h('small', null, `${rows.length.toLocaleString()}${rows.length !== L.rows.length ? ' of ' + L.rows.length.toLocaleString() : ''} titles${hidden > 0 ? ` · ${hidden} duplicate${hidden === 1 ? '' : 's'} hidden` : ''} · ${fmtSize(total)}`)),
       h('div', { class: 'lib-tools' },
         h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: s.hideDupes ? true : null, onchange: (e) => S.saveSettings({ hideDupes: e.target.checked }).then(draw) }), 'Hide duplicates'),
-        h('select', { 'aria-label': 'Sort by', title: 'Sort by', onchange: (e) => { sort = { col: '', dir: 1 }; S.saveSettings({ moviesSort: e.target.value }).then(draw); } },
-          MOVIE_SORTS.map(([k, label]) => h('option', { value: k, selected: k === sortDef[0] ? true : null }, `Sort: ${label}`))),
+        collectionMenu('movies'),
+        toolsMenu('movies'),
+        sortMenu(MOVIE_SORTS, sortDef[0], !!s.moviesSortRev, (k, rev) => { sort = { col: '', dir: 1 }; S.saveSettings({ moviesSort: k, moviesSortRev: rev }).then(draw); }),
         mode === 'grid' ? h('button', { class: 'btn', type: 'button', onclick: () => chooseColumns(L, draw) }, 'Columns') : null,
-        h('div', { class: 'seg', role: 'tablist', 'aria-label': 'View' }, [['posters', 'Posters'], ['grid', 'Grid']].map(([k, label]) =>
-          h('button', { type: 'button', class: mode === k ? 'active' : '', 'aria-selected': mode === k ? 'true' : 'false', onclick: () => S.saveSettings({ moviesView: k }).then(draw) }, label)))));
+        viewSeg(mode, 'moviesView', draw)));
     const body = h('div');
-    ctx.el.replaceChildren(head, body);
+    const chips = h('div'); chips.innerHTML = chipsHtml(found.chips);
+    ctx.el.replaceChildren(head, chips, body);
     if (!rows.length) { body.append(h('div', { class: 'state' }, h('p', null, S.state.query ? `Nothing matches “${S.state.query}”.` : 'Nothing to show.'))); return; }
     if (mode === 'posters') {
       const wall = h('div', { class: 'wall' });
@@ -143,11 +164,11 @@ export function mount(ctx) {
   draw();
   ctx.redraw = draw;
   ctx.seen = { status: L.status, rows: L.rows };
-  return () => { stopWall?.(); grid?.destroy(); };
+  return () => { stopWall?.(); grid?.destroy(); stopDash?.(); };
 }
 // Redraw only when this library changed (the other tab loading must not reset the scroll position).
 export function update(topics, ctx) {
   const L = S.state.libs.movies, changed = ctx.seen && (ctx.seen.status !== L.status || ctx.seen.rows !== L.rows);
   if (changed) ctx.seen = { status: L.status, rows: L.rows };
-  if (changed || topics.has('query') || (L.status !== 'ready' && (topics.has('plex') || topics.has('traffic') || topics.has('scan')))) ctx.redraw?.();
+  if (changed || topics.has('query') || topics.has('collections') || (L.status !== 'ready' && (topics.has('plex') || topics.has('traffic') || topics.has('scan')))) ctx.redraw?.();
 }

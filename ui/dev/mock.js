@@ -27,7 +27,7 @@ const FIELDS = [
   ['AudioChannels', 'int', 'Audio', 0], ['AudioLayout', 'string', 'Audio', 1], ['AudioLanguages', 'string', 'Audio', 1], ['SubtitleTracks', 'int', 'Subtitles', 1], ['SubtitleLanguages', 'string', 'Subtitles', 0],
   ['FileName', 'string', 'File', 1], ['Container', 'string', 'File', 1], ['Type', 'string', 'File', 0], ['FileSizeGB', 'double', 'File', 1], ['Source', 'string', 'File', 1], ['Added', 'string', 'File', 1],
   ['HasNfo', 'bool', 'Library', 0], ['HasPoster', 'bool', 'Library', 0], ['RTCritic', 'int', 'Ratings', 1], ['RTAudience', 'int', 'Ratings', 1], ['Metascore', 'int', 'Ratings', 1],
-  ['BoxOfficeDomestic', 'double', 'Box office', 1], ['BoxOfficeWorldwide', 'double', 'Box office', 1], ['Poster', 'string', 'Library', 0],
+  ['BoxOfficeDomestic', 'double', 'Box office', 1], ['BoxOfficeWorldwide', 'double', 'Box office', 1], ['ViewCount', 'int', 'Library', 0], ['Poster', 'string', 'Library', 0], ['Rid', 'string', 'Library', 0],
 ].map(([n, t, g, s]) => ({ n, t, g, s: !!s }));
 const W1 = ['Silent', 'Crimson', 'Last', 'Hidden', 'Golden', 'Broken', 'Northern', 'Midnight', 'Paper', 'Iron', 'Glass', 'Electric', 'Quiet', 'Burning', 'Lost'];
 const W2 = ['Harbor', 'Orchard', 'Signal', 'Kingdom', 'Frontier', 'Lantern', 'Meridian', 'Tide', 'Archive', 'Comet', 'Garden', 'Engine', 'Summit', 'Mirror', 'River'];
@@ -57,6 +57,7 @@ function movies() {
       ...q, FileName: `${title} (${year}).mkv`, FileSizeGB: Math.round((q.ResolutionClass === '4K' ? 40 + rnd() * 40 : 4 + rnd() * 16) * 100) / 100,
       Added: `20${20 + Math.floor(rnd() * 7)}-${String(1 + Math.floor(rnd() * 12)).padStart(2, '0')}-${String(1 + Math.floor(rnd() * 28)).padStart(2, '0')}`,
       RTCritic: rnd() > 0.25 ? Math.floor(20 + rnd() * 80) : 0, RTAudience: rnd() > 0.25 ? Math.floor(30 + rnd() * 70) : 0, Metascore: rnd() > 0.3 ? Math.floor(25 + rnd() * 70) : 0,
+      Rid: 'p:' + (1000 + i), ViewCount: rnd() > 0.5 ? 1 : 0,
       BoxOfficeDomestic: rnd() > 0.4 ? Math.floor(rnd() * 4e8) : 0, BoxOfficeWorldwide: rnd() > 0.4 ? Math.floor(rnd() * 1.1e9) : 0, Poster: rnd() > 0.06 ? poster(title, Math.floor(rnd() * 360)) : '' });
   }
   return out;
@@ -69,12 +70,17 @@ function tv() {
     for (let n = 1; n <= seasons; n++) for (let e = 1; e <= 6 + Math.floor(rnd() * 6); e++) {
       out.push({ Title: `${show} - S${String(n).padStart(2, '0')}E${String(e).padStart(2, '0')} - Chapter ${e}`, Library: 'TV', Show: show, Season: n, Episode: e, Year: y0 + n - 1, Genre: genre,
         MPAARating: 'TV-14', RuntimeMin: 42 + Math.floor(rnd() * 20), Studio: pick(rnd, ['Harbor TV', 'Northlight', 'Kestrel']), ReleaseDate: `${y0 + n - 1}-0${1 + (e % 9)}-1${e % 9}`,
-        ...q, FileName: `S${n}E${e}.mkv`, FileSizeGB: Math.round((1 + rnd() * 5) * 100) / 100, Added: `202${Math.floor(rnd() * 6)}-0${1 + Math.floor(rnd() * 9)}-1${Math.floor(rnd() * 9)}`, Poster: p });
+        ...q, Rid: `p:${5000 + s * 1000 + n * 50 + e}`, ViewCount: rnd() > 0.4 ? 1 : 0, FileName: `S${n}E${e}.mkv`, FileSizeGB: Math.round((1 + rnd() * 5) * 100) / 100, Added: `202${Math.floor(rnd() * 6)}-0${1 + Math.floor(rnd() * 9)}-1${Math.floor(rnd() * 9)}`, Poster: p });
     }
   }
   return out;
 }
 const libs = { movies: movies(), tv: tv() };
+let dashData = { movies: [], tv: [] };
+let collections = [
+  { name: 'Weekend picks', type: 'manual', query: '', items: [0, 3, 7, 11].map((i) => ({ ids: ['p:' + (1000 + i)], title: '', year: 0 })) },
+  { name: '80s 4K', type: 'rule', query: 'year:1980-1989 res:4k', items: [] },
+];
 const pack = (rows) => ({ fields: FIELDS, rows: rows.map((r) => FIELDS.map((f) => (r[f.n] === undefined || r[f.n] === '' ? null : r[f.n]))) });
 
 const later = (ms, fn) => setTimeout(fn, ms);
@@ -97,6 +103,31 @@ export async function request(cmd, args = {}) {
       return true;
     }
     case 'scan.cancel': clearInterval(scanTimer); later(100, () => emit('scan', { running: false, tab: 'movies', count: 0, new: 0, cancelled: true, error: null })); return true;
+    case 'series.open': {
+      const eps = libs.tv.filter((r) => r.Show === args.show);
+      if (!eps.length) throw new Error('No such show');
+      const hue = (args.show.length * 47) % 360;
+      const still = (t, k) => poster(t, (hue + k * 13) % 360).replace('width="240" height="360"', 'width="400" height="225" viewBox="0 0 240 135" preserveAspectRatio="xMidYMid slice"');
+      const seasons = [...new Set(eps.map((e) => e.Season))].sort((a, b) => a - b);
+      return { key: '9', title: args.show, year: eps[0].Year, summary: 'A made-up show for the browser preview: a group of friends run a bar badly, for years.', studio: eps[0].Studio, rated: 'TV-MA', rating: '8.4',
+        genres: ['Comedy'], firstAired: eps[0].ReleaseDate, poster: '', fetchedAt: '2026-11-08 23:00',
+        seasons: seasons.map((n) => ({ key: 's' + n, index: n, title: `Season ${n}`, episodes: eps.filter((e) => e.Season === n).length, watched: eps.filter((e) => e.Season === n && e.ViewCount).length, poster: poster(`${args.show} S${n}`, (hue + n * 40) % 360) })),
+        episodes: eps.map((e) => ({ key: e.Rid, season: e.Season, index: e.Episode, title: `Chapter ${e.Episode}`, summary: 'Something happens.', aired: e.ReleaseDate, minutes: Math.round(e.RuntimeMin), watched: !!e.ViewCount, progress: e.ViewCount ? 0 : (e.Episode === 4 ? 40 : 0), thumb: still(`S${e.Season}E${e.Episode}`, e.Episode) })),
+        cast: ['Alex Hale', 'Sam Brandt', 'Jordan Pike', 'Robin Vale', 'Casey Moor', 'Drew Lin'].map((n, i) => ({ name: n, role: ['Charlie', 'Mac', 'Dee', 'Dennis', 'Frank', 'The Waitress'][i], photo: poster(n.split(' ')[0], (hue + i * 50) % 360) })),
+        related: libs.tv.filter((r) => r.Show !== args.show && r.Episode === 1 && r.Season === 1).slice(0, 8).map((r, i) => ({ key: 'r' + i, title: r.Show, year: r.Year, seasons: 2 + i, unwatched: i * 7, poster: r.Poster })) };
+    }
+    case 'image.data': return null;
+    case 'keys.get': case 'keys.set': return { tmdb: true, omdb: false };
+    case 'tools.start': {
+      let pct = 0; const t = setInterval(() => { pct += 25; if (pct < 100) emit('tool', { kind: args.kind, tab: args.tab, running: true, pct, text: 'Working on it...' });
+        else { clearInterval(t); emit('tool', { kind: args.kind, tab: args.tab, running: false, error: null, summary: args.kind === 'fel' ? 'Checked 3: 2 FEL, 1 MEL, 0 could not tell.' : `${(args.rids || []).length || 'All'} titles saved.`, path: /csv|html/.test(args.kind) ? `C:\\Users\\you\\Documents\\Modern Media Library Manager\\${args.name}.${args.kind}` : '', cancelled: false }); } }, 200);
+      return true;
+    }
+    case 'tools.cancel': case 'folder.show': return true;
+    case 'dashboards.get': return dashData;
+    case 'dashboards.save': dashData = args.data; return dashData;
+    case 'collections.get': return collections;
+    case 'collections.save': collections = args.collections; return collections;
     case 'summary.get': return { title: 'Recently added', items: [], updatedAt: null };
     case 'traffic.get': return { ...traffic, stopped: halted, uptimeSec: Math.round(performance.now() / 1000) };
     case 'traffic.stop': halted = true; clearInterval(scanTimer); emit('traffic', { stopped: true }); return true;

@@ -11,6 +11,46 @@ function Set-MmlmContext {
     foreach ($k in @($Values.Keys)) { Set-Variable -Scope Script -Name $k -Value $Values[$k] }
 }
 
+function Initialize-MmlmNative {
+    # The small C# helper (src\Mmlm.Native.cs: TV page data + library snapshot). Compiling takes a second or two, so it
+    # is done on first use and the DLL is kept in %LOCALAPPDATA%; later starts just load it. Types are process-wide and
+    # cannot be unloaded, so the DLL name carries the app version and a hash of the source: an update loads a new file.
+    if ('Mmlm.Native.TvData' -as [type]) { return }
+    $srcFile = Join-Path $script:AppRoot 'src\Mmlm.Native.cs'
+    $code = [IO.File]::ReadAllText($srcFile)
+    $dir = Join-Path $script:AppData 'Helper'
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
+    $name = 'Mmlm.Native-{0}-{1}.dll' -f $script:AppVersion, (Get-MmlmStringHash ($code + '|' + $PSVersionTable.PSVersion.Major)).Substring(0, 8)
+    $dll = Join-Path $dir $name
+    # older cached copies: not loaded in this process yet, so they can go now
+    foreach ($old in @(Get-ChildItem -LiteralPath $dir -Filter '*.dll' -File -ErrorAction SilentlyContinue)) {
+        if ($old.Name -ne $name -and ($old.Name -like 'Mmlm.Native-*' -or $old.Name -like 'MmlmHelper-*')) { Remove-Item -LiteralPath $old.FullName -Force -ErrorAction SilentlyContinue }
+    }
+    try {
+        if (-not (Test-Path -LiteralPath $dll)) { Add-Type -TypeDefinition $code -Language CSharp -OutputAssembly $dll -OutputType Library -ErrorAction Stop }
+        if (-not ('Mmlm.Native.TvData' -as [type])) { Add-Type -Path $dll -ErrorAction Stop }
+    }
+    catch {
+        Remove-Item -LiteralPath $dll -Force -ErrorAction SilentlyContinue        # a half-written file must not be reused
+        if (-not ('Mmlm.Native.TvData' -as [type])) { Add-Type -TypeDefinition $code -Language CSharp }
+    }
+}
+
+function Add-MmlmTraffic {
+    # Counts one request to a data source (Plex, TMDB, OMDb, IMDb) for the window's / launcher's traffic counter.
+    param([long]$Bytes = 0, [switch]$Failed)
+    $t = $script:Traffic
+    if ($null -eq $t) { return }
+    [Threading.Monitor]::Enter($t.SyncRoot)
+    try { $t.Requests = [int]$t.Requests + 1; $t.Bytes = [long]$t.Bytes + $Bytes; if ($Failed) { $t.Errors = [int]$t.Errors + 1 } }
+    finally { [Threading.Monitor]::Exit($t.SyncRoot) }
+}
+
+function Assert-MmlmTrafficAllowed {
+    # After the kill switch / pause, no data source is contacted until the person resumes inside the app.
+    if ($null -ne $script:Traffic -and $script:Traffic.Halted) { throw 'Traffic to data sources is paused.' }
+}
+
 function Set-MmlmProgress {
     # Scan progress for the window: the status text and the step bar (read by the UI thread's timer).
     param([string]$Text, [int]$Value = -1, [int]$Max = 0)
@@ -961,5 +1001,8 @@ Export-ModuleMember -Function @(
     'Read-MmlmMetaStore',
     'Write-MmlmMetaStore',
     'Invoke-MmlmFolderScan',
-    'Set-MmlmProgress'
+    'Set-MmlmProgress',
+    'Initialize-MmlmNative',
+    'Add-MmlmTraffic',
+    'Assert-MmlmTrafficAllowed'
 )

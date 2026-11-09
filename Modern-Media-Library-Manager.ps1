@@ -256,24 +256,7 @@ $script:PlexTimeoutMs = 30000
 $script:PlexClientId  = 'get-mediainfogui-' + $env:COMPUTERNAME
 # Shared with the background scan worker (a synchronized hashtable is safe to touch from both threads).
 $script:Sync = [hashtable]::Synchronized(@{ Text = ''; Value = 0; Max = 0; Total = 0; Cancel = $false; Done = $false; Error = $null; Results = $null; Partial = $null; PhaseLo = 0.0; PhaseHi = 1.0 })
-function Protect-PlexToken {
-    # DPAPI: only this Windows user, on this computer, can decrypt the result.
-    param([string]$Plain)
-    if ([string]::IsNullOrEmpty($Plain)) { return '' }
-    ConvertFrom-SecureString -SecureString (ConvertTo-SecureString -String $Plain -AsPlainText -Force)
-}
 
-function Unprotect-PlexToken {
-    param([string]$Protected)
-    if ([string]::IsNullOrEmpty($Protected)) { return '' }
-    try {
-        $sec  = ConvertTo-SecureString -String $Protected
-        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
-        try { [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
-        finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
-    }
-    catch { '' }
-}
 
 #endregion
 
@@ -321,6 +304,8 @@ function Merge-MetaStore {
 #endregion
 
 #region ---------------------------------------------------------------- Modules (the data logic, no UI)
+# requests to data sources this session (Plex, TMDB, OMDb, IMDb); counted by the modules, GitHub update checks are not included
+$script:Traffic = [hashtable]::Synchronized(@{ Requests = 0; Bytes = [long]0; Errors = 0; Halted = $false })
 $script:ModuleFiles = @('MMLM.Library.psm1', 'MMLM.Plex.psm1', 'MMLM.Fetch.psm1') | ForEach-Object { Join-Path (Join-Path $script:AppRoot 'modules') $_ }
 foreach ($m in $script:ModuleFiles) { Import-Module $m -DisableNameChecking }
 
@@ -339,6 +324,7 @@ function Update-MmlmContext {
         PosterNames = $script:PosterNames; ImageExtensions = $script:ImageExtensions
         Fields = $script:Fields; TypeMap = $script:TypeMap
         PlexTimeoutMs = $script:PlexTimeoutMs; PlexClientId = $script:PlexClientId; InformFolder = $script:InformFolder
+        AppData = $script:AppData; AppVersion = $script:AppVersion; Traffic = $script:Traffic
     }
     Set-MmlmContext -Values $v; Set-MmlmPlexContext -Values $v; Set-MmlmFetchContext -Values $v
 }
@@ -378,6 +364,7 @@ finally { $script:Sync.Done = $true }
         PosterNames = $script:PosterNames; ImageExtensions = $script:ImageExtensions
         Fields = $script:Fields; TypeMap = $script:TypeMap
         PlexTimeoutMs = $script:PlexTimeoutMs; PlexClientId = $script:PlexClientId; InformFolder = $script:InformFolder
+        AppData = $script:AppData; AppVersion = $script:AppVersion; Traffic = $script:Traffic
     }
     $workerVars = @{}
     foreach ($k in $vars.Keys) { if ($k -ne 'Mode' -and $k -ne 'ScanArgs') { $workerVars[$k] = $vars[$k] } }
@@ -1210,9 +1197,9 @@ $chkEmbed.Checked  = [bool]$script:Settings['EmbedPosters']
 $chkFel.Checked    = [bool]$script:Settings['DetectFel']
 try { $nudPar.Value = [Math]::Max(1, [Math]::Min(12, [int]$script:Settings['Parallel'])) } catch { $nudPar.Value = 4 }
 $tip.SetToolTip($nudPar, "How many files a local scan reads at the same time (can be changed during a scan).`n4 suits most NAS shares; raise it while watching the progress speed, or use 1 if the share struggles.")
-$script:PlexToken  = Unprotect-PlexToken ([string]$script:Settings['PlexTokenProtected'])
-$script:TmdbKey    = Unprotect-PlexToken ([string]$script:Settings['TmdbKeyProtected'])
-$script:OmdbKey    = Unprotect-PlexToken ([string]$script:Settings['OmdbKeyProtected'])
+$script:PlexToken  = Unprotect-MmlmPlexToken ([string]$script:Settings['PlexTokenProtected'])
+$script:TmdbKey    = Unprotect-MmlmPlexToken ([string]$script:Settings['TmdbKeyProtected'])
+$script:OmdbKey    = Unprotect-MmlmPlexToken ([string]$script:Settings['OmdbKeyProtected'])
 
 # ---- confirmation before a full cache rebuild, and the gear-button settings --------------------
 function New-DialogForm {
@@ -1301,8 +1288,8 @@ function Show-SettingsDialog {
     if ($dlg.ShowDialog($form) -eq [Windows.Forms.DialogResult]::OK) {
         $script:Settings['WarnRebuild'] = [bool]$chk.Checked
         $script:TmdbKey = $txtT.Text.Trim(); $script:OmdbKey = $txtO.Text.Trim()
-        $script:Settings['TmdbKeyProtected'] = Protect-PlexToken $script:TmdbKey
-        $script:Settings['OmdbKeyProtected'] = Protect-PlexToken $script:OmdbKey
+        $script:Settings['TmdbKeyProtected'] = Protect-MmlmPlexToken $script:TmdbKey
+        $script:Settings['OmdbKeyProtected'] = Protect-MmlmPlexToken $script:OmdbKey
         Save-Settings
     }
     if ($null -ne $pic) { $pic.Image.Dispose() }
@@ -2076,36 +2063,12 @@ function Show-UiError {
     [Windows.Forms.MessageBox]::Show("Something went wrong in $Where (shown once; also logged to %TEMP%\MMLM-errors.log):`n`n$msg", 'Modern Media Library Manager', 'OK', 'Error') | Out-Null
 }
 
-# The C# helper's source is src\Mmlm.Native.cs (namespace Mmlm.Native: TvData, Snapshot); see Initialize-TvData.
-function Initialize-TvData {
-    # The small C# helper (src\Mmlm.Native.cs: TV page data + library snapshot). Compiling takes a second or two, so it
-    # is done on first use and the DLL is kept in %LOCALAPPDATA%; later starts just load it. Types are process-wide and
-    # cannot be unloaded, so the DLL name carries the app version and a hash of the source: an update loads a new file.
-    if ('Mmlm.Native.TvData' -as [type]) { return }
-    $srcFile = Join-Path $script:AppRoot 'src\Mmlm.Native.cs'
-    $code = [IO.File]::ReadAllText($srcFile)
-    $dir = Join-Path $script:AppData 'Helper'
-    if (-not (Test-Path -LiteralPath $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
-    $name = 'Mmlm.Native-{0}-{1}.dll' -f $script:AppVersion, (Get-MmlmStringHash ($code + '|' + $PSVersionTable.PSVersion.Major)).Substring(0, 8)
-    $dll = Join-Path $dir $name
-    # older cached copies: not loaded in this process yet, so they can go now
-    foreach ($old in @(Get-ChildItem -LiteralPath $dir -Filter '*.dll' -File -ErrorAction SilentlyContinue)) {
-        if ($old.Name -ne $name -and ($old.Name -like 'Mmlm.Native-*' -or $old.Name -like 'MmlmHelper-*')) { Remove-Item -LiteralPath $old.FullName -Force -ErrorAction SilentlyContinue }
-    }
-    try {
-        if (-not (Test-Path -LiteralPath $dll)) { Add-Type -TypeDefinition $code -Language CSharp -OutputAssembly $dll -OutputType Library -ErrorAction Stop }
-        if (-not ('Mmlm.Native.TvData' -as [type])) { Add-Type -Path $dll -ErrorAction Stop }
-    }
-    catch {
-        Remove-Item -LiteralPath $dll -Force -ErrorAction SilentlyContinue        # a half-written file must not be reused
-        if (-not ('Mmlm.Native.TvData' -as [type])) { Add-Type -TypeDefinition $code -Language CSharp }
-    }
-}
+# The C# helper's source is src\Mmlm.Native.cs (namespace Mmlm.Native: TvData, Snapshot); see Initialize-MmlmNative.
 
 function Get-TvShowRecords {
     # The dashboard on the TV tab: one card per show (a copy of its first episode, named after the show, earliest year).
     if (@($script:TvRecords).Count -eq 0) { return @() }
-    Initialize-TvData
+    Initialize-MmlmNative
     $idx = [Mmlm.Native.TvData]::Index([object[]]$script:TvRecords)
     $out = New-Object 'System.Collections.Generic.List[object]'
     foreach ($show in [Mmlm.Native.TvData]::ShowOrder($idx)) {
@@ -2125,7 +2088,7 @@ function Write-TvPage {
     if (@($script:TvRecords).Count -eq 0) { return $false }
     if (-not (Test-Path -LiteralPath $script:TvTemplatePath)) { throw "The TV page needs tv-template.html next to this script.`nLooked for: $($script:TvTemplatePath)" }
     Set-UiProgress -Text 'Preparing the TV page...'
-    Initialize-TvData
+    Initialize-MmlmNative
     $idx = [Mmlm.Native.TvData]::Index([object[]]$script:TvRecords)
     $thumbDir = Join-Path $script:LiveFolder 'thumbs'
     if (-not (Test-Path -LiteralPath $thumbDir)) { New-Item -Path $thumbDir -ItemType Directory -Force | Out-Null }
@@ -2160,7 +2123,7 @@ function Save-LibrarySnapshot {
     # Writes one tab's records to its snapshot file on a background thread, so the window does not freeze on 50,000+ episodes.
     param([string]$Which, [object[]]$Records)
     try {
-        Initialize-TvData
+        Initialize-MmlmNative
         $path = Get-SnapshotPath $Which
         $meta = '{0}|{1}' -f $Records.Count, (Get-Date).ToString('yyyy-MM-dd HH:mm')
         $ps = [powershell]::Create()
@@ -2177,7 +2140,7 @@ function Import-LibrarySnapshot {
         $mp = Get-SnapshotPath 'Movies'; $tp = Get-SnapshotPath 'TV'
         $haveM = Test-Path -LiteralPath $mp; $haveT = Test-Path -LiteralPath $tp
         if (-not $haveM -and -not $haveT) { return }
-        Initialize-TvData
+        Initialize-MmlmNative
         $movies = @(); $when = ''
         if ($haveM) {
             $movies = @([Mmlm.Native.Snapshot]::Load($mp)); $when = ([Mmlm.Native.Snapshot]::LastMeta -split '\|')[-1]
@@ -2579,7 +2542,7 @@ function Show-PlexTokenDialog {
     if ($result -ne [Windows.Forms.DialogResult]::OK) { return $false }
 
     if ($script:PlexUrlOut) { $txtFolder.Text = $script:PlexUrlOut }
-    $script:Settings['PlexTokenProtected'] = if ($script:PlexRemember) { Protect-PlexToken $script:PlexToken } else { '' }
+    $script:Settings['PlexTokenProtected'] = if ($script:PlexRemember) { Protect-MmlmPlexToken $script:PlexToken } else { '' }
     Save-Settings
     $true
 }

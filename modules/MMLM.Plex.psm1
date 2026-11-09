@@ -30,8 +30,28 @@ function New-MmlmPlexRequest {
     $req
 }
 
+function Protect-MmlmPlexToken {
+    # DPAPI: only this Windows user, on this computer, can decrypt the result.
+    param([string]$Plain)
+    if ([string]::IsNullOrEmpty($Plain)) { return '' }
+    ConvertFrom-SecureString -SecureString (ConvertTo-SecureString -String $Plain -AsPlainText -Force)
+}
+
+function Unprotect-MmlmPlexToken {
+    param([string]$Protected)
+    if ([string]::IsNullOrEmpty($Protected)) { return '' }
+    try {
+        $sec  = ConvertTo-SecureString -String $Protected -ErrorAction Stop
+        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
+        try { [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+        finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+    }
+    catch { '' }
+}
+
 function Get-MmlmPlexXml {
     param([string]$BaseUrl, [string]$Path, [hashtable]$Query = @{}, [string]$Token)
+    Assert-MmlmTrafficAllowed
     $req  = New-MmlmPlexRequest -BaseUrl $BaseUrl -Path $Path -Query $Query -Token $Token
     $resp = $null
     $text = ''
@@ -39,8 +59,10 @@ function Get-MmlmPlexXml {
         $resp = $req.GetResponse()
         $sr = New-Object IO.StreamReader($resp.GetResponseStream(), [Text.Encoding]::UTF8)
         try { $text = $sr.ReadToEnd() } finally { $sr.Dispose() }
+        Add-MmlmTraffic -Bytes $text.Length
     }
     catch [Net.WebException] {
+        Add-MmlmTraffic -Failed
         $we = $_.Exception
         if ($we.Response) {
             $code = [int]$we.Response.StatusCode
@@ -133,6 +155,7 @@ function Save-MmlmPlexPoster {
 
     $resp = $null
     try {
+        Assert-MmlmTrafficAllowed
         $req  = New-MmlmPlexRequest -BaseUrl $BaseUrl -Path '/photo/:/transcode' -Token $Token -Accept 'image/jpeg,image/*' `
                     -Query @{ width = 240; height = 360; minSize = 1; upscale = 1; url = $ThumbPath }
         $resp = $req.GetResponse()
@@ -140,6 +163,7 @@ function Save-MmlmPlexPoster {
         try {
             $rs = $resp.GetResponseStream()
             $rs.CopyTo($ms)
+            Add-MmlmTraffic -Bytes $ms.Length
             if ($ms.Length -gt 0) { [IO.File]::WriteAllBytes($dest, $ms.ToArray()); return $dest }
         }
         finally { $ms.Dispose() }
@@ -587,6 +611,8 @@ function Invoke-MmlmPlexScan {
 
 Export-ModuleMember -Function @(
     'Set-MmlmPlexContext',
+    'Protect-MmlmPlexToken',
+    'Unprotect-MmlmPlexToken',
     'New-MmlmPlexRequest',
     'Get-MmlmPlexXml',
     'Get-MmlmPlexSections',

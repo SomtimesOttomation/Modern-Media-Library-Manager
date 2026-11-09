@@ -18,6 +18,7 @@ function Invoke-MmlmJsonGet {
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     for ($try = 1; $try -le 4; $try++) {
         if (Test-MmlmScanCancelled) { return $null }
+        Assert-MmlmTrafficAllowed
         try {
             $req = [Net.HttpWebRequest]::Create($Url)
             $req.Method = 'GET'; $req.Timeout = $TimeoutMs; $req.ReadWriteTimeout = $TimeoutMs
@@ -29,9 +30,11 @@ function Invoke-MmlmJsonGet {
                 try { $txt = $sr.ReadToEnd() } finally { $sr.Dispose() }
             }
             finally { $resp.Close() }
+            Add-MmlmTraffic -Bytes $txt.Length
             return ($txt | ConvertFrom-Json)
         }
         catch [Net.WebException] {
+            Add-MmlmTraffic -Failed
             $r    = $_.Exception.Response
             $code = if ($null -ne $r) { [int]$r.StatusCode } else { 0 }
             if ($code -eq 404) { return $null }
@@ -59,7 +62,9 @@ function Get-MmlmImdbRatingMap {
         $wc = New-Object Net.WebClient
         try {
             $wc.Headers['User-Agent'] = 'ModernMediaLibraryManager/1.0'
+            Assert-MmlmTrafficAllowed
             $wc.DownloadFile('https://datasets.imdbws.com/title.ratings.tsv.gz', $gz + '.tmp')
+            try { Add-MmlmTraffic -Bytes (Get-Item -LiteralPath ($gz + '.tmp')).Length } catch { }
             Move-Item -LiteralPath ($gz + '.tmp') -Destination $gz -Force
         }
         catch { Remove-Item -LiteralPath ($gz + '.tmp') -Force -ErrorAction SilentlyContinue }

@@ -9,3 +9,4 @@ lib/              export-ignore
 *.psm1 text eol=crlf
 *.cmd  text eol=crlf
 *.bat  text eol=crlf
+tests/            export-ignore

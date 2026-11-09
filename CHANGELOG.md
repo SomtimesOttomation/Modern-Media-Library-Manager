@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.6.0
+
+**Feature**
+- New page: each tab has Posters, Grid and Dashboard; pick a sort again to reverse it; a poster size slider (up to 200%); width presets 16:9 / 21:9 / 32:9 or a custom width dragged at the edges.
+- Search: field searches (res:4k genre:action year:1990-1999 rating>8), everyday phrases (90s sitcoms, 4k atmos, highly rated thrillers, unwatched), a line showing how it was read, and an Advanced search panel.
+- Collections in the new page (shared with the window app): pick one, add titles or shows from their cards, rule collections from a search, searchable by name.
+- TV series view: a Plex-style page per show with a gradient from the season poster, episode stills with watched marks, cast and related shows (from your Plex server, saved after the first open).
+- Tools in the new page: Fetch info (with a warning; keys in Settings), FEL/MEL check (also optional during Plex scans), CSV export and the standalone HTML dashboard; All details on every card.
+- Your own dashboards: charts over any field (bars, columns, donut, big number, top titles), with suggestions and per-chart filters; the Dashboard follows the search box.
+
+**Bug/Fix**
+- Metacritic, Rotten Tomatoes, box office and hand-typed values were missing in the new page after its scans.
+
 ## 0.5.0
 
 **Feature**

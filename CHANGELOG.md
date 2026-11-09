@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.5.0
+
+**Feature**
+- The new page (Start-MMLM.bat): Movies and TV Shows as poster walls or grids, the TV grid as Show > Season > Episode, title and show cards (save a card as a picture), Stats with click-to-filter charts, search, Sort By, pause switch and settings. It reads the libraries your scans saved and shares the window app's settings and token.
+- Ready for DashLauncher: dash.json and a dash backend (scan, badge for new titles, traffic counters, kill switch, updates). The same page runs as the launcher's Media tab once it is listed there.
+
+**Redesign**
+- The page uses the shared dash look and navigation bar, in light and dark.
+
+**Housekeeping**
+- Data logic moved into modules (MMLM.Library, MMLM.Plex, MMLM.Fetch) and the C# helper into src/Mmlm.Native.cs; the window app works as before.
+- Errors in the new page's backend go to a log file; headless tests for the backend and the page.
+
 ## 0.4.0
 
 **Feature**

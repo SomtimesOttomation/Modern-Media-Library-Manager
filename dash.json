@@ -1,8 +1,8 @@
 {
   "contract": 1,
   "id": "mmlm",
-  "name": "Library",
-  "title": "Modern Media Library Manager",
+  "name": "Media",
+  "title": "Media Library",
   "category": "Media",
   "kind": "library",
   "versionFile": "VERSION",

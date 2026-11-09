@@ -174,7 +174,7 @@ The app connects only to the places below. Nothing is sent anywhere else, and th
 
 | Connects to | When | What is sent or fetched | How to avoid it |
 | --- | --- | --- | --- |
-| **nuget.org** | First time the dashboard is shown in the app window, if the three WebView2 files are missing | Downloads the Microsoft.Web.WebView2 package and extracts three DLLs into `lib\` | Copy `Microsoft.Web.WebView2.Core.dll`, `Microsoft.Web.WebView2.WinForms.dll` and `WebView2Loader.dll` into `lib\` yourself; or use **Save HTML** and open the file in your browser |
+| **nuget.org** | First time the dashboard is shown in the app window, or the first time `Start-MMLM.bat` runs, if the three WebView2 files are missing | Downloads the Microsoft.Web.WebView2 package and extracts three DLLs into `lib\` | Copy `Microsoft.Web.WebView2.Core.dll`, `Microsoft.Web.WebView2.WinForms.dll` and `WebView2Loader.dll` into `lib\` yourself; or use **Save HTML** and open the file in your browser |
 | **PowerShell Gallery** | First local-folder scan, if the `Get-MediaInfo` module is not installed | Installs the module for the current user (Windows PowerShell may also offer to install its NuGet provider) | Install it yourself first: `Install-Module Get-MediaInfo -Scope CurrentUser`; Plex scans do not need it |
 | **datasets.imdbws.com** | **Fetch info**, about once a week | Downloads IMDb's public ratings file. Nothing about your library is sent | Do not use **Fetch info** |
 | **themoviedb.org** and **omdbapi.com** | **Fetch info**, only if you pasted a key | Titles, years and IMDb or TMDB ids, plus your own key | Leave the keys empty |

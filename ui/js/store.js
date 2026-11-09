@@ -22,7 +22,9 @@ export const state = {
   halted: false,
   query: '',              // the navigation bar's search box
   collections: [],        // { name, kind, ids:Set, has(r) } (filled from the window app's collections)
+  tool: null,             // the running tool (Fetch info, FEL check, export): { kind, running, pct, text } or its result
 };
+export let toast = null; export function setToast(fn) { toast = fn; }
 
 // ---- change notification (NBADash's) ----------------------------------------------------------------------
 const subs = new Set();
@@ -210,6 +212,8 @@ export async function savePlex(url, token) {
 // The live status button: same as the launcher's kill switch, started from inside the dash.
 export async function stopTraffic() { await bridge.request('traffic.stop'); state.halted = true; notify('traffic'); }
 export async function resumeTraffic() { await bridge.request('traffic.resume'); state.halted = false; notify('traffic'); }
+export const keysInfo = () => bridge.request('keys.get');
+export const saveKeys = (tmdb, omdb) => bridge.request('keys.set', { tmdb, omdb });
 export const openUrl = (url) => bridge.request('open.url', { url });
 export const savePicture = (name, png) => bridge.request('picture.save', { name, png }, 60000);
 
@@ -235,6 +239,7 @@ export async function init() {
   bridge.on('scan', onScan);
   bridge.on('library', onLibrary);
   bridge.on('update', onUpdate);
+  bridge.on('tool', (d) => { state.tool = d; notify('tool'); });
   bridge.on('update.dropped', (d) => { state.dropped = d; notify('dropped'); });
 
   state.ready = true;

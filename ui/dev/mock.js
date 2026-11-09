@@ -116,6 +116,13 @@ export async function request(cmd, args = {}) {
         related: libs.tv.filter((r) => r.Show !== args.show && r.Episode === 1 && r.Season === 1).slice(0, 8).map((r, i) => ({ key: 'r' + i, title: r.Show, year: r.Year, seasons: 2 + i, unwatched: i * 7, poster: r.Poster })) };
     }
     case 'image.data': return null;
+    case 'keys.get': case 'keys.set': return { tmdb: true, omdb: false };
+    case 'tools.start': {
+      let pct = 0; const t = setInterval(() => { pct += 25; if (pct < 100) emit('tool', { kind: args.kind, tab: args.tab, running: true, pct, text: 'Working on it...' });
+        else { clearInterval(t); emit('tool', { kind: args.kind, tab: args.tab, running: false, error: null, summary: args.kind === 'fel' ? 'Checked 3: 2 FEL, 1 MEL, 0 could not tell.' : `${(args.rids || []).length || 'All'} titles saved.`, path: /csv|html/.test(args.kind) ? `C:\\Users\\you\\Documents\\Modern Media Library Manager\\${args.name}.${args.kind}` : '', cancelled: false }); } }, 200);
+      return true;
+    }
+    case 'tools.cancel': case 'folder.show': return true;
     case 'collections.get': return collections;
     case 'collections.save': collections = args.collections; return collections;
     case 'summary.get': return { title: 'Recently added', items: [], updatedAt: null };

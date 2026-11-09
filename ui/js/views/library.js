@@ -5,6 +5,7 @@ import { h } from '../util.js';
 import { esc, num, fmtSize, hdrLabel, posterHtml, tileHtml, searchRows, chipsHtml, dedupe, fillWall, sortMenu } from '../common.js';
 import * as dashboard from './stats.js';
 import { collectionMenu } from './collections.js';
+import { toolsMenu, viewRids } from './tools.js';
 import { openCard } from './card.js';
 import { overlay } from './settings.js';
 import { vgrid } from './vgrid.js';
@@ -128,6 +129,7 @@ export function mount(ctx) {
     if (s.moviesSortRev) rows.reverse();
     if (mode === 'grid' && sort.col) sortByColumn(rows, sort.col, sort.dir, L);
     const hidden = before - rows.length;
+    viewRids.movies = rows;
     const total = L.rows.reduce((a, r) => a + num(r.FileSizeGB), 0);
     const head = h('div', { class: 'lib-head' },
       h('div', { class: 'lib-title' }, h('h1', null, 'Movies'),
@@ -135,6 +137,7 @@ export function mount(ctx) {
       h('div', { class: 'lib-tools' },
         h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: s.hideDupes ? true : null, onchange: (e) => S.saveSettings({ hideDupes: e.target.checked }).then(draw) }), 'Hide duplicates'),
         collectionMenu('movies'),
+        toolsMenu('movies'),
         sortMenu(MOVIE_SORTS, sortDef[0], !!s.moviesSortRev, (k, rev) => { sort = { col: '', dir: 1 }; S.saveSettings({ moviesSort: k, moviesSortRev: rev }).then(draw); }),
         mode === 'grid' ? h('button', { class: 'btn', type: 'button', onclick: () => chooseColumns(L, draw) }, 'Columns') : null,
         viewSeg(mode, 'moviesView', draw)));

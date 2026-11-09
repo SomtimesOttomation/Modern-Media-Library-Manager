@@ -42,6 +42,7 @@ $script:Exports = @{}
 $script:PageSettings = $null
 $script:UpdProc = $null
 $script:Series = $null
+$script:Tool = $null
 
 # the data modules, by full path (an already loaded copy is reused)
 foreach ($m0 in @('MMLM.Library.psm1', 'MMLM.Plex.psm1', 'MMLM.Fetch.psm1')) { Import-Module (Join-Path $PSScriptRoot $m0) -DisableNameChecking }
@@ -95,7 +96,7 @@ function Save-HostPlexSettings {
 
 # The page's own settings (theme, view and sort per tab, grid columns), kept apart from the app's settings.json.
 $script:PageDefaults = [ordered]@{ theme = 'system'; updateCheck = $false; moviesView = 'posters'; tvView = 'posters'; moviesSort = 'added'; tvSort = 'title'; moviesSortRev = $false; tvSortRev = $false
-    columns = @(); hideDupes = $false; posterScale = 100; widthPreset = 'full'; customWidth = $false; contentWidth = 0 }
+    columns = @(); hideDupes = $false; detectFel = $false; posterScale = 100; widthPreset = 'full'; customWidth = $false; contentWidth = 0 }
 function Read-PageSettings {
     $s = [ordered]@{}; foreach ($k in $script:PageDefaults.Keys) { $s[$k] = $script:PageDefaults[$k] }
     $p = Join-Path $script:AppData 'page-settings.json'
@@ -114,6 +115,7 @@ function Set-PageSetting {
         'moviesSortRev' { $Value = [bool]$Value; $true }
         'tvSortRev'   { $Value = [bool]$Value; $true }
         'customWidth' { $Value = [bool]$Value; $true }
+        'detectFel'   { $Value = [bool]$Value; $true }
         'posterScale' { $n = 0; if ([int]::TryParse([string]$Value, [ref]$n) -and $n -ge 50 -and $n -le 200) { $Value = $n; $true } else { $false } }
         'contentWidth' { $n = 0; if ([int]::TryParse([string]$Value, [ref]$n) -and $n -ge 0 -and $n -le 20000) { $Value = $n; $true } else { $false } }
         'widthPreset' { @('full', '16:9', '21:9', '32:9') -contains [string]$Value }
@@ -217,7 +219,7 @@ try {
         foreach ($r in [Mmlm.Native.Snapshot]::Load($Job.Snapshot)) { if ($r.PlexKey) { $prior[[string]$r.PlexKey] = $r } }
     }
     $use = $(if ($Job.Rebuild) { @{} } else { $prior })
-    $recs = @(Invoke-MmlmPlexScan -BaseUrl $Job.BaseUrl -Token $Job.Token -Movies (-not $tv) -Shows $tv -Rebuild ([bool]$Job.Rebuild) -DetectFel $false -Prior $use)
+    $recs = @(Invoke-MmlmPlexScan -BaseUrl $Job.BaseUrl -Token $Job.Token -Movies (-not $tv) -Shows $tv -Rebuild ([bool]$Job.Rebuild) -DetectFel ([bool]$Job.DetectFel) -Prior $use)
     if ($S.Cancel) { $S.Cancelled = $true; return }
     $new = @($recs | Where-Object { -not $prior.ContainsKey([string]$_.PlexKey) })
     Set-MmlmProgress -Text 'Saving...'
@@ -305,7 +307,7 @@ function Start-HostScan {
     $script:Sync = [hashtable]::Synchronized(@{ Text = 'Starting...'; Value = 0; Max = 0; Cancel = $false; Done = $false; Error = $null; PhaseLo = 0.0; PhaseHi = 1.0; Count = 0; New = 0; Cancelled = $false })
     $ctx = New-WorkerContext $script:Sync
     foreach ($d in $ctx.CacheFolder, $ctx.ThumbFolder) { if (-not (Test-Path -LiteralPath $d)) { New-Item -Path $d -ItemType Directory -Force | Out-Null } }
-    $job = @{ Kind = 'scan'; Tab = $Tab; Rebuild = $Rebuild; BaseUrl = $set.PlexUrl; Token = $token; Snapshot = (Get-SnapshotFile $Tab); CacheDir = $script:CacheDir; Hidden = $script:HiddenFields; MetaStore = $script:MetaStore }
+    $job = @{ Kind = 'scan'; Tab = $Tab; Rebuild = $Rebuild; DetectFel = [bool]$script:PageSettings.detectFel; BaseUrl = $set.PlexUrl; Token = $token; Snapshot = (Get-SnapshotFile $Tab); CacheDir = $script:CacheDir; Hidden = $script:HiddenFields; MetaStore = $script:MetaStore }
     $ps = [powershell]::Create()
     [void]$ps.AddScript($script:ScanScript).AddArgument(@(Get-HostModuleFiles)).AddArgument($ctx).AddArgument($job)
     $script:ScanPs = $ps
@@ -573,6 +575,176 @@ function Get-SeriesEvents {
     if ($j -ne $x.Last) { $x.Last = $j; Push-HostEvent 'series' $d }
 }
 
+# ---------------------------------------------------------------- tools: Fetch info, FEL/MEL probe, CSV and HTML export
+# One background job at a time. Each works on the titles the page names (its current view) or the whole tab.
+#   fetch: ratings, Metacritic, RT and box office from TMDB / OMDb / IMDb (your keys) into metadata\store.json, as the
+#          window app's Fetch info does. Only when you start it. Counts as data traffic.
+#   fel:   tells Dolby Vision FEL from MEL with ffmpeg + dovi_tool (lib folder), for dual-layer files this PC can open.
+#   csv / html: the titles as a spreadsheet, or as the old standalone dashboard page (posters inside), in
+#          Documents\Modern Media Library Manager. File locations are left out of both.
+$script:ToolScript = {
+    param($ModuleFiles, $Ctx, $Job)
+    foreach ($m in $ModuleFiles) { Import-Module $m -DisableNameChecking }
+    Set-MmlmContext -Values $Ctx; Set-MmlmPlexContext -Values $Ctx; Set-MmlmFetchContext -Values $Ctx
+    $S = $Ctx.Sync
+    try {
+        Initialize-MmlmNative
+        Set-MmlmProgress -Text 'Opening the library...'
+        $recs = @([Mmlm.Native.Snapshot]::Load($Job.Snapshot))
+        try { Merge-MmlmMetaStore -Records $recs -Path $Job.MetaStore } catch { }
+        $rid = { param($r) if ([string]$r.PlexKey) { 'p:' + [string]$r.PlexKey } elseif ([string]$r.FullPath) { 'h:' + (Get-MmlmStringHash ([string]$r.FullPath)).Substring(0, 16) } else { '' } }
+        $want = $null
+        if (@($Job.Rids).Count -gt 0) { $want = New-Object 'System.Collections.Generic.HashSet[string]'; foreach ($x in $Job.Rids) { [void]$want.Add([string]$x) } }
+        $idx = New-Object System.Collections.Generic.List[int]
+        for ($i = 0; $i -lt $recs.Count; $i++) { if ($null -eq $want -or $want.Contains((& $rid $recs[$i]))) { $idx.Add($i) } }
+        $outDir = [Environment]::GetFolderPath('MyDocuments')
+        $outDir = $(if ($outDir) { Join-Path $outDir 'Modern Media Library Manager' } else { Join-Path $Ctx.AppData 'Exports' })
+        $safe = (([string]$Job.Name) -replace '[^A-Za-z0-9 ._()-]', '').Trim(); if (-not $safe) { $safe = 'Library' }
+        switch ($Job.Kind) {
+            'fetch' {
+                $S.Partial = New-Object System.Collections.ArrayList
+                Invoke-MmlmMetadataScrape -Records $recs -Indexes $idx.ToArray() -TmdbKey $Job.TmdbKey -OmdbKey $Job.OmdbKey -Overwrite ([bool]$Job.Overwrite) -DataFolder $Job.DataFolder -StorePath $Job.MetaStore
+                $S.Summary = [string]$S.Summary
+                $S.Library = $true
+            }
+            'fel' {
+                $targets = @($idx | Where-Object { [string]$recs[$_].DVLayer -eq 'Dual layer' })
+                $tools = (Find-MmlmTool 'ffmpeg.exe') -and (Find-MmlmTool 'dovi_tool.exe')
+                if (-not $tools) { throw 'The FEL/MEL check needs ffmpeg.exe and dovi_tool.exe in the lib folder (or on PATH).' }
+                $fel = 0; $mel = 0; $unk = 0; $away = 0; $n = 0
+                foreach ($i in $targets) {
+                    if ($S.Cancel) { break }
+                    $n++; $r = $recs[$i]
+                    Set-MmlmProgress -Text ('Checking {0} of {1}: {2}' -f $n, $targets.Count, $r.Title) -Value $n -Max $targets.Count
+                    if (-not [string]$r.FullPath -or -not (Test-Path -LiteralPath ([string]$r.FullPath) -ErrorAction SilentlyContinue)) { $away++; continue }
+                    $t = Get-MmlmDolbyVisionLayerType -Path ([string]$r.FullPath) -DurationSec ([int]([double]$r.RuntimeMin * 60))
+                    if ($t) {
+                        Set-MmlmRecField $r 'DVLayer' $t
+                        Set-MmlmRecField $r 'HDRStack' (([string]$r.HDRStack) -replace ' \(dual layer\)', (' ' + $t))
+                        if ($t -eq 'FEL') { $fel++ } else { $mel++ }
+                    } else { $unk++ }
+                }
+                if ($fel + $mel -gt 0) { [Mmlm.Native.Snapshot]::Save([object[]]$recs, $Job.Snapshot, ('{0}|{1}' -f $recs.Count, (Get-Date).ToString('yyyy-MM-dd HH:mm'))) }
+                $S.Summary = $(if ($targets.Count -eq 0) { 'No dual-layer Dolby Vision titles here: nothing to check.' } else {
+                    ('Checked {0}: {1} FEL, {2} MEL, {3} could not tell{4}.' -f ($n - $away), $fel, $mel, $unk, $(if ($away) { ", $away not reachable from this PC" } else { '' })) })
+                $S.Library = ($fel + $mel -gt 0)
+            }
+            'csv' {
+                if (-not (Test-Path -LiteralPath $outDir)) { New-Item -ItemType Directory -Path $outDir -Force | Out-Null }
+                $cols = @(@($Job.Columns) | Where-Object { $Job.Hidden -notcontains $_ -and ($Ctx.Fields | Where-Object Name -eq $_) })
+                if ($cols.Count -eq 0) { $cols = @($Ctx.Fields | Where-Object { $_.Group -ne 'Clues' -and $Job.Hidden -notcontains $_.Name } | ForEach-Object { $_.Name }) }
+                if ($cols -notcontains 'Title') { $cols = @('Title') + $cols }
+                $file = Join-Path $outDir ($safe + '.csv'); $k = 2
+                while (Test-Path -LiteralPath $file) { $file = Join-Path $outDir ('{0} ({1}).csv' -f $safe, $k); $k++ }
+                @($idx | ForEach-Object { $recs[$_] | Select-Object -Property $cols }) | Export-Csv -LiteralPath $file -NoTypeInformation -Encoding UTF8
+                $S.Path = $file; $S.Summary = ('{0} titles saved.' -f $idx.Count)
+            }
+            'html' {
+                if (-not (Test-Path -LiteralPath $outDir)) { New-Item -ItemType Directory -Path $outDir -Force | Out-Null }
+                $tpl = Join-Path $Ctx.AppRoot 'dashboard-template.html'
+                if (-not (Test-Path -LiteralPath $tpl)) { throw 'dashboard-template.html is missing from the program folder.' }
+                $clues = @($Ctx.Fields | Where-Object { $_.Group -eq 'Clues' } | ForEach-Object { $_.Name })
+                $rows = New-Object System.Collections.Generic.List[object]; $n = 0
+                foreach ($i in $idx) {
+                    $n++; $r = $recs[$i]
+                    if (($n % 25) -eq 0) { Set-MmlmProgress -Text ('Building the page: {0} of {1}' -f $n, $idx.Count) -Value $n -Max $idx.Count }
+                    $row = [ordered]@{}
+                    foreach ($p in $r.PSObject.Properties) { if ($Job.Hidden -notcontains $p.Name -and $clues -notcontains $p.Name) { $row[$p.Name] = $p.Value } }
+                    $row['Poster'] = ''
+                    $pp = [string]$r.PosterPath
+                    if ($pp) {
+                        $leaf = $(if ($pp.StartsWith($Ctx.ThumbFolder, [StringComparison]::OrdinalIgnoreCase)) { [IO.Path]::GetFileName($pp) } else { (Get-MmlmStringHash $pp) + [IO.Path]::GetExtension($pp).ToLowerInvariant() })
+                        $th = Join-Path $Job.CacheDir ('thumbs\' + $leaf)
+                        if (Test-Path -LiteralPath $th) { $row['Poster'] = 'data:image/jpeg;base64,' + [Convert]::ToBase64String([IO.File]::ReadAllBytes($th)) }
+                    }
+                    $rows.Add([pscustomobject]$row)
+                }
+                $json = (ConvertTo-Json -InputObject $rows.ToArray() -Depth 4 -Compress).Replace('</', '<\/')
+                $meta = ConvertTo-Json -Compress -InputObject @{ generated = (Get-Date -Format 'yyyy-MM-dd HH:mm'); library = [string]$Job.Library; collection = [string]$Job.Name; dateOrder = $false }
+                $html = [IO.File]::ReadAllText($tpl, [Text.Encoding]::UTF8).Replace('__META__', $meta).Replace('__DATA__', $json)
+                $file = Join-Path $outDir ($safe + '.html'); $k = 2
+                while (Test-Path -LiteralPath $file) { $file = Join-Path $outDir ('{0} ({1}).html' -f $safe, $k); $k++ }
+                [IO.File]::WriteAllText($file, $html, (New-Object Text.UTF8Encoding($false)))
+                $S.Path = $file; $S.Summary = ('{0} titles in one page (posters included).' -f $idx.Count)
+            }
+        }
+    }
+    catch { $S.Error = $_.Exception.Message }
+    finally { $S.Done = $true }
+}
+
+function Read-HostKeys {
+    # the TMDB / OMDb keys the window app saved (or the page's Settings > Data)
+    $p = Join-Path $script:AppData 'settings.json'
+    $k = @{ Tmdb = ''; Omdb = '' }
+    if (Test-Path -LiteralPath $p) {
+        try {
+            $j = [IO.File]::ReadAllText($p) | ConvertFrom-Json
+            if ($j.TmdbKeyProtected) { $k.Tmdb = Unprotect-MmlmPlexToken ([string]$j.TmdbKeyProtected) }
+            if ($j.OmdbKeyProtected) { $k.Omdb = Unprotect-MmlmPlexToken ([string]$j.OmdbKeyProtected) }
+        } catch { Write-HostLog 'keys' $_ }
+    }
+    $k
+}
+function Save-HostKeys {
+    # Writes only the two key fields (encrypted for this Windows user, as the window app does); other keys stay.
+    param([string]$Tmdb, [string]$Omdb)
+    $p = Join-Path $script:AppData 'settings.json'
+    $o = [ordered]@{}
+    if (Test-Path -LiteralPath $p) { try { foreach ($pr in ([IO.File]::ReadAllText($p) | ConvertFrom-Json).PSObject.Properties) { $o[$pr.Name] = $pr.Value } } catch { Write-HostLog 'settings read' $_ } }
+    if ($null -ne $Tmdb) { $o['TmdbKeyProtected'] = $(if ($Tmdb) { Protect-MmlmPlexToken $Tmdb } else { '' }) }
+    if ($null -ne $Omdb) { $o['OmdbKeyProtected'] = $(if ($Omdb) { Protect-MmlmPlexToken $Omdb } else { '' }) }
+    [IO.File]::WriteAllText($p, (ConvertTo-Json -InputObject $o -Depth 6), (New-Object Text.UTF8Encoding($false)))
+}
+function Start-HostTool {
+    param($A)
+    $kind = [string]$A.kind
+    if (@('fetch', 'fel', 'csv', 'html') -notcontains $kind) { throw 'Unknown tool.' }
+    if ($script:Tool -and -not $script:Tool.Sync.Done) { throw 'Another tool is still running. Wait for it or cancel it.' }
+    $tab = $(if ([string]$A.tab -eq 'tv') { 'tv' } else { 'movies' })
+    if (-not (Test-Path -LiteralPath (Get-SnapshotFile $tab))) { throw 'Scan this tab first.' }
+    if (@('fetch', 'fel') -contains $kind -and $script:Traffic.Halted) { throw 'Traffic is paused. Resume it first.' }
+    $job = @{ Kind = $kind; Tab = $tab; Snapshot = (Get-SnapshotFile $tab); CacheDir = $script:CacheDir; Hidden = $script:HiddenFields; MetaStore = $script:MetaStore
+        Rids = @(@($A.rids) | ForEach-Object { [string]$_ } | Where-Object { $_ -match '^(p|h):' }); Columns = @(@($A.columns) | ForEach-Object { [string]$_ })
+        Name = [string]$A.name; Library = $(if ($tab -eq 'tv') { 'TV Shows' } else { 'Movies' }); Overwrite = [bool]$A.overwrite; DataFolder = (Join-Path $script:AppData 'datasets') }
+    if ($kind -eq 'fetch') {
+        if ($tab -eq 'tv') { throw 'Fetch info works on movies (as in the window app).' }
+        $k = Read-HostKeys
+        if (-not $k.Tmdb -and -not $k.Omdb) { throw 'Add a TMDB or OMDb key in Settings > Data first.' }
+        $job.TmdbKey = $k.Tmdb; $job.OmdbKey = $k.Omdb
+    }
+    $sync = [hashtable]::Synchronized(@{ Text = 'Starting...'; Value = 0; Max = 0; Cancel = $false; Done = $false; Error = $null; PhaseLo = 0.0; PhaseHi = 1.0; Summary = ''; Path = ''; Library = $false; Total = 0; Partial = $null })
+    $ps = [powershell]::Create()
+    [void]$ps.AddScript($script:ToolScript).AddArgument(@(Get-HostModuleFiles)).AddArgument((New-WorkerContext $sync)).AddArgument($job)
+    $script:Tool = @{ Ps = $ps; Async = $ps.BeginInvoke(); Sync = $sync; Kind = $kind; Tab = $tab; Last = '' }
+    $true
+}
+function Get-ToolEvents {
+    $x = $script:Tool
+    if (-not $x) { return }
+    $s = $x.Sync
+    if ($s.Done) {
+        $script:Tool = $null
+        try { $x.Ps.Dispose() } catch { Write-HostLog 'tool dispose' $_ }
+        Push-HostEvent 'tool' ([ordered]@{ kind = $x.Kind; tab = $x.Tab; running = $false; error = $s.Error; summary = [string]$s.Summary; path = [string]$s.Path; cancelled = [bool]$s.Cancel })
+        if ($s.Library -and -not $s.Error) { Push-HostEvent 'library' @{ tab = $x.Tab; ready = $true; error = $null } }
+        return
+    }
+    $pct = $(if ($s.Max -gt 0) { [int](100 * $s.Value / $s.Max) } else { 0 })
+    $d = [ordered]@{ kind = $x.Kind; tab = $x.Tab; running = $true; pct = $pct; text = [string]$s.Text }
+    $j = ConvertTo-PageJson $d
+    if ($j -ne $x.Last) { $x.Last = $j; Push-HostEvent 'tool' $d }
+}
+function Show-HostExport {
+    # "Show in folder": only files in the export folder.
+    param([string]$Path)
+    $docs = [Environment]::GetFolderPath('MyDocuments')
+    $dir = $(if ($docs) { Join-Path $docs 'Modern Media Library Manager' } else { Join-Path $script:AppData 'Exports' })
+    $full = [IO.Path]::GetFullPath($Path)
+    if (-not $full.StartsWith($dir + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $full)) { throw 'Only exported files can be shown.' }
+    Start-Process -FilePath 'explorer.exe' -ArgumentList ('/select,"{0}"' -f $full)
+}
+
 # ---------------------------------------------------------------- collections (the window app's collections.json, shared)
 # A file path never reaches the page: local ids ("f:<path>") go out as "h:<hash>" and come back through the id maps.
 function ConvertTo-PageId { param([string]$Id) if ($Id.StartsWith('f:')) { 'h:' + (Get-MmlmStringHash $Id.Substring(2)).Substring(0, 16) } else { $Id } }
@@ -765,6 +937,15 @@ $script:Commands = [ordered]@{
             $f = Join-Path $script:CacheDir $rel
             if (-not (Test-Path -LiteralPath $f) -or (Get-Item -LiteralPath $f).Length -gt 2MB) { return 'null' }
             ConvertTo-PageJson ('data:image/jpeg;base64,' + [Convert]::ToBase64String([IO.File]::ReadAllBytes($f))) } }
+    'tools.start'    = @{ Fetch = $false; Run = { param($a) ConvertTo-PageJson (Start-HostTool $a) } }
+    'tools.cancel'   = @{ Fetch = $false; Run = { param($a) if ($script:Tool) { $script:Tool.Sync.Cancel = $true }; 'true' } }
+    'keys.get'       = @{ Fetch = $false; Run = { param($a) $k = Read-HostKeys; ConvertTo-PageJson @{ tmdb = [bool]$k.Tmdb; omdb = [bool]$k.Omdb } } }
+    'keys.set'       = @{ Fetch = $false; Run = {
+            param($a)
+            $t = $(if ($null -ne $a.tmdb) { ([string]$a.tmdb).Trim() } else { $null }); $o = $(if ($null -ne $a.omdb) { ([string]$a.omdb).Trim() } else { $null })
+            Save-HostKeys -Tmdb $t -Omdb $o
+            $k = Read-HostKeys; ConvertTo-PageJson @{ tmdb = [bool]$k.Tmdb; omdb = [bool]$k.Omdb } } }
+    'folder.show'    = @{ Fetch = $false; Run = { param($a) Show-HostExport ([string]$a.path); 'true' } }
     'collections.get' = @{ Fetch = $false; Run = { param($a) ConvertTo-Json -InputObject (Get-PageCollections) -Depth 6 -Compress } }
     'collections.save' = @{ Fetch = $false; Run = { param($a) Save-PageCollections $a.collections; ConvertTo-Json -InputObject (Get-PageCollections) -Depth 6 -Compress } }
     'open.url'       = @{ Fetch = $false; Run = { param($a) Open-HostUrl ([string]$a.url); 'true' } }
@@ -841,6 +1022,7 @@ function Receive-DashEvents {
     }
     try { Get-UpdateEvents; Watch-DropFolder } catch { Write-HostLog 'updates' $_ }
     try { Get-SeriesEvents } catch { Write-HostLog 'series' $_ }
+    try { Get-ToolEvents } catch { Write-HostLog 'tools' $_ }
     # one drain for every event source; whatever is over the cap waits for the next call (callers wrap the result in @())
     try {
         $msg = $null
@@ -871,6 +1053,7 @@ function Stop-DashTraffic {
     $script:Traffic.Halted = $true
     Stop-HostScan -Wait 0
     if ($script:Series -and $script:Series.Sync) { $script:Series.Sync.Cancel = $true }
+    if ($script:Tool -and @('fetch', 'fel') -contains $script:Tool.Kind) { $script:Tool.Sync.Cancel = $true }
     Send-HostEventNow 'traffic' @{ stopped = $true }
 }
 

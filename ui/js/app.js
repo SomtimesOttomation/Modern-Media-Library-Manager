@@ -16,11 +16,12 @@ const $ = (s) => document.querySelector(s);
 const view = $('#view');
 let current = null; // { mod, ctx, cleanup }
 
-export function toast(msg) {
-  const t = h('div', { class: 'toast' }, msg);
+export function toast(msg, action) {
+  const t = h('div', { class: 'toast' }, msg, action ? h('button', { class: 'btn', type: 'button', style: { marginLeft: '10px' }, onclick: () => { action.fn(); t.remove(); } }, action.label) : null);
   $('#toasts').append(t);
-  setTimeout(() => t.remove(), 4000);
+  setTimeout(() => t.remove(), action ? 12000 : 4000);
 }
+S.setToast(toast);
 
 export function currentTab() {
   const name = location.hash.replace(/^#\/?/, '').split('/')[0];
@@ -62,6 +63,26 @@ function updateToast() {
 // ---- scan progress strip --------------------------------------------------------------------------------------
 let lastRunning = false;
 const tabName = (t) => (t === 'tv' ? 'TV Shows' : 'Movies');
+// A tool (Fetch info, FEL check, export) uses the same strip when no scan is running.
+const TOOL_NAMES = { fetch: 'Fetch info', fel: 'FEL / MEL check', csv: 'CSV export', html: 'HTML export' };
+let toolShown = false;
+function toolBar() {
+  const t = S.state.tool, bar = $('#syncbar');
+  if (!t || S.state.scan.running) return;
+  const fill = bar.querySelector('.syncbar-fill'), txt = bar.querySelector('.syncbar-text');
+  if (t.running) {
+    toolShown = true; bar.hidden = false; bar.classList.remove('fail'); bar.classList.toggle('indeterminate', !t.pct);
+    fill.style.width = `${t.pct || 0}%`;
+    txt.textContent = `${TOOL_NAMES[t.kind] || 'Working'} \u00b7 ${t.pct ? t.pct + '% \u00b7 ' : ''}${t.text || ''}`;
+  } else if (toolShown) {
+    toolShown = false;
+    bar.classList.remove('indeterminate'); bar.classList.toggle('fail', !!t.error); fill.style.width = '100%';
+    txt.textContent = t.error ? `${TOOL_NAMES[t.kind]} failed \u00b7 ${t.error}` : t.cancelled ? `${TOOL_NAMES[t.kind]} stopped` : `${TOOL_NAMES[t.kind]} \u00b7 ${t.summary || 'done'}`;
+    if (t.path) toast(`Saved: ${t.path}`, S.state.host ? { label: 'Show in folder', fn: () => bridge.request('folder.show', { path: t.path }).catch((e) => toast(e.message)) } : null);
+    else toast(txt.textContent);
+    setTimeout(() => { if (!S.state.scan.running && !(S.state.tool && S.state.tool.running)) bar.hidden = true; }, 6000);
+  }
+}
 function syncBar() {
   const bar = $('#syncbar'), sc = S.state.scan;
   const fill = bar.querySelector('.syncbar-fill'), txt = bar.querySelector('.syncbar-text');
@@ -254,6 +275,7 @@ S.subscribe((topics) => {
   if (topics.has('theme') || topics.has('settings')) themeIcon();
   if (topics.has('traffic')) { haltBar(); liveStatus(); }
   if (topics.has('dropped')) dropBar();
+  if (topics.has('tool')) toolBar();
   if (topics.has('scan')) { syncBar(); liveStatus(); if (!S.state.scan.running) $('#btn-refresh').classList.remove('spin'); else $('#btn-refresh').classList.add('spin'); }
   if (topics.has('counts') || topics.has('library')) { liveStatus(); navCounts(); }
   if (topics.has('update')) { versionChip(); updateToast(); }

@@ -5,6 +5,7 @@ import { h } from '../util.js';
 import { esc, num, fmtSize, posterHtml, tileHtml, searchRows, chipsHtml, fillWall, sortMenu } from '../common.js';
 import * as dashboard from './stats.js';
 import { collectionMenu } from './collections.js';
+import { toolsMenu, viewRids } from './tools.js';
 import * as series from './series.js';
 import { openCard, openShow, showSummary } from './card.js';
 import { vgrid } from './vgrid.js';
@@ -56,6 +57,7 @@ export function mount(ctx) {
     let list = all;
     let epFilter = null, chipList = [];
     if (q) { const f = searchRows(L.rows, q, L, S.state.collections); chipList = f.chips; const hit = new Set(f.rows); epFilter = hit; list = all.filter((sh) => sh.eps.some((e) => hit.has(e))); }
+    viewRids.tv = epFilter ? [...epFilter] : null;
     const sortDef = TV_SORTS.find((x) => x[0] === s.tvSort) || TV_SORTS[0];
     list = list.slice().sort(sortDef[2]);
     if (s.tvSortRev) list.reverse();
@@ -64,6 +66,7 @@ export function mount(ctx) {
         h('small', null, `${list.length.toLocaleString()}${list.length !== all.length ? ' of ' + all.length.toLocaleString() : ''} shows · ${L.rows.length.toLocaleString()} episodes · ${fmtSize(L.rows.reduce((a, r) => a + num(r.FileSizeGB), 0))}`)),
       h('div', { class: 'lib-tools' },
         collectionMenu('tv'),
+        toolsMenu('tv'),
         sortMenu(TV_SORTS, sortDef[0], !!s.tvSortRev, (k, rev) => S.saveSettings({ tvSort: k, tvSortRev: rev }).then(draw)),
         mode === 'grid' ? h('button', { class: 'btn', type: 'button', onclick: () => chooseColumns(L, draw) }, 'Columns') : null,
         viewSeg(mode, 'tvView', draw)));

@@ -59,6 +59,21 @@ $cols[0].items += [pscustomobject]@{ ids = @('p:102'); title = 'Movie 2'; year =
 $saved = Cmd 19 'collections.save' @{ collections = $cols }
 $file = [IO.File]::ReadAllText((Join-Path $data 'collections.json'))
 Check ($file -match 'D:\\\\Films\\\\Local.mkv' -and $file -match 'p:102' -and $file -match '"Type":\s*"rule"') 'saving from the page keeps the window app''s ids and format'
+function Wait-Tool { $all = ''; for ($k = 0; $k -lt 300; $k++) { $all += (@(Receive-DashEvents) -join ''); if ($all -match '"event":"tool","data":\{[^}]*"running":false') { return $all }; Start-Sleep -Milliseconds 100 }; $all }
+$env:USERPROFILE = $data; $env:HOME = $data
+Check ((Cmd 24 'tools.start' @{ kind = 'csv'; tab = 'movies'; rids = @('p:101', 'p:102'); name = 'Two films'; columns = @('Year', 'Genre', 'FullPath') }) -match '"ok":true') 'CSV export starts'
+$te = Wait-Tool
+$csvPath = ([regex]::Match($te, '"path":"([^"]+)"').Groups[1].Value) -replace '\\\\', '\'
+$csv = $(if ($csvPath -and (Test-Path -LiteralPath $csvPath)) { [IO.File]::ReadAllText($csvPath) } else { '' })
+Check ($csv -match 'Movie 1' -and $csv -match 'Movie 2' -and $csv -notmatch 'Movie 3' -and $csv -notmatch 'FullPath|/m/') 'CSV has the chosen titles and columns, no file paths'
+Check ((Cmd 25 'tools.start' @{ kind = 'html'; tab = 'movies'; name = 'All films' }) -match '"ok":true') 'HTML export starts'
+$te = Wait-Tool
+$htmlPath = ([regex]::Match($te, '"path":"([^"]+)"').Groups[1].Value) -replace '\\\\', '\'
+$html = $(if ($htmlPath -and (Test-Path -LiteralPath $htmlPath)) { [IO.File]::ReadAllText($htmlPath) } else { '' })
+Check ($html -match 'Movie 7' -and $html -match 'data:image/jpeg;base64' -and $html -notmatch '__DATA__|/m/Movie') 'HTML dashboard has every title with posters inside, no file paths'
+Check ((Cmd 26 'tools.start' @{ kind = 'fetch'; tab = 'movies' }) -match 'Add a TMDB or OMDb key') 'Fetch info asks for a key first'
+[void](Cmd 27 'tools.start' @{ kind = 'fel'; tab = 'movies' }); $te = Wait-Tool
+Check ($te -match 'No dual-layer|needs ffmpeg') 'FEL/MEL check runs (nothing to check here)'
 [void](Cmd 3 'scan.start' @{ tab = 'tv' }); $e = Wait-Scan
 Check ($e -match '"count":10') 'TV scan finished with 10 episodes'
 $sr = Cmd 20 'series.open' @{ show = 'Show A'; ep = '1001' }

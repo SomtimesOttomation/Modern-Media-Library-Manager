@@ -10,6 +10,9 @@ $data = Join-Path $env:LOCALAPPDATA 'Modern-Media-Library-Manager'
 Remove-Item -LiteralPath (Join-Path $data 'Library') -Recurse -Force -ErrorAction SilentlyContinue   # start from an empty library every run
 New-Item -ItemType Directory -Path $data -Force | Out-Null
 [IO.File]::WriteAllText((Join-Path $data 'settings.json'), '{"PlexUrl":"http://127.0.0.1:32499","PlexTokenProtected":""}')
+# a Metacritic score saved the way Fetch info saves it, for "Movie 1" (2001)
+New-Item -ItemType Directory -Path (Join-Path $data 'metadata') -Force | Out-Null
+[IO.File]::WriteAllText((Join-Path $data 'metadata\store.json'), '{"t:movie 1|2001":{"Manual":{},"Scraped":{"Metascore":74},"Sources":{"Metascore":"OMDb"},"Force":[],"At":"2026-11-08"}}')
 Import-Module (Join-Path $root 'modules\MMLM.Host.psm1') -DisableNameChecking
 $posted = New-Object System.Collections.Generic.List[string]
 $ctx = [pscustomobject]@{ Mode = 'standalone'; Root = $root; Post = { param($j) $posted.Add($j) }.GetNewClosure(); Close = { }; Relaunch = ''; HostPid = $PID; Theme = ''; LauncherVersion = ''; Debug = $true }
@@ -27,6 +30,16 @@ Check ((Cmd 2 'summary.get' @{ tab = 'movies' }) -match 'mmlm.cache/thumbs/') 's
 $lib = Cmd 9 'library.get' @{ tab = 'movies' }
 Check ($lib -match '"rows":\[\[' -and $lib -match '"Poster"') 'library.get sends the movie rows with poster links'
 Check ($lib -notmatch 'FullPath|PosterPath|Directory') 'no file paths reach the page'
+$fn = @(($lib | ConvertFrom-Json).data.fields.n); $mi = [array]::IndexOf($fn, 'Metascore'); $ti = [array]::IndexOf($fn, 'Title')
+function Find-Row($json, $title) { foreach ($r in ($json | ConvertFrom-Json).data.rows) { if ($r[$ti] -eq $title) { return , $r } } }
+$m1 = Find-Row $lib 'Movie 1'
+Check ($m1[$mi] -eq 74) 'fetched Metacritic score reaches the page after a scan'
+Start-Sleep -Milliseconds 1100; [IO.File]::WriteAllText((Join-Path $data 'metadata\store.json'), '{"t:movie 1|2001":{"Manual":{"Metascore":81},"Scraped":{"Metascore":74},"Sources":{"Metascore":"OMDb"},"Force":[],"At":"2026-11-08"}}')
+Check ((Cmd 16 'library.get' @{ tab = 'movies' }) -match '"pending":true') 'a score edited in the window app makes the page copy rebuild'
+$ev = ''; for ($k = 0; $k -lt 300 -and $ev -notmatch '"event":"library"'; $k++) { $ev += (@(Receive-DashEvents) -join ''); Start-Sleep -Milliseconds 100 }
+$lib2 = Cmd 17 'library.get' @{ tab = 'movies' }
+$m1 = Find-Row $lib2 'Movie 1'
+Check ($m1[$mi] -eq 81) 'and the edited score shows'
 Remove-Item -LiteralPath (Join-Path $data 'Dashboard\library-movies.json') -Force
 Check ((Cmd 10 'library.get' @{ tab = 'movies' }) -match '"pending":true') 'a missing page copy is rebuilt from the snapshot'
 $ev = ''; for ($k = 0; $k -lt 300 -and $ev -notmatch '"event":"library"'; $k++) { $ev += (@(Receive-DashEvents) -join ''); Start-Sleep -Milliseconds 100 }

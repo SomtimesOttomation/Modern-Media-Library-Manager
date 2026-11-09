@@ -771,6 +771,46 @@ function Read-MmlmMetaStore {
     $store
 }
 
+function Merge-MmlmMetaStore {
+    # Applies the store to freshly scanned records (the window app after every scan; the dash backend in its scan and when it prepares the page).
+    # A title can be filed under several keys (IMDb id, TMDB id, title+year): all of them apply, fetched values first, typed-in values last.
+    param([object[]]$Records, [string]$Path)
+    $store = Read-MmlmMetaStore -Path $Path
+    if ($store.Count -eq 0) { return }
+    foreach ($rec in $Records) {
+        $entries = @()
+        foreach ($k in (Get-MmlmMetaKeys $rec)) { if ($store.ContainsKey($k)) { $entries += , $store[$k] } }
+        if ($entries.Count -eq 0) { continue }
+        [array]::Reverse($entries)                      # weakest key first, so the best key has the last word
+        $manualNames = @{}
+        foreach ($entry in $entries) { foreach ($n in $entry.Manual.Keys) { $manualNames[$n] = $true } }
+        $notes = @()
+        foreach ($entry in $entries) {
+            foreach ($name in @($entry.Scraped.Keys)) {
+                if ($manualNames.ContainsKey($name)) { continue }
+                $cur = $rec.$name
+                if ((Test-MmlmValueEmpty $cur) -or ($entry.Force -contains $name)) {
+                    $f = $script:Fields | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+                    if ($null -eq $f) { continue }
+                    try { Set-MmlmRecField $rec $name ([Convert]::ChangeType($entry.Scraped[$name], $script:TypeMap[$f.Type])) } catch { continue }
+                    $notes += ('{0}: {1}' -f $name, $entry.Sources[$name])
+                    if ($name -eq 'Rating') { Set-MmlmRecField $rec 'RatingSource' ([string]$entry.Sources[$name]) }
+                }
+            }
+        }
+        foreach ($entry in $entries) {
+            foreach ($name in @($entry.Manual.Keys)) {
+                $f = $script:Fields | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+                if ($null -eq $f) { continue }
+                try { Set-MmlmRecField $rec $name ([Convert]::ChangeType($entry.Manual[$name], $script:TypeMap[$f.Type])) } catch { continue }
+                $notes += ('{0}: manual' -f $name)
+                if ($name -eq 'Rating') { Set-MmlmRecField $rec 'RatingSource' '' }
+            }
+        }
+        if ($notes.Count -gt 0) { Set-MmlmRecField $rec 'MetaSources' ($notes -join '; ') }
+    }
+}
+
 function Write-MmlmMetaStore {
     param([string]$Path, [hashtable]$Store)
     $dir = Split-Path -Parent $Path
@@ -1000,6 +1040,7 @@ Export-ModuleMember -Function @(
     'Get-MmlmMetaKeys',
     'Read-MmlmMetaStore',
     'Write-MmlmMetaStore',
+    'Merge-MmlmMetaStore',
     'Invoke-MmlmFolderScan',
     'Set-MmlmProgress',
     'Initialize-MmlmNative',

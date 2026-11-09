@@ -25,6 +25,7 @@ $script:Root = Split-Path $PSScriptRoot
 $script:Mutex = $null
 $script:Version = '0.0.0'
 $script:AppData = Join-Path $env:LOCALAPPDATA $script:AppName
+$script:MetaStore = Join-Path $script:AppData 'metadata\store.json'      # fetched + hand-typed values (shared with the window app)
 $script:CacheDir = ''
 $script:WebViewDataDir = ''
 $script:Settings = $null
@@ -186,6 +187,7 @@ try {
         # no scan: turn the saved snapshot into the page's copy
         Set-MmlmProgress -Text 'Opening the library...'
         $recs = @([Mmlm.Native.Snapshot]::Load($Job.Snapshot))
+        try { Merge-MmlmMetaStore -Records $recs -Path $Job.MetaStore } catch { }      # scores fetched or typed in since the scan
         Export-PageLibrary -Recs $recs -Tab $Job.Tab
         $S.Count = $recs.Count
         return
@@ -203,6 +205,7 @@ try {
     Set-MmlmProgress -Text 'Saving...'
     $dir = Split-Path -Parent $Job.Snapshot
     if (-not (Test-Path -LiteralPath $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
+    try { Merge-MmlmMetaStore -Records $recs -Path $Job.MetaStore } catch { }          # fetched scores (Metacritic, RT, box office) and hand edits
     [Mmlm.Native.Snapshot]::Save([object[]]$recs, $Job.Snapshot, ('{0}|{1}' -f $recs.Count, (Get-Date).ToString('yyyy-MM-dd HH:mm')))
     Export-PageLibrary -Recs $recs -Tab $Job.Tab
     # Today-page card: the six most recently added titles (episodes collapse to their show), posters copied into the cache dir
@@ -250,7 +253,7 @@ function Start-HostExport {
     param([ValidateSet('movies', 'tv')][string]$Tab)
     if ($script:Exports.ContainsKey($Tab)) { return }
     $sync = [hashtable]::Synchronized(@{ Text = 'Opening the library...'; Value = 0; Max = 0; Cancel = $false; Done = $false; Error = $null; PhaseLo = 0.0; PhaseHi = 1.0; Count = 0; New = 0; Cancelled = $false })
-    $job = @{ Kind = 'export'; Tab = $Tab; Snapshot = (Get-SnapshotFile $Tab); CacheDir = $script:CacheDir; Hidden = $script:HiddenFields }
+    $job = @{ Kind = 'export'; Tab = $Tab; Snapshot = (Get-SnapshotFile $Tab); CacheDir = $script:CacheDir; Hidden = $script:HiddenFields; MetaStore = $script:MetaStore }
     $ps = [powershell]::Create()
     [void]$ps.AddScript($script:ScanScript).AddArgument(@(Get-HostModuleFiles)).AddArgument((New-WorkerContext $sync)).AddArgument($job)
     $script:Exports[$Tab] = @{ Ps = $ps; Async = $ps.BeginInvoke(); Sync = $sync }
@@ -262,7 +265,10 @@ function Get-LibraryState {
     $snap = Get-SnapshotFile $Tab
     $page = Join-Path $script:CacheDir ('library-' + $Tab + '.json')
     if (-not (Test-Path -LiteralPath $snap)) { return $(if (Test-Path -LiteralPath $page) { 'ready' } else { 'empty' }) }
-    if ((Test-Path -LiteralPath $page) -and (Get-Item -LiteralPath $page).LastWriteTimeUtc -ge (Get-Item -LiteralPath $snap).LastWriteTimeUtc) { return 'ready' }
+    # stale when the scan or the saved scores (Fetch info, Edit info in the window app) are newer than the page's copy
+    $newest = (Get-Item -LiteralPath $snap).LastWriteTimeUtc
+    if (Test-Path -LiteralPath $script:MetaStore) { $m = (Get-Item -LiteralPath $script:MetaStore).LastWriteTimeUtc; if ($m -gt $newest) { $newest = $m } }
+    if ((Test-Path -LiteralPath $page) -and (Get-Item -LiteralPath $page).LastWriteTimeUtc -ge $newest) { return 'ready' }
     'stale'
 }
 
@@ -281,7 +287,7 @@ function Start-HostScan {
     $script:Sync = [hashtable]::Synchronized(@{ Text = 'Starting...'; Value = 0; Max = 0; Cancel = $false; Done = $false; Error = $null; PhaseLo = 0.0; PhaseHi = 1.0; Count = 0; New = 0; Cancelled = $false })
     $ctx = New-WorkerContext $script:Sync
     foreach ($d in $ctx.CacheFolder, $ctx.ThumbFolder) { if (-not (Test-Path -LiteralPath $d)) { New-Item -Path $d -ItemType Directory -Force | Out-Null } }
-    $job = @{ Kind = 'scan'; Tab = $Tab; Rebuild = $Rebuild; BaseUrl = $set.PlexUrl; Token = $token; Snapshot = (Get-SnapshotFile $Tab); CacheDir = $script:CacheDir; Hidden = $script:HiddenFields }
+    $job = @{ Kind = 'scan'; Tab = $Tab; Rebuild = $Rebuild; BaseUrl = $set.PlexUrl; Token = $token; Snapshot = (Get-SnapshotFile $Tab); CacheDir = $script:CacheDir; Hidden = $script:HiddenFields; MetaStore = $script:MetaStore }
     $ps = [powershell]::Create()
     [void]$ps.AddScript($script:ScanScript).AddArgument(@(Get-HostModuleFiles)).AddArgument($ctx).AddArgument($job)
     $script:ScanPs = $ps

@@ -1,10 +1,30 @@
 /* Modern Media Library Manager: the library views on top of the shared dash styles (app.css, unchanged apart from the
    accent colours). Every colour comes from the app.css tokens, so light and dark follow the theme. */
+[hidden] { display: none !important; }
 :root { --poster-bg: #e3e6ef; --badge-bg: rgba(10,12,24,.78); --hdr-a: #8b5cf6; --hdr-b: #4b5fd6; --star: #b7791f; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --poster-bg: #1d2431; --star: #ffd166; } }
 :root[data-theme="dark"] { --poster-bg: #1d2431; --star: #ffd166; }
 
-.view { max-width: 1680px; }
+.view { max-width: none; }
+/* content width: full, a preset (16:9, 21:9, 32:9 of the window height) or dragged by hand (custom) */
+.view-frame { position: relative; width: 100%; max-width: var(--content-w, 100%); margin: 0 auto; flex: 1; }
+.wgrip { position: absolute; top: 0; bottom: 0; width: 14px; cursor: ew-resize; z-index: 5; }
+.wgrip.left { left: -7px; } .wgrip.right { right: -7px; }
+.wgrip::after { content: ""; position: absolute; top: 0; bottom: 0; left: 6px; width: 2px; background: var(--accent); opacity: 0; transition: opacity .15s; }
+.wgrip:hover::after, .wgrip.drag::after { opacity: .55; }
+body.dragging { cursor: ew-resize; user-select: none; }
+.sizepop { position: fixed; z-index: 40; display: flex; align-items: center; gap: 12px; padding: 10px 14px; box-shadow: var(--shadow); }
+.sizepop label { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.sizepop label b { color: var(--text); display: inline-block; min-width: 42px; text-align: right; }
+.sizepop input { width: 220px; accent-color: var(--accent); }
+.sortbtn { position: relative; }
+.sortbtn > button { padding: 7px 12px; border-radius: 9px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font: inherit; display: inline-flex; gap: 8px; align-items: center; }
+.sortbtn > button:hover { background: var(--surface2); }
+.sortmenu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; min-width: 220px; padding: 6px; display: flex; flex-direction: column; }
+.sortmenu button { text-align: left; border: 0; background: none; color: var(--text); padding: 7px 10px; border-radius: 7px; display: flex; justify-content: space-between; gap: 16px; font: inherit; }
+.sortmenu button:hover { background: var(--surface2); }
+.sortmenu button.on { color: var(--accent); font-weight: 600; }
+.sortmenu small { color: var(--muted); font-weight: 400; }
 .nav-count { font-size: 11px; color: var(--muted); font-weight: 500; margin-left: 2px; }
 .nav-count:empty { display: none; }
 
@@ -22,7 +42,7 @@
 .fchip button { border: 0; background: color-mix(in srgb, var(--text) 10%, transparent); width: 18px; height: 18px; border-radius: 50%; font-size: 11px; line-height: 1; padding: 0; }
 
 /* poster wall */
-.wall { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 18px; }
+.wall { display: grid; grid-template-columns: repeat(auto-fill, minmax(calc(150px * var(--poster-scale, 1)), 1fr)); gap: calc(18px * var(--poster-scale, 1)); }
 .pc { cursor: pointer; transition: transform .16s; min-width: 0; background: none; border: 0; padding: 0; text-align: left; }
 .pc:hover, .pc:focus-visible { transform: translateY(-4px); outline: none; }
 .pc:focus-visible .pimg { box-shadow: 0 0 0 3px var(--accent); }

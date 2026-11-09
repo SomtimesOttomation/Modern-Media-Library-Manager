@@ -1,4 +1,4 @@
-// Stats: the old dashboard page (KPIs, charts, HDR and device compatibility, largest files, library health) for the
+// Dashboard: the old dashboard page (KPIs, charts, HDR and device compatibility, largest files, library health) for the
 // open tab. Click any slice, bar or chip to filter; the filters stack and show as chips. Click a title for its card.
 import * as S from '../store.js';
 import { h } from '../util.js';
@@ -124,7 +124,7 @@ export function mount(ctx) {
   const base = () => { const rows = L.rows; const vid = rows.filter((r) => r.Type === 'Video'); return vid.length ? vid : rows; };
   const filtered = (rows, except) => rows.filter((r) => { for (const [id, f] of filters) if (id !== except && !f.pred(r)) return false; return true; });
   const draw = () => {
-    const head = h('div', { class: 'lib-head' },
+    const head = ctx.embedded ? h('span') : h('div', { class: 'lib-head' },
       h('div', { class: 'lib-title' }, h('h1', null, 'Stats'), h('small', null, tab === 'tv' ? 'TV Shows (episodes)' : 'Movies')),
       h('div', { class: 'lib-tools' }, h('div', { class: 'seg', role: 'tablist', 'aria-label': 'Library' }, [['movies', 'Movies'], ['tv', 'TV Shows']].map(([k, label]) =>
         h('a', { href: `#/stats/${k}`, class: `btn ${tab === k ? 'primary' : ''}`, style: { border: 0, borderRadius: 0 }, 'aria-selected': tab === k ? 'true' : 'false' }, label)))));

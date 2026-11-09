@@ -93,7 +93,8 @@ function Save-HostPlexSettings {
 }
 
 # The page's own settings (theme, view and sort per tab, grid columns), kept apart from the app's settings.json.
-$script:PageDefaults = [ordered]@{ theme = 'system'; updateCheck = $false; moviesView = 'posters'; tvView = 'posters'; moviesSort = 'added'; tvSort = 'title'; columns = @(); hideDupes = $false }
+$script:PageDefaults = [ordered]@{ theme = 'system'; updateCheck = $false; moviesView = 'posters'; tvView = 'posters'; moviesSort = 'added'; tvSort = 'title'; moviesSortRev = $false; tvSortRev = $false
+    columns = @(); hideDupes = $false; posterScale = 100; widthPreset = 'full'; customWidth = $false; contentWidth = 0 }
 function Read-PageSettings {
     $s = [ordered]@{}; foreach ($k in $script:PageDefaults.Keys) { $s[$k] = $script:PageDefaults[$k] }
     $p = Join-Path $script:AppData 'page-settings.json'
@@ -104,11 +105,17 @@ function Read-PageSettings {
 }
 function Set-PageSetting {
     param([string]$Key, $Value)
-    $views = @('posters', 'grid')
+    $views = @('posters', 'grid', 'dashboard')
     $ok = switch ($Key) {
         'theme'       { @('system', 'light', 'dark') -contains [string]$Value }
         'updateCheck' { $Value = [bool]$Value; $true }
         'hideDupes'   { $Value = [bool]$Value; $true }
+        'moviesSortRev' { $Value = [bool]$Value; $true }
+        'tvSortRev'   { $Value = [bool]$Value; $true }
+        'customWidth' { $Value = [bool]$Value; $true }
+        'posterScale' { $n = 0; if ([int]::TryParse([string]$Value, [ref]$n) -and $n -ge 50 -and $n -le 200) { $Value = $n; $true } else { $false } }
+        'contentWidth' { $n = 0; if ([int]::TryParse([string]$Value, [ref]$n) -and $n -ge 0 -and $n -le 20000) { $Value = $n; $true } else { $false } }
+        'widthPreset' { @('full', '16:9', '21:9', '32:9') -contains [string]$Value }
         'moviesView'  { $views -contains [string]$Value }
         'tvView'      { $views -contains [string]$Value }
         'moviesSort'  { [string]$Value -match '^[a-zA-Z]{1,30}$' }

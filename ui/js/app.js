@@ -6,7 +6,6 @@ import * as bridge from './bridge.js';
 import { h, ago } from './util.js';
 import * as library from './views/library.js';
 import * as tv from './views/tv.js';
-import * as stats from './views/stats.js';
 import { openSettings } from './views/settings.js';
 import { openTraffic } from './views/traffic.js';
 import { openUpdate } from './views/update.js';
@@ -24,14 +23,14 @@ export function toast(msg) {
 export function currentTab() {
   const name = location.hash.replace(/^#\/?/, '').split('/')[0];
   if (name === 'tv') return 'tv';
-  if (name === 'stats') return location.hash.split('/')[2] === 'tv' ? 'tv' : 'movies';
   return 'movies';
 }
 
 function route() {
   const hash = location.hash.replace(/^#\/?/, '');
   const [name, arg] = hash.split('/');
-  const map = { '': library, movies: library, tv, stats };
+  if (name === 'stats') { location.replace(`#/${arg === 'tv' ? 'tv' : 'movies'}`); S.saveSettings({ [`${arg === 'tv' ? 'tv' : 'movies'}View`]: 'dashboard' }); return; }   // old link
+  const map = { '': library, movies: library, tv };
   const mod = map[name] || library;
   const routeName = map[name] ? (name || 'movies') : 'movies';
   document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.route === routeName));
@@ -41,7 +40,7 @@ function route() {
   const ctx = { el: view, arg: arg ? decodeURIComponent(arg) : '', toast };
   current = { mod, ctx, cleanup: mod.mount(ctx) };
   $('#psearch').value = S.state.query;
-  liveStatus();
+  liveStatus(); sizeButton();
   window.scrollTo(0, 0);
 }
 
@@ -173,7 +172,70 @@ document.addEventListener('keydown', (e) => {
   if (e.key === '/' && !e.target.closest('input,textarea,select')) { e.preventDefault(); $('#psearch').focus(); }
 });
 
+// ---- content width: full, a preset (the width a 16:9 / 21:9 / 32:9 screen of this height would have) or custom ----
+const frame = $('#frame');
+function contentWidth() {
+  const st = S.state.settings, W = window.innerWidth;
+  if (st.customWidth && st.contentWidth > 0) return Math.min(st.contentWidth, W);
+  const r = { '16:9': 16 / 9, '21:9': 21 / 9, '32:9': 32 / 9 }[st.widthPreset];
+  return r ? Math.min(Math.round(window.innerHeight * r), W) : 0;
+}
+function applyWidth() {
+  const w = contentWidth();
+  document.documentElement.style.setProperty('--content-w', w ? `${w}px` : '100%');
+  frame.querySelectorAll('.wgrip').forEach((g) => { g.hidden = !S.state.settings.customWidth; });
+}
+window.addEventListener('resize', applyWidth);
+// Invisible grips at both edges of the content: drag either one and both sides move (the content stays centred).
+frame.addEventListener('mousedown', (e) => {
+  const g = e.target.closest('.wgrip'); if (!g || e.button !== 0) return;
+  e.preventDefault();
+  const x0 = e.clientX, w0 = frame.getBoundingClientRect().width, sign = g.dataset.side === 'right' ? 1 : -1;
+  g.classList.add('drag'); document.body.classList.add('dragging');
+  let w = w0;
+  const move = (m) => {
+    w = Math.max(480, Math.min(window.innerWidth, Math.round(w0 + 2 * sign * (m.clientX - x0))));
+    document.documentElement.style.setProperty('--content-w', `${w}px`);
+  };
+  const up = () => {
+    document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up);
+    g.classList.remove('drag'); document.body.classList.remove('dragging');
+    S.saveSettings({ contentWidth: w >= window.innerWidth - 2 ? 0 : w });
+  };
+  document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
+});
+frame.addEventListener('dblclick', (e) => { if (e.target.closest('.wgrip')) S.saveSettings({ contentWidth: 0 }); });
+
+// ---- poster size (50% to 200%), only while a poster wall is showing ----
+const pop = $('#sizepop'), range = $('#size-range');
+function applyPosterScale(v) {
+  document.documentElement.style.setProperty('--poster-scale', String((v || 100) / 100));
+  $('#size-val').textContent = `${v || 100}%`; range.value = String(v || 100);
+}
+function sizeButton() {
+  const tab = currentTab(), posters = (S.state.settings[`${tab}View`] || 'posters') === 'posters';
+  $('#btn-size').hidden = !posters;
+  if (!posters) pop.hidden = true;
+}
+let sizeTimer = 0;
+range.addEventListener('input', () => {
+  applyPosterScale(+range.value);
+  clearTimeout(sizeTimer); sizeTimer = setTimeout(() => S.saveSettings({ posterScale: +range.value }), 300);
+});
+$('#size-reset').addEventListener('click', () => { applyPosterScale(100); S.saveSettings({ posterScale: 100 }); });
+$('#btn-size').addEventListener('click', (e) => {
+  if (!pop.hidden) { pop.hidden = true; return; }
+  const r = e.currentTarget.getBoundingClientRect();
+  pop.hidden = false;
+  pop.style.top = `${r.bottom + 8}px`;
+  pop.style.left = `${Math.max(8, Math.min(window.innerWidth - pop.offsetWidth - 8, r.left + r.width / 2 - pop.offsetWidth / 2))}px`;
+  range.focus();
+});
+document.addEventListener('mousedown', (e) => { if (!pop.hidden && !pop.contains(e.target) && !e.target.closest('#btn-size')) pop.hidden = true; });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !pop.hidden) pop.hidden = true; });
+
 S.subscribe((topics) => {
+  if (topics.has('settings')) { applyWidth(); applyPosterScale(S.state.settings.posterScale); sizeButton(); }
   if (topics.has('theme') || topics.has('settings')) themeIcon();
   if (topics.has('traffic')) { haltBar(); liveStatus(); }
   if (topics.has('dropped')) dropBar();
@@ -188,7 +250,7 @@ window.addEventListener('hashchange', route);
 S.init().then(() => {
   if (S.inLauncher()) $('#btn-theme').hidden = true;      // the launcher owns the theme
   haltBar(); dropBar();
-  themeIcon(); route(); versionChip(); syncBar();
+  themeIcon(); applyWidth(); applyPosterScale(S.state.settings.posterScale); route(); versionChip(); syncBar();
   for (const t of S.TABS) S.loadLibrary(t);               // both libraries load once, from the saved scan (no network)
   const n = S.state.update.note;
   if (n) toast(n.ok ? `Updated to v${n.to}.` : `The update to v${n.to} did not work (${n.reason || 'unknown reason'}). v${n.from} was restored.`);

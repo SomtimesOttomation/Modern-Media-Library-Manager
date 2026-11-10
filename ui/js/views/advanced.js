@@ -73,7 +73,7 @@ export function openAdvanced(tab, apply) {
     };
     return h('div', { class: 'adv' },
       h('h2', null, `Advanced search · ${tab === 'tv' ? 'TV Shows' : 'Movies'}`),
-      h('p', null, h('small', null, 'Every row must match. For text, separate alternatives with | (Action|Comedy). Numbers take a value or a range.')),
+      h('p', null, h('small', null, 'Every row must match. For text, separate alternatives with | (Action|Comedy). Numbers take a value or a range. In the search box, separate several filters with ; (4k; genre:action; 90s).')),
       list, dl,
       h('p', null, h('button', { class: 'btn', type: 'button', onclick: () => addRow() }, '+ Add a filter')),
       h('label', { class: 'adv-label' }, 'Words', words),

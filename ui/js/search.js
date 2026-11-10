@@ -111,7 +111,22 @@ function resolveField(name, L) {
 /* parse(query, library, collections) -> { tests: [fn], chips: [text], tab: 'movies'|'tv'|'' }
    A query that reads as plain text and finds something ("new girl", "alien", "comedy") stays plain text, so a title is
    never turned into a filter; the phrase reader steps in when plain text finds nothing ("90s sitcoms", "4k atmos"). */
+// Several filters separated by semicolons must all match:  4k; genre:action; 90s; highly rated
+// (a ; inside quotes stays part of the text)
 export function parse(query, L, collections = []) {
+  const parts = String(query || '').match(/(?:[^;"]|"[^"]*")+/g)?.map((x) => x.trim()).filter(Boolean) || [];
+  if (parts.length > 1) {
+    const res = { tests: [], chips: [], tab: '', empty: false };
+    for (const part of parts) {
+      const p = parseOne(part, L, collections);
+      res.tests.push(...p.tests); res.chips.push(...p.chips);
+      if (p.tab) res.tab = p.tab;
+    }
+    return res;
+  }
+  return parseOne(parts[0] || '', L, collections);
+}
+function parseOne(query, L, collections) {
   const q = String(query || '').trim();
   const res = { tests: [], chips: [], tab: '', empty: !q };
   if (!q) return res;

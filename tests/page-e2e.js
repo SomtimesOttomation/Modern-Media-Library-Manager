@@ -77,6 +77,12 @@ async function run() {
   check(await page.isVisible('text=paused'), 'no scan while paused');
   await page.click('#haltbar button:has-text("Resume")'); await page.waitForTimeout(400);
   check(await page.isHidden('#haltbar'), 'Resume clears the pause');
+  await page.click('#nav a[data-route="movies"]'); await page.waitForTimeout(800);
+  await page.click('.lib-tools .seg button:has-text("Compare")'); await page.waitForTimeout(1500);
+  check((await page.$$('.cmp-poster[data-fx]')).length === 2 && await page.isVisible('.cmp-banner'), 'Compare puts two movies head to head with themed borders');
+  await page.click('.cmp-tools button:has-text("Collection vs")'); await page.waitForTimeout(500);
+  check(await page.isVisible('.cmp-tour') || await page.isVisible('.cmp .state'), 'Collection vs collection opens (tournament, or a note when there are not two collections)');
+  await page.click('.lib-tools .seg button:has-text("Posters")'); await page.waitForTimeout(500);
   await page.goto('https://mmlm.ui/index.html#/stats');
   await page.waitForTimeout(1500);
   check(await page.isVisible('.kpi'), 'Stats opens after a reload (library read back from the cache)');

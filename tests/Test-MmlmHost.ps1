@@ -32,6 +32,11 @@ Check ((Cmd 2 'summary.get' @{ tab = 'movies' }) -match 'mmlm.cache/thumbs/') 's
 $lib = Cmd 9 'library.get' @{ tab = 'movies' }
 Check ($lib -match '"rows":\[\[' -and $lib -match '"Poster"') 'library.get sends the movie rows with poster links'
 Check ($lib -notmatch 'FullPath|PosterPath|Directory') 'no file paths reach the page'
+Check ((Cmd 50 'settings.set' @{ key = 'moviesView'; value = 'compare' }) -match '"moviesView":"compare"') 'Compare is a movies view'
+Check ((Cmd 51 'settings.set' @{ key = 'fxLeft'; value = 'lightning' }) -match '"fxLeft":"lightning"') 'Fun: a border effect saves'
+Check ((Cmd 52 'settings.set' @{ key = 'fxLeft'; value = 'rainbow' }) -match '"ok":false') 'Fun: an unknown effect is refused'
+[void](Cmd 54 'settings.set' @{ key = 'moviesView'; value = 'posters' }); [void](Cmd 55 'settings.set' @{ key = 'fxLeft'; value = 'auto' })
+Check ((Cmd 53 'poster.colours' @{ url = 'https://mmlm.cache/../settings.json' }) -match '"ok":false') 'poster.colours stays inside the cache'
 $fn = @(($lib | ConvertFrom-Json).data.fields.n); $mi = [array]::IndexOf($fn, 'Metascore'); $ti = [array]::IndexOf($fn, 'Title')
 function Find-Row($json, $title) { foreach ($r in ($json | ConvertFrom-Json).data.rows) { if ($r[$ti] -eq $title) { return , $r } } }
 $m1 = Find-Row $lib 'Movie 1'

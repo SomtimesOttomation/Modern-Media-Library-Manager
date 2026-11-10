@@ -50,7 +50,7 @@ export function mount(ctx) {
     stopWall?.(); stopWall = null; grid?.destroy(); grid = null; stopDash?.(); stopDash = null;
     const st = stateBox('tv', L, ctx.toast);
     if (st) { ctx.el.replaceChildren(st); return; }
-    const s = S.state.settings, mode = viewMode(s.tvView);
+    const s = S.state.settings, mode = viewMode(s.tvView, 'tv');
     if (mode === 'dashboard') {
       const body = h('div');
       ctx.el.replaceChildren(h('div', { class: 'lib-head' }, h('div', { class: 'lib-title' }, h('h1', null, 'TV Shows'), h('small', null, 'Dashboard (episodes)')),

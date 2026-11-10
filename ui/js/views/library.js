@@ -9,6 +9,7 @@ import { toolsMenu, viewRids } from './tools.js';
 import { openCard } from './card.js';
 import { overlay } from './settings.js';
 import { vgrid } from './vgrid.js';
+import * as compare from './compare.js';
 
 // Sort By (Movies). Rating = RT critics, as the window app does.
 const str = (x) => String(x || '');
@@ -99,11 +100,14 @@ export function stateBox(tab, L, toast) {
 }
 
 // The view switch shared by both tabs: Posters | Grid | Dashboard
+// (Compare is Movies only: it is about box office.)
 export function viewSeg(mode, key, redraw) {
-  return h('div', { class: 'seg', role: 'tablist', 'aria-label': 'View' }, [['posters', 'Posters'], ['grid', 'Grid'], ['dashboard', 'Dashboard']].map(([k, label]) =>
+  const views = [['posters', 'Posters'], ['grid', 'Grid'], ['dashboard', 'Dashboard']];
+  if (key === 'moviesView') views.push(['compare', 'Compare']);
+  return h('div', { class: 'seg', role: 'tablist', 'aria-label': 'View' }, views.map(([k, label]) =>
     h('button', { type: 'button', class: mode === k ? 'active' : '', 'aria-selected': mode === k ? 'true' : 'false', onclick: () => S.saveSettings({ [key]: k }).then(redraw) }, label)));
 }
-export const viewMode = (v) => (v === 'grid' || v === 'dashboard' ? v : 'posters');
+export const viewMode = (v, tab) => (v === 'grid' || v === 'dashboard' || (v === 'compare' && tab !== 'tv') ? v : 'posters');
 
 export function mount(ctx) {
   const L = S.state.libs.movies;
@@ -125,6 +129,13 @@ export function mount(ctx) {
       ctx.el.replaceChildren(h('div', { class: 'lib-head' }, h('div', { class: 'lib-title' }, h('h1', null, 'Movies'), h('small', null, 'Dashboard')),
         h('div', { class: 'lib-tools' }, viewSeg(mode, 'moviesView', draw))), body);
       stopDash = dashboard.mount({ el: body, arg: 'movies', toast: ctx.toast, embedded: true });
+      return;
+    }
+    if (mode === 'compare') {
+      const body = h('div');
+      ctx.el.replaceChildren(h('div', { class: 'lib-head' }, h('div', { class: 'lib-title' }, h('h1', null, 'Movies'), h('small', null, 'Compare')),
+        h('div', { class: 'lib-tools' }, viewSeg(mode, 'moviesView', draw))), body);
+      compare.render(body, draw, ctx.toast);
       return;
     }
     const found = searchRows(L.rows, S.state.query, L, S.state.collections);

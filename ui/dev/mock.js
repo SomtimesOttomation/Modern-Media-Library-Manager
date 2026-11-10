@@ -5,7 +5,7 @@ let emit = () => {};
 export function attach(fn) { emit = fn; }
 
 const qs = new URLSearchParams(location.search);
-const settings = { theme: qs.get('theme') || 'system', updateCheck: false, moviesView: qs.get('view') || 'posters', tvView: qs.get('view') || 'posters', moviesSort: 'added', tvSort: 'title', columns: [], hideDupes: false };
+const settings = { theme: qs.get('theme') || 'system', updateCheck: false, moviesView: qs.get('view') || 'posters', tvView: qs.get('view') || 'posters', moviesSort: 'added', tvSort: 'title', columns: [], hideDupes: false, fxLeft: 'auto', fxRight: 'auto', fxMotion: 'full', vsStyle: 'arcade', cmpTally: true, cmpWalkover: true, cmpImdb: true };
 const plex = { url: 'http://plex-server:32400', hasToken: true };
 const traffic = { requests: 0, bytes: 0, errors: 0 };
 let halted = false, scanTimer = 0;
@@ -27,7 +27,7 @@ const FIELDS = [
   ['AudioChannels', 'int', 'Audio', 0], ['AudioLayout', 'string', 'Audio', 1], ['AudioLanguages', 'string', 'Audio', 1], ['SubtitleTracks', 'int', 'Subtitles', 1], ['SubtitleLanguages', 'string', 'Subtitles', 0],
   ['FileName', 'string', 'File', 1], ['Container', 'string', 'File', 1], ['Type', 'string', 'File', 0], ['FileSizeGB', 'double', 'File', 1], ['Source', 'string', 'File', 1], ['Added', 'string', 'File', 1],
   ['HasNfo', 'bool', 'Library', 0], ['HasPoster', 'bool', 'Library', 0], ['RTCritic', 'int', 'Ratings', 1], ['RTAudience', 'int', 'Ratings', 1], ['Metascore', 'int', 'Ratings', 1],
-  ['BoxOfficeDomestic', 'double', 'Box office', 1], ['BoxOfficeWorldwide', 'double', 'Box office', 1], ['ViewCount', 'int', 'Library', 0], ['Poster', 'string', 'Library', 0], ['Rid', 'string', 'Library', 0],
+  ['BoxOfficeDomestic', 'double', 'Box office', 1], ['BoxOfficeWorldwide', 'double', 'Box office', 1], ['OpeningDomestic', 'double', 'Box office', 1], ['ViewCount', 'int', 'Library', 0], ['Poster', 'string', 'Library', 0], ['Rid', 'string', 'Library', 0],
 ].map(([n, t, g, s]) => ({ n, t, g, s: !!s }));
 const W1 = ['Silent', 'Crimson', 'Last', 'Hidden', 'Golden', 'Broken', 'Northern', 'Midnight', 'Paper', 'Iron', 'Glass', 'Electric', 'Quiet', 'Burning', 'Lost'];
 const W2 = ['Harbor', 'Orchard', 'Signal', 'Kingdom', 'Frontier', 'Lantern', 'Meridian', 'Tide', 'Archive', 'Comet', 'Garden', 'Engine', 'Summit', 'Mirror', 'River'];
@@ -58,7 +58,7 @@ function movies() {
       Added: `20${20 + Math.floor(rnd() * 7)}-${String(1 + Math.floor(rnd() * 12)).padStart(2, '0')}-${String(1 + Math.floor(rnd() * 28)).padStart(2, '0')}`,
       RTCritic: rnd() > 0.25 ? Math.floor(20 + rnd() * 80) : 0, RTAudience: rnd() > 0.25 ? Math.floor(30 + rnd() * 70) : 0, Metascore: rnd() > 0.3 ? Math.floor(25 + rnd() * 70) : 0,
       Rid: 'p:' + (1000 + i), ViewCount: rnd() > 0.5 ? 1 : 0,
-      BoxOfficeDomestic: rnd() > 0.4 ? Math.floor(rnd() * 4e8) : 0, BoxOfficeWorldwide: rnd() > 0.4 ? Math.floor(rnd() * 1.1e9) : 0, Poster: rnd() > 0.06 ? poster(title, Math.floor(rnd() * 360)) : '' });
+      BoxOfficeDomestic: rnd() > 0.4 ? Math.floor(rnd() * 4e8) : 0, BoxOfficeWorldwide: rnd() > 0.4 ? Math.floor(rnd() * 1.1e9) : 0, OpeningDomestic: rnd() > 0.5 ? Math.floor(rnd() * 9e7) : 0, Poster: rnd() > 0.06 ? poster(title, Math.floor(rnd() * 360)) : '' });
   }
   return out;
 }
@@ -79,6 +79,7 @@ const libs = { movies: movies(), tv: tv() };
 let dashData = { movies: [], tv: [] };
 let collections = [
   { name: 'Weekend picks', type: 'manual', query: '', items: [0, 3, 7, 11].map((i) => ({ ids: ['p:' + (1000 + i)], title: '', year: 0 })) },
+  { name: 'Late-night saga', type: 'manual', tab: 'movies', query: '', items: [1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14, 15].map((i) => ({ ids: ['p:' + (1000 + i)], title: '', year: 0 })) },
   { name: '80s 4K', type: 'rule', query: 'year:1980-1989 res:4k', items: [] },
 ];
 const pack = (rows) => ({ fields: FIELDS, rows: rows.map((r) => FIELDS.map((f) => (r[f.n] === undefined || r[f.n] === '' ? null : r[f.n]))) });

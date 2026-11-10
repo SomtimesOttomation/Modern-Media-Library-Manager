@@ -96,7 +96,8 @@ function Save-HostPlexSettings {
 
 # The page's own settings (theme, view and sort per tab, grid columns), kept apart from the app's settings.json.
 $script:PageDefaults = [ordered]@{ theme = 'system'; updateCheck = $false; moviesView = 'posters'; tvView = 'posters'; moviesSort = 'added'; tvSort = 'title'; moviesSortRev = $false; tvSortRev = $false
-    columns = @(); hideDupes = $false; detectFel = $false; posterScale = 100; widthPreset = 'full'; customWidth = $false; contentWidth = 0 }
+    columns = @(); hideDupes = $false; detectFel = $false; posterScale = 100; widthPreset = 'full'; customWidth = $false; contentWidth = 0
+    fxLeft = 'auto'; fxRight = 'auto'; fxMotion = 'full'; vsStyle = 'arcade'; cmpTally = $true; cmpWalkover = $true; cmpImdb = $true }
 function Read-PageSettings {
     $s = [ordered]@{}; foreach ($k in $script:PageDefaults.Keys) { $s[$k] = $script:PageDefaults[$k] }
     $p = Join-Path $script:AppData 'page-settings.json'
@@ -107,7 +108,8 @@ function Read-PageSettings {
 }
 function Set-PageSetting {
     param([string]$Key, $Value)
-    $views = @('posters', 'grid', 'dashboard')
+    $views = @('posters', 'grid', 'dashboard', 'compare')
+    $fx = @('auto', 'fire', 'lightning', 'specter', 'poster', 'off')
     $ok = switch ($Key) {
         'theme'       { @('system', 'light', 'dark') -contains [string]$Value }
         'updateCheck' { $Value = [bool]$Value; $true }
@@ -116,6 +118,13 @@ function Set-PageSetting {
         'tvSortRev'   { $Value = [bool]$Value; $true }
         'customWidth' { $Value = [bool]$Value; $true }
         'detectFel'   { $Value = [bool]$Value; $true }
+        'cmpTally'    { $Value = [bool]$Value; $true }
+        'cmpWalkover' { $Value = [bool]$Value; $true }
+        'cmpImdb'     { $Value = [bool]$Value; $true }
+        'fxLeft'      { $fx -contains [string]$Value }
+        'fxRight'     { $fx -contains [string]$Value }
+        'fxMotion'    { @('still', 'calm', 'full') -contains [string]$Value }
+        'vsStyle'     { @('arcade', 'plain', 'off') -contains [string]$Value }
         'posterScale' { $n = 0; if ([int]::TryParse([string]$Value, [ref]$n) -and $n -ge 50 -and $n -le 200) { $Value = $n; $true } else { $false } }
         'contentWidth' { $n = 0; if ([int]::TryParse([string]$Value, [ref]$n) -and $n -ge 0 -and $n -le 20000) { $Value = $n; $true } else { $false } }
         'widthPreset' { @('full', '16:9', '21:9', '32:9') -contains [string]$Value }
@@ -895,6 +904,36 @@ function Suspend-DashWorker {
     $script:Visible = $false
 }
 
+# Compare: the two main colours of a cached poster (for the "poster colours" border and Auto). Reads the local file
+# only; the page cannot read a poster's pixels itself because the cache is another origin.
+function Get-PosterColours {
+    param([string]$Url)
+    $rel = [string]$Url -replace '^https://mmlm\.cache/', ''
+    if (-not $rel -or $rel -match '\.\.' -or $rel -match '^[a-z]+:' ) { throw 'Not a cached poster' }
+    $path = Join-Path $script:CacheDir ($rel -replace '/', '\')
+    if (-not (Test-Path -LiteralPath $path)) { throw 'Poster not found' }
+    Add-Type -AssemblyName System.Drawing
+    $src = $null; $bmp = $null; $g = $null
+    try {
+        $src = [Drawing.Image]::FromFile($path)
+        $bmp = New-Object Drawing.Bitmap 24, 36
+        $g = [Drawing.Graphics]::FromImage($bmp)
+        $g.DrawImage($src, 0, 0, 24, 36)
+        $bins = @{}
+        for ($y = 0; $y -lt 36; $y++) { for ($x = 0; $x -lt 24; $x++) {
+            $c = $bmp.GetPixel($x, $y); $sat = $c.GetSaturation(); $bri = $c.GetBrightness()
+            if ($bri -lt 0.12 -or $bri -gt 0.92) { continue }
+            $w = $sat * (1 - [Math]::Abs($bri - 0.5)); if ($w -le 0.05) { continue }
+            $k = [int]([Math]::Floor($c.GetHue() / 20))
+            if (-not $bins.ContainsKey($k)) { $bins[$k] = @{ w = 0.0; r = 0.0; g = 0.0; b = 0.0 } }
+            $o = $bins[$k]; $o.w += $w; $o.r += $c.R * $w; $o.g += $c.G * $w; $o.b += $c.B * $w
+        } }
+        $top = @($bins.Values | Sort-Object { $_.w } -Descending | Select-Object -First 2)
+        $hex = @($top | ForEach-Object { '#{0:x2}{1:x2}{2:x2}' -f [int]($_.r / $_.w), [int]($_.g / $_.w), [int]($_.b / $_.w) })
+        ConvertTo-PageJson ([ordered]@{ colours = $hex })
+    } finally { if ($g) { $g.Dispose() }; if ($bmp) { $bmp.Dispose() }; if ($src) { $src.Dispose() } }
+}
+
 # Page commands: name -> handler. Fetch = $true means it reaches Plex or the internet, so it is refused while traffic is paused.
 $script:Commands = [ordered]@{
     'init'           = @{ Fetch = $false; Run = {
@@ -918,6 +957,7 @@ $script:Commands = [ordered]@{
                 'empty' { '{"empty":true}' }
                 default { Start-HostExport $tab; '{"pending":true}' }
             } } }
+    'poster.colours' = @{ Fetch = $false; Run = { param($a) Get-PosterColours ([string]$a.url) } }
     'settings.set'   = @{ Fetch = $false; Run = { param($a) Set-PageSetting ([string]$a.key) $a.value; ConvertTo-PageJson $script:PageSettings } }
     'plex.set'       = @{ Fetch = $false; Run = {
             # Plex address and token (the token is stored encrypted for this Windows user, as the window app does)

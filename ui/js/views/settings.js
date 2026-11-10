@@ -1,13 +1,14 @@
-// Settings: the Sample's overlay with tabs. General (theme, updates), Plex (server and token), Data (sources, traffic).
+// Settings: the Sample's overlay with tabs. General (theme, updates), Plex (server and token), Data (sources, traffic),
+// Fun (Compare's borders and VS).
 import * as S from '../store.js';
 import { h } from '../util.js';
 import { openUpdate } from './update.js';
 import { openTraffic } from './traffic.js';
 
 // In-page overlay (no alert/confirm/prompt): Escape or a click outside closes it.
-function overlay(content, extraClass = '') {
+function overlay(content, extraClass = '', onClose = null) {
   const root = document.getElementById('overlay-root');
-  const close = () => { root.replaceChildren(); document.removeEventListener('keydown', esc); };
+  const close = () => { root.replaceChildren(); document.removeEventListener('keydown', esc); onClose?.(); };
   const esc = (e) => { if (e.key === 'Escape') close(); };
   document.addEventListener('keydown', esc);
   const o = h('div', { class: 'overlay', onclick: (e) => { if (e.target === o) close(); } }, h('div', { class: `card modal ${extraClass}` }, content(close)));
@@ -18,7 +19,7 @@ export { overlay };
 
 const TAB_KEY = 'mmlm.settingsTab';
 let settingsTab = 'general';
-try { const v = localStorage.getItem(TAB_KEY); if (['general', 'plex', 'data'].includes(v)) settingsTab = v; } catch (e) { /* ignore */ }
+try { const v = localStorage.getItem(TAB_KEY); if (['general', 'plex', 'data', 'fun'].includes(v)) settingsTab = v; } catch (e) { /* ignore */ }
 const hr = () => h('hr', { style: { border: 0, borderTop: '1px solid var(--line)' } });
 
 function generalTab(close, repaint) {
@@ -96,19 +97,43 @@ function dataTab() {
   ];
 }
 
-export function openSettings(tab) {
+// Fun: the Compare page's poster borders, animation and VS
+const FX = [['auto', 'Auto'], ['fire', 'Fire'], ['lightning', 'Lightning'], ['specter', 'Specter'], ['poster', 'Poster colours'], ['off', 'Off']];
+function funTab(repaint) {
+  const s = S.state.settings;
+  const set = (k, v) => S.saveSettings({ [k]: v }).then(repaint);
+  const side = (key, label) => h('div', { class: 'fx-row' }, h('span', { class: 'fx-lbl' }, label),
+    ...FX.map(([k, t]) => h('button', { type: 'button', class: `fx-opt${(s[key] || 'auto') === k ? ' on' : ''}`, 'aria-pressed': (s[key] || 'auto') === k ? 'true' : 'false', title: t, onclick: () => set(key, k) },
+      h('span', { class: `fx-sw fx-${k === 'auto' ? 'poster' : k}`, style: { '--fx1': '#d6408c', '--fx2': '#8c50f0' } }), h('small', null, t))));
+  const segBtns = (key, opts, def) => h('div', { class: 'seg' }, opts.map(([k, t]) => h('button', { type: 'button', class: (s[key] || def) === k ? 'active' : '', onclick: () => set(key, k) }, t)));
+  const chk = (key, text) => h('p', null, h('label', null, h('input', { type: 'checkbox', checked: s[key] !== false ? true : null, onchange: (e) => set(key, e.target.checked) }), ' ' + text));
+  return [
+    h('p', null, h('b', null, 'Compare: poster borders '), h('small', null, "Auto picks from the poster's main colours: red or orange is fire, blue is lightning, green is the specter glow, anything else glows in the poster's own colours.")),
+    h('div', { class: `fx-grid motion-${s.fxMotion || 'full'}` }, side('fxLeft', 'Left side'), side('fxRight', 'Right side')),
+    hr(),
+    h('p', null, h('b', null, 'Animation '), segBtns('fxMotion', [['still', 'Still'], ['calm', 'Calm'], ['full', 'Full']], 'full')),
+    h('p', null, h('small', null, 'Still is used anyway when Windows is set to reduce animations.')),
+    h('p', null, h('b', null, 'VS '), segBtns('vsStyle', [['arcade', 'Arcade'], ['plain', 'Plain'], ['off', 'Off']], 'arcade')),
+    hr(),
+    chk('cmpTally', 'Show the rounds won and the winner banner'),
+    chk('cmpWalkover', 'Collections: a film with no opponent wins its round (walkover)'),
+    chk('cmpImdb', 'Count the IMDb rating as a critics round'),
+  ];
+}
+
+export function openSettings(tab, onClose) {
   if (tab) settingsTab = tab;
   overlay((close) => {
     const body = h('div', { class: 'settings-body', role: 'tabpanel' });
     const tabs = h('div', { class: 'seg settings-tabs', role: 'tablist', 'aria-label': 'Settings sections' });
     const paint = () => {
-      tabs.replaceChildren(...[['general', 'General'], ['plex', 'Plex'], ['data', 'Data']].map(([k, label]) => h('button', {
+      tabs.replaceChildren(...[['general', 'General'], ['plex', 'Plex'], ['data', 'Data'], ['fun', 'Fun']].map(([k, label]) => h('button', {
         type: 'button', role: 'tab', 'aria-selected': settingsTab === k ? 'true' : 'false', class: settingsTab === k ? 'active' : '',
         onclick: () => { settingsTab = k; try { localStorage.setItem(TAB_KEY, k); } catch (e) { /* ignore */ } paint(); } }, label)));
-      body.replaceChildren(...(settingsTab === 'plex' ? plexTab(paint) : settingsTab === 'data' ? dataTab() : generalTab(close, paint)));
+      body.replaceChildren(...(settingsTab === 'plex' ? plexTab(paint) : settingsTab === 'data' ? dataTab() : settingsTab === 'fun' ? funTab(paint) : generalTab(close, paint)));
     };
     paint();
     return h('div', null, h('h2', null, 'Settings'), tabs, body,
       h('p', { style: { textAlign: 'right' } }, h('button', { class: 'btn primary', type: 'button', onclick: close }, 'Done')));
-  });
+  }, '', onClose);
 }

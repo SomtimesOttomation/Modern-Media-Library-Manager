@@ -246,9 +246,9 @@ body.dragging { cursor: ew-resize; user-select: none; }
 @media (max-width: 640px) { .colmgr-row { grid-template-columns: 1fr 1fr; } }
 
 /* series view: a gradient from the season poster's colours, white text, a raised info card (Plex-style) */
-body.series-open { background: var(--s3-body, #0d1017); }
 .series { --s1: hsl(220 14% 26%); --s2: hsl(220 14% 15%); --s3: hsl(220 14% 9%);
-  color: #fff; margin: -22px -20px -60px; padding: 18px 26px 60px; min-height: calc(100vh - 120px);
+  color: #fff; margin: 0 0 28px; padding: 20px 28px 36px; border-radius: 22px;
+  box-shadow: 0 24px 60px rgba(0,0,0,.35), 0 0 0 1px rgba(255,255,255,.06) inset;
   background: linear-gradient(165deg, var(--s1) 0%, var(--s2) 48%, var(--s3) 100%); transition: background .4s; }
 .series .ph { color: rgba(255,255,255,.7); background: rgba(255,255,255,.06); }
 .sv-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
@@ -347,3 +347,17 @@ body.series-open { background: var(--s3-body, #0d1017); }
 .wform input[type=text], .wform input[type=number] { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font: inherit; }
 .wprev { min-height: 260px; max-height: 62vh; overflow: auto; }
 @media (max-width: 760px) { .wgrid { grid-template-columns: 1fr; } }
+
+/* rows that scroll sideways: no scroll bar, arrows instead (next to the row's title, or at the strip's ends) */
+.hrow { overflow-x: auto; scrollbar-width: none; scroll-behavior: smooth; }
+.hrow::-webkit-scrollbar { display: none; }
+.sv-h { display: flex; align-items: center; gap: 10px; }
+.arrows { display: inline-flex; gap: 4px; }
+.arrows button { width: 26px; height: 26px; border-radius: 50%; border: 0; background: rgba(255,255,255,.12); color: #fff; font-size: 15px; line-height: 1; display: grid; place-items: center; }
+.arrows button:hover:not([disabled]) { background: rgba(255,255,255,.26); }
+.arrows button[disabled] { opacity: .3; cursor: default; }
+.arrows[hidden] { display: none !important; }
+.sv-strip { position: relative; }
+.sv-strip .edge { position: absolute; top: 0; bottom: 4px; width: 34px; border: 0; color: #fff; font-size: 18px; z-index: 2; }
+.sv-strip .edge.l { left: 0; border-radius: 10px 0 0 10px; background: linear-gradient(90deg, rgba(0,0,0,.55), transparent); }
+.sv-strip .edge.r { right: 0; border-radius: 0 10px 10px 0; background: linear-gradient(270deg, rgba(0,0,0,.55), transparent); }

@@ -107,7 +107,7 @@ export function mount(ctx) {
           <h1>${esc(P ? P.title || name : name)}</h1>
           <h2>${cur ? esc(cur.title || (cur.index === 0 ? 'Specials' : 'Season ' + cur.index)) : ''}</h2>
           <div class="sv-meta">${starHtml(P ? P.rating || P.audienceRating : first.Rating)}<span>${[years, P ? P.rated : first.MPAARating, P ? P.studio : first.Studio].filter(Boolean).map(esc).join(' · ')}</span></div>
-          <div class="sv-seasons" role="tablist">${seasons.map((s) => `<button type="button" role="tab" data-season="${s.index}" class="${s.index === state.season ? 'on' : ''}" aria-selected="${s.index === state.season}"><b>${esc(s.index === 0 ? 'Specials' : 'Season ' + s.index)}</b><small>${s.episodes} episode${s.episodes === 1 ? '' : 's'}${P && s.watched ? ` · ${s.watched} watched` : ''}</small></button>`).join('')}</div>
+          <div class="sv-strip"><button class="edge l" type="button" data-scroll="seasons" data-dir="-1" aria-label="Earlier seasons" hidden>\u2039</button><div class="sv-seasons hrow" data-row="seasons" role="tablist">${seasons.map((s) => `<button type="button" role="tab" data-season="${s.index}" class="${s.index === state.season ? 'on' : ''}" aria-selected="${s.index === state.season}"><b>${esc(s.index === 0 ? 'Specials' : 'Season ' + s.index)}</b><small>${s.episodes} episode${s.episodes === 1 ? '' : 's'}${P && s.watched ? ` · ${s.watched} watched` : ''}</small></button>`).join('')}</div><button class="edge r" type="button" data-scroll="seasons" data-dir="1" aria-label="Later seasons" hidden>\u203a</button></div>
           <div class="sv-row">
             <div class="sv-info">
               <h4>Show</h4>
@@ -137,14 +137,45 @@ export function mount(ctx) {
             ${e.watched ? '<span class="sv-check" title="Watched">✓</span>' : ''}${!e.watched && e.progress > 2 ? `<span class="sv-part" style="width:${e.progress}%"></span>` : ''}</div>
           <div class="sv-et">${esc(e.title)}</div><div class="sv-es">Episode ${e.index}${e.minutes ? ` · ${e.minutes} min` : ''} · ${esc(q)}</div></button>`;
       }).join('')}</div>
-      ${P && P.cast.length ? `<h3 class="sv-h">Cast &amp; Crew</h3><div class="sv-cast">${P.cast.map((c) => `<div class="sv-person"><div class="sv-face">${c.photo ? `<img loading="lazy" src="${esc(cacheUrl(c.photo))}" alt="">` : `<span>${esc((c.name || '?').slice(0, 1))}</span>`}</div><b>${esc(c.name)}</b><small>${esc(c.role || '')}</small></div>`).join('')}</div>` : ''}
-      ${P && P.related.length ? `<h3 class="sv-h">Related Shows</h3><div class="sv-related">${P.related.map((r) => {
+      ${P && P.cast.length ? `<h3 class="sv-h">Cast &amp; Crew <span class="arrows" data-arrows="cast"><button type="button" data-scroll="cast" data-dir="-1" aria-label="Scroll left">\u2039</button><button type="button" data-scroll="cast" data-dir="1" aria-label="Scroll right">\u203a</button></span></h3><div class="sv-cast hrow" data-row="cast">${P.cast.map((c) => `<div class="sv-person"><div class="sv-face">${c.photo ? `<img loading="lazy" src="${esc(cacheUrl(c.photo))}" alt="">` : `<span>${esc((c.name || '?').slice(0, 1))}</span>`}</div><b>${esc(c.name)}</b><small>${esc(c.role || '')}</small></div>`).join('')}</div>` : ''}
+      ${P && P.related.length ? `<h3 class="sv-h">Related Shows <span class="arrows" data-arrows="related"><button type="button" data-scroll="related" data-dir="-1" aria-label="Scroll left">\u2039</button><button type="button" data-scroll="related" data-dir="1" aria-label="Scroll right">\u203a</button></span></h3><div class="sv-related hrow" data-row="related">${P.related.map((r) => {
         const inLib = L.rows.some((e) => (e.Show || e.Title) === r.title);
         return `<button class="sv-rel${inLib ? '' : ' notlib'}" type="button" data-rel="${esc(r.title)}" title="${inLib ? 'Open' : 'Not in your library'}"><div class="sv-rp">${r.poster ? `<img loading="lazy" src="${esc(cacheUrl(r.poster))}" alt="">` : `<div class="ph">${esc(r.title)}</div>`}${r.unwatched ? `<span class="sv-badge">${r.unwatched}</span>` : ''}</div><b>${esc(r.title)}</b><small>${r.seasons ? `${r.seasons} season${r.seasons === 1 ? '' : 's'}` : r.year || ''}</small></button>`;
       }).join('')}</div>` : ''}`;
+    arrowsInit();
     const cols = await posterColours(posterSrc);
     if (cols && root.isConnected) { root.style.setProperty('--s1', cols[0]); root.style.setProperty('--s2', cols[1]); root.style.setProperty('--s3', cols[2]); }
   };
+
+  // Arrows instead of scroll bars: hidden when the row fits, greyed at either end.
+  const arrowsInit = () => {
+    root.querySelectorAll('[data-row]').forEach((row) => {
+      const k = row.dataset.row;
+      const btns = root.querySelectorAll(`[data-scroll="${k}"]`);
+      const set = () => {
+        const fits = row.scrollWidth <= row.clientWidth + 2;
+        const atL = row.scrollLeft <= 2, atR = row.scrollLeft + row.clientWidth >= row.scrollWidth - 2;
+        const grp = root.querySelector(`[data-arrows="${k}"]`); if (grp) grp.hidden = fits;
+        btns.forEach((b) => {
+          const left = b.dataset.dir === '-1';
+          if (b.classList.contains('edge')) b.hidden = fits || (left ? atL : atR);
+          else b.disabled = left ? atL : atR;
+        });
+      };
+      row.onscroll = set; set();
+    });
+  };
+  const onResize = () => arrowsInit();
+  window.addEventListener('resize', onResize);
+  // A click beside the card (not on it, the bar or a dialog) closes the series view: back to the posters.
+  const outside = (e) => {
+    if (e.button !== 0 || !root.isConnected) return;
+    if (e.target.closest('.series, #chrome, #overlay-root, #toasts, #sizepop, .wgrip')) return;
+    if (!e.target.closest('#frame, #app') && e.target !== document.body && e.target !== document.documentElement) return;
+    S.saveSettings({ tvView: 'posters' });
+    location.hash = '#/tv';
+  };
+  document.addEventListener('click', outside);
 
   const fetchPlex = async (refresh) => {
     const local = eps();
@@ -166,8 +197,9 @@ export function mount(ctx) {
   };
   const off = bridge.on('series', onSeries);
   root.addEventListener('click', (e) => {
-    const t = e.target.closest('[data-season],[data-ep],[data-rel],[data-refresh],[data-addcol]');
+    const t = e.target.closest('[data-season],[data-ep],[data-rel],[data-refresh],[data-addcol],[data-scroll]');
     if (!t) return;
+    if (t.dataset.scroll) { const row = root.querySelector(`[data-row="${t.dataset.scroll}"]`); if (row) row.scrollBy({ left: +t.dataset.dir * row.clientWidth * 0.8, behavior: 'smooth' }); return; }
     if (t.dataset.season !== undefined) { state.season = +t.dataset.season; draw(); }
     else if (t.dataset.refresh) fetchPlex(true);
     else if (t.dataset.addcol) { if (!t.parentElement.querySelector('.colpop')) { const list = eps(); addToCollection(t, list[0], list); } }
@@ -180,5 +212,5 @@ export function mount(ctx) {
   });
   plexByShow.has(name) ? draw() : (draw(), (eps().length && !S.state.halted ? fetchPlex(false) : null));
   ctx.redraw = draw;
-  return () => { document.body.classList.remove('series-open'); if (typeof off === 'function') off(); };
+  return () => { document.body.classList.remove('series-open'); window.removeEventListener('resize', onResize); document.removeEventListener('click', outside); if (typeof off === 'function') off(); };
 }

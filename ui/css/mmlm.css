@@ -361,3 +361,18 @@ body.dragging { cursor: ew-resize; user-select: none; }
 .sv-strip .edge { position: absolute; top: 0; bottom: 4px; width: 34px; border: 0; color: #fff; font-size: 18px; z-index: 2; }
 .sv-strip .edge.l { left: 0; border-radius: 10px 0 0 10px; background: linear-gradient(90deg, rgba(0,0,0,.55), transparent); }
 .sv-strip .edge.r { right: 0; border-radius: 0 10px 10px 0; background: linear-gradient(270deg, rgba(0,0,0,.55), transparent); }
+
+/* Collection mode */
+.cmode { display: flex; flex-direction: column; gap: 6px; }
+.cmode.on { padding: 6px 10px; border-radius: 10px; background: color-mix(in srgb, var(--accent) 10%, var(--surface)); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+.cmode-top { display: flex; align-items: center; gap: 10px; }
+.cmode-top .btn { padding: 4px 12px; font-size: 13px; }
+.cm-name { width: 230px; padding: 6px 9px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; }
+.cm-name.need { border-color: var(--live); box-shadow: 0 0 0 2px color-mix(in srgb, var(--live) 30%, transparent); }
+.cm-add { position: absolute; right: 7px; top: 7px; z-index: 3; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 19px; font-weight: 700; line-height: 1; background: rgba(10,12,24,.78); color: #fff; border: 2px solid rgba(255,255,255,.85); cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,.35); }
+.cm-add:hover { background: var(--accent); }
+.cm-add.on { background: var(--good); border-color: #fff; font-size: 16px; }
+.pc.picked .pimg { box-shadow: 0 0 0 3px var(--good), var(--shadow); }
+.vgrid td.cm-col, .vgrid th.cm-col { width: 40px; text-align: center; padding: 0 6px; }
+.vgrid .cm-add { position: static; width: 24px; height: 24px; font-size: 15px; border-width: 1.5px; margin: 0 auto; }

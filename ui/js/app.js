@@ -14,6 +14,7 @@ import { parse } from './search.js';
 
 const $ = (s) => document.querySelector(s);
 const view = $('#view');
+let qTimer = 0;               // the search box's typing pause
 let current = null; // { mod, ctx, cleanup }
 
 export function toast(msg, action) {
@@ -30,6 +31,8 @@ export function currentTab() {
 }
 
 function route() {
+  // a search still waiting for its typing pause: take what is in the box now, so a quick tab switch keeps it
+  if (qTimer) { clearTimeout(qTimer); qTimer = 0; S.state.query = $('#psearch').value.trim(); }
   const hash = location.hash.replace(/^#\/?/, '');
   const [name, arg] = hash.split('/');
   if (name === 'stats') { location.replace(`#/${arg === 'tv' ? 'tv' : 'movies'}`); S.saveSettings({ [`${arg === 'tv' ? 'tv' : 'movies'}View`]: 'dashboard' }); return; }   // old link
@@ -186,10 +189,9 @@ $('#btn-refresh').addEventListener('click', scanNow);
 document.addEventListener('keydown', (e) => { if (e.key === 'F5') { e.preventDefault(); scanNow(); } });
 
 // Search: filters the open library (title, show, genre, cast, studio, director, year, collection).
-let qTimer = 0;
 $('#psearch').addEventListener('input', (e) => {
   clearTimeout(qTimer);
-  qTimer = setTimeout(() => setQuery(e.target.value, { typing: true }), 160);
+  qTimer = setTimeout(() => { qTimer = 0; setQuery(e.target.value, { typing: true }); }, 160);
 });
 // A search that names the other kind ("90s sitcoms", "tv shows", "films") opens that tab.
 export function setQuery(q, { typing = false } = {}) {

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.8.0
+
+**Feature**
+- Collections: separate lists for Movies and TV Shows.
+- Collection mode: tick titles with a + on the posters (or the grid's first column), name the collection and press Done.
+- Search: several filters separated by semicolons (4k; genre:action; 90s), all must match.
+
+**Bug/Fix**
+- Clearing the search and switching tabs straight away could bring the old search back.
+
 ## 0.7.1
 
 **Redesign**

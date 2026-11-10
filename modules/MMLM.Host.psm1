@@ -758,7 +758,7 @@ function Get-PageCollections {
     foreach ($c in (Read-HostCollections)) {
         if ($null -eq $c -or -not $c.Name) { continue }
         $items = @(foreach ($it in @($c.Items)) { if ($it -and $it.Ids) { [ordered]@{ ids = @(@($it.Ids) | ForEach-Object { ConvertTo-PageId ([string]$_) }); title = [string]$it.Title; year = [int]$it.Year } } })
-        $out += [ordered]@{ name = [string]$c.Name; type = $(if ([string]$c.Type -eq 'rule') { 'rule' } else { 'manual' }); query = [string]$c.Query; sortBy = [string]$c.SortBy
+        $out += [ordered]@{ name = [string]$c.Name; tab = $(if (@('movies', 'tv') -contains [string]$c.Tab) { [string]$c.Tab } else { '' }); type = $(if ([string]$c.Type -eq 'rule') { 'rule' } else { 'manual' }); query = [string]$c.Query; sortBy = [string]$c.SortBy
             sortDesc = [bool]$c.SortDesc; byDate = [bool]$c.ByDate; limit = [int]$c.Limit; items = $items; created = [string]$c.Created; modified = [string]$c.Modified }
     }
     , $out
@@ -777,14 +777,17 @@ function Save-PageCollections {
     $names = @{}
     foreach ($c in @($List)) {
         $name = ([string]$c.name).Trim()
-        if (-not $name -or $name.Length -gt 80 -or $names.ContainsKey($name.ToLowerInvariant())) { continue }
-        $names[$name.ToLowerInvariant()] = $true
+        # the same name may exist once per list (a Movies "Favourites" and a TV "Favourites")
+        $nk = ([string]$c.tab) + '|' + $name.ToLowerInvariant()
+        if (-not $name -or $name.Length -gt 80 -or $names.ContainsKey($nk)) { continue }
+        $names[$nk] = $true
         $items = New-Object System.Collections.Generic.List[object]
         foreach ($it in @($c.items)) {
             $ids = @(foreach ($id in @($it.ids)) { $id = [string]$id; if ($id.StartsWith('h:')) { if ($back.ContainsKey($id)) { $back[$id] } } elseif ($id -match '^(p|s):') { $id } })
             if ($ids.Count -gt 0) { $items.Add([ordered]@{ Ids = $ids; Title = [string]$it.title; Year = [int]$it.year }) }
         }
-        $out.Add([ordered]@{ Name = $name; Type = $(if ([string]$c.type -eq 'rule') { 'rule' } else { 'manual' }); Items = $items.ToArray(); Query = [string]$c.query
+        # Tab: which list it belongs to (Movies or TV Shows); empty for collections made before lists were separate
+        $out.Add([ordered]@{ Name = $name; Tab = $(if (@('movies', 'tv') -contains [string]$c.tab) { [string]$c.tab } else { '' }); Type = $(if ([string]$c.type -eq 'rule') { 'rule' } else { 'manual' }); Items = $items.ToArray(); Query = [string]$c.query
             SortBy = [string]$c.sortBy; SortDesc = [bool]$c.sortDesc; ByDate = [bool]$c.byDate; Limit = [int]$c.limit
             Created = $(if ($c.created) { [string]$c.created } else { $now }); Modified = $now })
     }

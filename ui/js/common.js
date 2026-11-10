@@ -37,8 +37,10 @@ function scoreBadges(rt, mcScore, rating) {
   if (!out.length && num(rating) > 0) out.push(`<span class="sb-im" title="IMDb rating">\u2605 ${num(rating).toFixed(1)}</span>`);
   return out.length ? `<div class="scores">${out.join('')}</div>` : '';
 }
-export function tileHtml({ key, poster, title, sub, res, hdr, rating, rt, mcScore }) {
-  return `<button class="pc" type="button" data-k="${esc(key)}"><div class="pimg">${poster}`
+// cm: undefined = no Collection mode; false = a + to pick it; true = picked (a tick)
+export function tileHtml({ key, poster, title, sub, res, hdr, rating, rt, mcScore, cm }) {
+  const plus = cm === undefined ? '' : `<span class="cm-add${cm ? ' on' : ''}" role="button" tabindex="0" data-cm="1" title="${cm ? 'Picked: click to drop it' : 'Add to the collection'}">${cm ? '\u2713' : '+'}</span>`;
+  return `<button class="pc${cm ? ' picked' : ''}" type="button" data-k="${esc(key)}"><div class="pimg">${poster}${plus}`
     + `<div class="badges">${res ? `<span class="b">${esc(res)}</span>` : ''}${hdr && hdr !== 'SDR' ? `<span class="b b-hdr">${esc(hdr)}</span>` : ''}</div>`
     + scoreBadges(rt, mcScore, rating) + `</div>`
     + `<div class="pt" title="${esc(title)}">${esc(title)}</div><div class="ps">${esc(sub)}</div></button>`;

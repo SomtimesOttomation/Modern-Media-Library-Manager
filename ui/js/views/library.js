@@ -4,7 +4,7 @@ import * as S from '../store.js';
 import { h } from '../util.js';
 import { esc, num, fmtSize, hdrLabel, posterHtml, tileHtml, searchRows, chipsHtml, dedupe, fillWall, sortMenu } from '../common.js';
 import * as dashboard from './stats.js';
-import { collectionMenu } from './collections.js';
+import { collectionMenu, cmControls, CM, cmToggle } from './collections.js';
 import { toolsMenu, viewRids } from './tools.js';
 import { openCard } from './card.js';
 import { overlay } from './settings.js';
@@ -108,6 +108,13 @@ export const viewMode = (v) => (v === 'grid' || v === 'dashboard' ? v : 'posters
 export function mount(ctx) {
   const L = S.state.libs.movies;
   let grid = null, stopWall = null, stopDash = null, sort = { col: '', dir: 1 };
+  // Collection mode: the + toggles a title in or out of the picks; the tick and the Done count update in place
+  const pick = (r, el) => {
+    const on = cmToggle('movies', r.Rid, S.itemFor(r));
+    const b = el.querySelector('[data-cm]'); if (b) { b.classList.toggle('on', on); b.textContent = on ? '\u2713' : '+'; }
+    el.classList.toggle('picked', on);
+    const d = ctx.el.querySelector('.cm-done'); if (d) d.textContent = `Done${CM.movies.picked.size ? ` (${CM.movies.picked.size})` : ''}`;
+  };
   const draw = () => {
     stopWall?.(); stopWall = null; grid?.destroy(); grid = null; stopDash?.(); stopDash = null;
     const st = stateBox('movies', L, ctx.toast);
@@ -136,6 +143,7 @@ export function mount(ctx) {
         h('small', null, `${rows.length.toLocaleString()}${rows.length !== L.rows.length ? ' of ' + L.rows.length.toLocaleString() : ''} titles${hidden > 0 ? ` · ${hidden} duplicate${hidden === 1 ? '' : 's'} hidden` : ''} · ${fmtSize(total)}`)),
       h('div', { class: 'lib-tools' },
         h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: s.hideDupes ? true : null, onchange: (e) => S.saveSettings({ hideDupes: e.target.checked }).then(draw) }), 'Hide duplicates'),
+        cmControls('movies', draw),
         collectionMenu('movies'),
         toolsMenu('movies'),
         sortMenu(MOVIE_SORTS, sortDef[0], !!s.moviesSortRev, (k, rev) => { sort = { col: '', dir: 1 }; S.saveSettings({ moviesSort: k, moviesSortRev: rev }).then(draw); }),
@@ -148,14 +156,20 @@ export function mount(ctx) {
     if (mode === 'posters') {
       const wall = h('div', { class: 'wall' });
       body.append(wall);
-      stopWall = fillWall(wall, rows, (r) => tileHtml({ key: r._i, poster: posterHtml(r), title: r.Title, sub: [r.Year > 0 ? r.Year : '', fmtSize(r.FileSizeGB)].filter(Boolean).join(' · '), res: r.ResolutionClass, hdr: hdrLabel(r), rating: r.Rating, rt: r.RTCritic, mcScore: r.Metascore }));
-      wall.addEventListener('click', (e) => { const t = e.target.closest('.pc'); if (t) openCard(L.rows[+t.dataset.k], ctx.toast); });
+      stopWall = fillWall(wall, rows, (r) => tileHtml({ key: r._i, poster: posterHtml(r), title: r.Title, sub: [r.Year > 0 ? r.Year : '', fmtSize(r.FileSizeGB)].filter(Boolean).join(' · '), res: r.ResolutionClass, hdr: hdrLabel(r), rating: r.Rating, rt: r.RTCritic, mcScore: r.Metascore, cm: CM.movies.on ? CM.movies.picked.has(r.Rid) : undefined }));
+      wall.addEventListener('click', (e) => {
+        const t = e.target.closest('.pc'); if (!t) return;
+        const r = L.rows[+t.dataset.k];
+        if (e.target.closest('[data-cm]')) { pick(r, t); return; }
+        openCard(r, ctx.toast);
+      });
     } else {
       const cols = gridColumns(L);
+      const cmOn = CM.movies.on;
       grid = vgrid(body, {
-        head: () => headHtml(cols, sort),
-        rowHtml: (r, i) => `<tr data-i="${i}"><td class="ttl" title="${esc(r.Title)}">${esc(r.Title)}</td>${cols.map((c) => cellHtml(r, c, L)).join('')}</tr>`,
-        onRow: (r) => openCard(r, ctx.toast),
+        head: () => { const hd = headHtml(cols, sort); return cmOn ? { html: hd.html.replace('<tr>', '<tr><th class="cm-col" title="Collection mode">+</th>'), count: hd.count + 1 } : hd; },
+        rowHtml: (r, i) => `<tr data-i="${i}">${cmOn ? `<td class="cm-col"><span class="cm-add${CM.movies.picked.has(r.Rid) ? ' on' : ''}" role="button" data-cm="1">${CM.movies.picked.has(r.Rid) ? '\u2713' : '+'}</span></td>` : ''}<td class="ttl" title="${esc(r.Title)}">${esc(r.Title)}</td>${cols.map((c) => cellHtml(r, c, L)).join('')}</tr>`,
+        onRow: (r, e) => { if (e && e.target.closest('[data-cm]')) { pick(r, e.target.closest('tr')); return; } openCard(r, ctx.toast); },
         onHead: (c) => { if (!c) return; sort = { col: c, dir: sort.col === c ? -sort.dir : (L.byName.get(c)?.t === 'string' || c === 'Title' ? 1 : -1) }; draw(); },
       });
       grid.set(rows);

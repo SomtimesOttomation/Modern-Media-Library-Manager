@@ -4,7 +4,7 @@ import * as S from '../store.js';
 import { h } from '../util.js';
 import { esc, num, fmtSize, posterHtml, tileHtml, searchRows, chipsHtml, fillWall, sortMenu } from '../common.js';
 import * as dashboard from './stats.js';
-import { collectionMenu } from './collections.js';
+import { collectionMenu, cmControls, CM, cmToggle } from './collections.js';
 import { toolsMenu, viewRids } from './tools.js';
 import * as series from './series.js';
 import { openCard, openShow, showSummary } from './card.js';
@@ -40,6 +40,12 @@ export function mount(ctx) {
   const L = S.state.libs.tv;
   let grid = null, stopWall = null, stopDash = null;
   const open = new Set();                 // expanded shows ('s:name') and seasons ('s:name|n')
+  const pick = (sh, el) => {
+    const on = cmToggle('tv', sh.name, S.itemFor(sh.eps[0], sh.eps));
+    const b = el.querySelector('[data-cm]'); if (b) { b.classList.toggle('on', on); b.textContent = on ? '\u2713' : '+'; }
+    el.classList.toggle('picked', on);
+    const d = ctx.el.querySelector('.cm-done'); if (d) d.textContent = `Done${CM.tv.picked.size ? ` (${CM.tv.picked.size})` : ''}`;
+  };
   const draw = () => {
     stopWall?.(); stopWall = null; grid?.destroy(); grid = null; stopDash?.(); stopDash = null;
     const st = stateBox('tv', L, ctx.toast);
@@ -65,6 +71,7 @@ export function mount(ctx) {
       h('div', { class: 'lib-title' }, h('h1', null, 'TV Shows'),
         h('small', null, `${list.length.toLocaleString()}${list.length !== all.length ? ' of ' + all.length.toLocaleString() : ''} shows · ${L.rows.length.toLocaleString()} episodes · ${fmtSize(L.rows.reduce((a, r) => a + num(r.FileSizeGB), 0))}`)),
       h('div', { class: 'lib-tools' },
+        cmControls('tv', draw),
         collectionMenu('tv'),
         toolsMenu('tv'),
         sortMenu(TV_SORTS, sortDef[0], !!s.tvSortRev, (k, rev) => S.saveSettings({ tvSort: k, tvSortRev: rev }).then(draw)),
@@ -80,8 +87,12 @@ export function mount(ctx) {
       body.append(wall);
       const years = (sh) => (!sh.sum.y0 ? '' : sh.sum.y0 === sh.sum.y1 ? String(sh.sum.y0) : `${sh.sum.y0}–${sh.sum.y1}`);
       stopWall = fillWall(wall, list, (sh) => tileHtml({ key: sh.name, poster: posterHtml(sh.poster, sh.name), title: sh.name,
-        sub: [years(sh), `${sh.nSeasons} season${sh.nSeasons === 1 ? '' : 's'}`, `${sh.eps.length} ep.`].filter(Boolean).join(' · '), res: '', hdr: '', rating: 0 }));
-      wall.addEventListener('click', (e) => { const t = e.target.closest('.pc'); if (t) location.hash = `#/tv/${encodeURIComponent(t.dataset.k)}`; });
+        sub: [years(sh), `${sh.nSeasons} season${sh.nSeasons === 1 ? '' : 's'}`, `${sh.eps.length} ep.`].filter(Boolean).join(' · '), res: '', hdr: '', rating: 0, cm: CM.tv.on ? CM.tv.picked.has(sh.name) : undefined }));
+      wall.addEventListener('click', (e) => {
+        const t = e.target.closest('.pc'); if (!t) return;
+        if (e.target.closest('[data-cm]')) { const sh = byKey.get(t.dataset.k); if (sh) pick(sh, t); return; }
+        location.hash = `#/tv/${encodeURIComponent(t.dataset.k)}`;
+      });
       return;
     }
     // grid: flatten the open parts of the tree
@@ -111,21 +122,23 @@ export function mount(ctx) {
     };
     grid = vgrid(body, {
       // no sorting by column here: the tree keeps the Sort By order
-      head: () => ({ html: `<tr><th>Title</th>${xHead()}${cols.map((c) => `<th>${esc(colLabel(c))}</th>`).join('')}</tr>`, count: cols.length + 2 }),
+      head: () => ({ html: `<tr>${CM.tv.on ? '<th class="cm-col">+</th>' : ''}<th>Title</th>${xHead()}${cols.map((c) => `<th>${esc(colLabel(c))}</th>`).join('')}</tr>`, count: cols.length + 2 + (CM.tv.on ? 1 : 0) }),
       rowHtml: (it, i) => {
         if (it.k === 'show') {
           const o = open.has('s:' + it.sh.name);
-          return `<tr class="show" data-i="${i}"><td class="ttl" title="${esc(it.sh.name)}"><span class="tw">${o ? '▾' : '▸'}</span>${esc(it.sh.name)}</td><td class="muted">${it.sh.nSeasons} season${it.sh.nSeasons === 1 ? '' : 's'} · ${it.sh.eps.length} ep.</td>${cols.map((c) => agg(it.sh.eps, c)).join('')}</tr>`;
+          const cmc = CM.tv.on ? `<td class="cm-col"><span class="cm-add${CM.tv.picked.has(it.sh.name) ? ' on' : ''}" role="button" data-cm="1">${CM.tv.picked.has(it.sh.name) ? '\u2713' : '+'}</span></td>` : '';
+          return `<tr class="show" data-i="${i}">${cmc}<td class="ttl" title="${esc(it.sh.name)}"><span class="tw">${o ? '▾' : '▸'}</span>${esc(it.sh.name)}</td><td class="muted">${it.sh.nSeasons} season${it.sh.nSeasons === 1 ? '' : 's'} · ${it.sh.eps.length} ep.</td>${cols.map((c) => agg(it.sh.eps, c)).join('')}</tr>`;
         }
         if (it.k === 'season') {
           const o = open.has(`s:${it.sh.name}|${it.n}`);
-          return `<tr class="season" data-i="${i}"><td class="ttl"><span class="tw">${o ? '▾' : '▸'}</span>${it.n === 0 ? 'Specials' : 'Season ' + it.n}</td><td class="muted">${it.eps.length} episode${it.eps.length === 1 ? '' : 's'}</td>${cols.map((c) => agg(it.eps, c)).join('')}</tr>`;
+          return `<tr class="season" data-i="${i}">${CM.tv.on ? '<td class="cm-col"></td>' : ''}<td class="ttl"><span class="tw">${o ? '▾' : '▸'}</span>${it.n === 0 ? 'Specials' : 'Season ' + it.n}</td><td class="muted">${it.eps.length} episode${it.eps.length === 1 ? '' : 's'}</td>${cols.map((c) => agg(it.eps, c)).join('')}</tr>`;
         }
         const e = it.e, t = String(e.Title).replace(/^.* - S\d+E\d+ - /, '');
-        return `<tr class="ep" data-i="${i}"><td class="ttl" title="${esc(t)}">E${String(num(e.Episode)).padStart(2, '0')} · ${esc(t)}</td><td></td>${cols.map((c) => cellHtml(e, c, L)).join('')}</tr>`;
+        return `<tr class="ep" data-i="${i}">${CM.tv.on ? '<td class="cm-col"></td>' : ''}<td class="ttl" title="${esc(t)}">E${String(num(e.Episode)).padStart(2, '0')} · ${esc(t)}</td><td></td>${cols.map((c) => cellHtml(e, c, L)).join('')}</tr>`;
       },
       onRow: (it, e) => {
         if (e && e.target.closest('[data-open]')) return;
+        if (e && e.target.closest('[data-cm]') && it.k === 'show') { pick(it.sh, e.target.closest('tr')); return; }
         if (it.k === 'ep') { openCard(it.e, ctx.toast); return; }
         const key = it.k === 'show' ? 's:' + it.sh.name : `s:${it.sh.name}|${it.n}`;
         if (open.has(key)) { open.delete(key); if (it.k === 'show') for (const k of [...open]) if (k.startsWith(key + '|')) open.delete(k); } else open.add(key);

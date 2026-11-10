@@ -44,7 +44,7 @@ Add-Type -AssemblyName System.Data
 #region ---------------------------------------------------------------- Configuration
 $script:AppRoot         = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $script:TemplatePath    = Join-Path $script:AppRoot 'dashboard-template.html'
-$script:AppVersion      = '0.7.0'    # must match the release tag (vX.Y.Z); the release workflow checks it
+$script:AppVersion      = '0.7.1'    # must match the release tag (vX.Y.Z); the release workflow checks it
 $script:CacheVersion    = 4          # bump when the record schema changes
 $script:AppData         = Join-Path $env:LOCALAPPDATA 'Modern-Media-Library-Manager'
 $script:CacheFolder     = Join-Path $script:AppData 'Cache'

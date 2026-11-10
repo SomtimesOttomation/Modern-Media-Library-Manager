@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.7.1
+
+**Redesign**
+- TV series view: one rounded card with a gap below it; arrows instead of scroll bars on the season strip, cast and related shows; a click beside the card goes back to the posters.
+
 ## 0.7.0
 
 **Feature**

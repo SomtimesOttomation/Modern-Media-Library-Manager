@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.9.0
+
+**Feature**
+- Compare (Movies): two movies head to head on box office and critics, with a video-game VS and themed poster borders.
+- Compare collections: totals and averages for each side, then a #1 vs #1 tournament by worldwide gross (up to 10 rounds).
+- Settings > Fun: border effect for each side (Auto, Fire, Lightning, Specter, Poster colours, Off), animation level, VS style and the rules.
+
 ## 0.8.0
 
 **Feature**

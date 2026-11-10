@@ -9,6 +9,7 @@ import { num, fmtMoney, dedupe } from '../common.js';
 import { overlay } from './settings.js';
 import { inTab } from './collections.js';
 import { openCard } from './card.js';
+import { fetchDialog } from './tools.js';
 
 const CAP = 10;
 // what is being compared; kept for the session so a tab switch comes back to the same match-up
@@ -24,7 +25,7 @@ function statDefs() {
   const box = [
     { k: 'Worldwide', f: 'BoxOfficeWorldwide', fmt: money },
     { k: 'Domestic', f: 'BoxOfficeDomestic', fmt: money },
-    { k: 'Opening weekend', f: 'OpeningDomestic', fmt: money },
+    { k: 'Opening weekend', f: 'OpeningDomestic', fmt: money, optional: true },
   ];
   const crit = [
     { k: 'RT critics', f: 'RTCritic', fmt: pct },
@@ -63,7 +64,7 @@ function aggregate(list, defs) {
 function aggDefs(defs) {
   return {
     box: [{ k: 'Total worldwide', f: 'BoxOfficeWorldwide', fmt: money }, { k: 'Avg per film', f: 'AvgWorldwide', fmt: money },
-      { k: 'Total domestic', f: 'BoxOfficeDomestic', fmt: money }, { k: 'Total opening weekends', f: 'OpeningDomestic', fmt: money }],
+      { k: 'Total domestic', f: 'BoxOfficeDomestic', fmt: money }, { k: 'Total opening weekends', f: 'OpeningDomestic', fmt: money, optional: true }],
     crit: defs.crit.map((d) => ({ ...d, k: 'Avg ' + d.k, fmt: d.f === 'Rating' ? one : d.f === 'Metascore' ? int : pct })),
   };
 }
@@ -141,6 +142,8 @@ function vsMark() {
 }
 function statPanel(title, defs, a, b) {
   let lw = 0, rw = 0;
+  // Opening weekend only comes from hand-typed values, so it shows only when one side has it
+  defs = defs.filter((d) => !d.optional || num(a?.[d.f]) > 0 || num(b?.[d.f]) > 0);
   const rows = defs.map((d) => {
     const av = num(a?.[d.f]), bv = num(b?.[d.f]), w = judge(av, bv), mx = Math.max(av, bv) || 1;
     if (w < 0) lw++; else if (w > 0) rw++;
@@ -223,6 +226,7 @@ export function render(el, redraw, toast) {
       h('div', { class: 'cmp-mid' }, vsMark(), tallyOn ? h('small', { class: 'lbl' }, 'Rounds won') : null, tallyOn ? h('div', { class: 'cmp-score' }, h('b', { class: 'l' }, String(l)), h('span', null, '–'), h('b', { class: 'r' }, String(r))) : null),
       sideBox(b, 'r')));
     root.append(h('div', { class: 'cmp-panels' }, pb.el, pc.el));
+    root.append(fetchHint([a, b]));
     if (tallyOn) root.append(banner(l, r, a.Title, b.Title, `${pb.l}–${pb.r} at the box office, ${pc.l}–${pc.r} with critics`));
     root.append(h('p', { class: 'cmp-note' }, h('small', null, 'A round is one row; ties and missing numbers count for nobody. Box office and Metacritic come from Tools > Fetch info.')));
     el.replaceChildren(root);
@@ -265,12 +269,24 @@ export function render(el, redraw, toast) {
     head(cb, gb, 'r')));
   const pb = statPanel('Box office (all films)', ad.box, ga, gb), pc = statPanel('Critical reception (averages)', ad.crit, ga, gb);
   root.append(h('div', { class: 'cmp-panels' }, pb.el, pc.el));
+  root.append(fetchHint([...ma.slice(0, CAP), ...mb.slice(0, CAP)]));
   root.append(h('section', { class: 'cmp-panel card cmp-tour' },
     h('h2', null, h('span', null, `Tournament: #1 vs #1 by worldwide gross${n ? `, ${n} round${n === 1 ? '' : 's'}` : ''}`), h('span', { class: 'tally' }, `${tl} – ${tr}`)),
     h('div', { class: 'cmp-trow hd' }, h('span', null, '#'), h('span', null, ca.name), h('span', null, 'Gross'), h('span', null, 'RT'), h('span', null, 'Winner'), h('span', null, 'RT'), h('span', null, 'Gross'), h('span', null, cb.name)),
     ...rows));
   if (tallyOn) root.append(banner(tl, tr, ca.name, cb.name, `tournament rounds; each round is decided by the stat rows (${defs.box.length + defs.crit.length})`));
   el.replaceChildren(root);
+}
+
+// Box office and Metacritic are only filled in by Tools > Fetch info (Plex has neither). When some are missing, offer
+// to fetch just these titles; it is the same Fetch info, with its warning, and nothing runs until it is confirmed.
+function fetchHint(list) {
+  const missing = list.filter((r) => r && (num(r.BoxOfficeWorldwide) <= 0 || num(r.Metascore) <= 0));
+  if (!missing.length) return null;
+  const rids = missing.map((r) => r.Rid).filter(Boolean);
+  return h('div', { class: 'cmp-hint' },
+    h('span', null, `${missing.length === 1 ? (list.length === 2 ? 'One title has' : '1 title here has') : missing.length === list.length && list.length === 2 ? 'Both titles have' : `${missing.length} titles here have`} no box office or Metacritic yet. Plex does not have them; Fetch info looks them up (TMDB and OMDb, with your keys).`),
+    h('button', { class: 'btn', type: 'button', disabled: S.state.halted || S.state.tool?.running ? true : null, onclick: () => fetchDialog('movies', rids) }, `Fetch info for ${rids.length === 1 ? 'this title' : `these ${rids.length}`}`));
 }
 
 function banner(l, r, a, b, how) {

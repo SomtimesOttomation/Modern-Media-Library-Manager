@@ -1,6 +1,7 @@
 // App state and host calls. Same shape as the Sample's store.js (state, subscribe/notify topics, settings, traffic,
 // updates), with the library in place of the Sample's league: state.libs.movies / state.libs.tv.
 import * as bridge from './bridge.js';
+import { adjust, ADJ_FIELDS } from './inflation.js';
 
 export const TABS = ['movies', 'tv'];
 const lib = () => ({ status: 'idle', rows: [], fields: [], byName: new Map(), error: '' });
@@ -12,7 +13,7 @@ export const state = {
   hostMode: 'standalone',
   hostTheme: '',
   settings: { theme: 'system', updateCheck: false, moviesView: 'posters', tvView: 'posters', moviesSort: 'added', tvSort: 'title', moviesSortRev: false, tvSortRev: false,
-    columns: [], hideDupes: false, posterScale: 100, widthPreset: 'full', customWidth: false, contentWidth: 0, artLogo: false, artBackground: false, artBanner: false,
+    columns: [], hideDupes: false, posterScale: 100, widthPreset: 'full', customWidth: false, contentWidth: 0, artLogo: false, artBackground: false, artBanner: false, cmpInflation: false,
     fxLeft: 'auto', fxRight: 'auto', fxMotion: 'full', vsStyle: 'arcade', cmpTally: true, cmpWalkover: true, cmpImdb: true },
   plex: { url: '', hasToken: false },
   counts: { movies: { count: 0, when: '' }, tv: { count: 0, when: '' } },
@@ -54,8 +55,11 @@ function prepare(raw, tab) {
     r._genres = splitList(r.Genre);
     r._search = [r.Title, r.Show, r.Genre, r.Cast, r.Studio, r.Director, r.Year || '', r.Collection].join(' ').toLowerCase();
     for (const k of ['Poster', 'Art', 'Logo', 'Banner']) if (r[k] && !/^(https?:|data:|blob:)/.test(r[k])) r[k] = (bridge.isHost ? 'https://mmlm.cache/' : '') + r[k];
+    for (const [f, a] of ADJ_FIELDS) if (r[f] > 0) { const v = adjust(r[f], r.Year); if (v > 0) r[a] = Math.round(v); }   // inflation.js
     return r;
   });
+  // the inflation-adjusted box office joins the field list (Grid columns, search), next to the real figures
+  if (raw.fields.some((f) => f.n === 'BoxOfficeWorldwide')) for (const [f, a] of ADJ_FIELDS) if (!raw.fields.some((x) => x.n === a)) raw.fields.push({ n: a, t: 'double', g: 'Box office', s: false });
   return { rows, fields: raw.fields, byName: new Map(raw.fields.map((f) => [f.n, f])) };
 }
 // The failed-request rule: a library that failed to load is not asked for again when the page redraws, only when the

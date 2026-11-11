@@ -4,6 +4,7 @@ import * as S from '../store.js';
 import { overlay } from './settings.js';
 import { esc, num, v, fmtInt, fmtMoney, fmtSize, fmtHMS, fmtRun, hdrLabel, posterHtml, logoOrTitle, artUrl } from '../common.js';
 import { hdrClass, deviceStatus, ALL_DEVICES, STATUS } from './devices.js';
+import { BASE_YEAR } from '../inflation.js';
 import { addToCollection } from './collections.js';
 
 function spec(title, pairs) {
@@ -26,8 +27,10 @@ function scoreCards(r) {
     ['RT Critics', rt(r.RTCritic)], ['RT Audience', rt(r.RTAudience)],
     // Metacritic always shows on a movie: its score comes from OMDb, so say how to get it when it is missing
     ['Metacritic', mc(r.Metascore) || (r.Show ? '' : { html: '<span class="muted" title="Metacritic scores come from OMDb: Tools > Fetch info (needs an OMDb key in Settings > Data)">not fetched</span>' })], ['CinemaScore', r.CinemaScore]];
-  const money = [['Domestic (all-time)', fmtMoney(r.BoxOfficeDomestic)], ['Worldwide (all-time)', fmtMoney(r.BoxOfficeWorldwide)],
-    ['Opening, domestic', fmtMoney(r.OpeningDomestic)], ['Opening, worldwide', fmtMoney(r.OpeningWorldwide)]];
+  // each figure with its inflation-adjusted value underneath (inflation.js)
+  const m = (raw, adj, approx) => (fmtMoney(raw) ? (adj > 0 ? { html: `${esc(fmtMoney(raw))}<small class="adj" title="Adjusted for US inflation from the release year (${BASE_YEAR} dollars)${approx ? '; approximate for worldwide' : ''}">${approx ? '≈ ' : ''}${esc(fmtMoney(adj))} in ${BASE_YEAR} $</small>` } : fmtMoney(raw)) : '');
+  const money = [['Domestic (all-time)', m(r.BoxOfficeDomestic, r.BoxOfficeDomesticAdj)], ['Worldwide (all-time)', m(r.BoxOfficeWorldwide, r.BoxOfficeWorldwideAdj, true)],
+    ['Opening, domestic', m(r.OpeningDomestic, r.OpeningDomesticAdj)], ['Opening, worldwide', fmtMoney(r.OpeningWorldwide)]];
   const has = (rows) => rows.some((x) => x[1] && !(x[1].html && x[1].html.includes('not fetched')));
   return (has(rating) ? spec('Ratings', rating) : '') + (has(money) ? spec('Box office', money) : '');
 }

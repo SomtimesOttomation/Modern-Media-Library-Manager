@@ -10,6 +10,7 @@ import { overlay } from './settings.js';
 import { inTab } from './collections.js';
 import { openCard } from './card.js';
 import { fetchDialog } from './tools.js';
+import { BASE_YEAR } from '../inflation.js';
 
 const CAP = 10;
 // what is being compared; kept for the session so a tab switch comes back to the same match-up
@@ -21,11 +22,14 @@ const int = (n) => (num(n) > 0 ? String(Math.round(num(n))) : '');
 const one = (n) => (num(n) > 0 ? num(n).toFixed(1) : '');
 
 // The stat rows. get(x) reads a movie or a collection aggregate; fmt shows it.
+// "Adjust for inflation" (toolbar) swaps in the adjusted figures (inflation.js), in BASE_YEAR dollars.
+const infl = () => !!S.state.settings.cmpInflation;
+const bo = (f) => (infl() ? f + 'Adj' : f);
 function statDefs() {
   const box = [
-    { k: 'Worldwide', f: 'BoxOfficeWorldwide', fmt: money },
-    { k: 'Domestic', f: 'BoxOfficeDomestic', fmt: money },
-    { k: 'Opening weekend', f: 'OpeningDomestic', fmt: money, optional: true },
+    { k: 'Worldwide', f: bo('BoxOfficeWorldwide'), fmt: money },
+    { k: 'Domestic', f: bo('BoxOfficeDomestic'), fmt: money },
+    { k: 'Opening weekend', f: bo('OpeningDomestic'), fmt: money, optional: true },
   ];
   const crit = [
     { k: 'RT critics', f: 'RTCritic', fmt: pct },
@@ -49,7 +53,8 @@ function duel(a, b, defs) {
 // ---- collections -------------------------------------------------------------------------------------------------
 function members(c) {
   const L = S.state.libs.movies;
-  return dedupe(L.rows.filter((r) => c.has(r))).sort((a, b) => num(b.BoxOfficeWorldwide) - num(a.BoxOfficeWorldwide));
+  const f = bo('BoxOfficeWorldwide');
+  return dedupe(L.rows.filter((r) => c.has(r))).sort((a, b) => num(b[f]) - num(a[f]) || num(b.BoxOfficeWorldwide) - num(a.BoxOfficeWorldwide));
 }
 // Aggregate: box office as totals, scores as averages over the films that have them
 function aggregate(list, defs) {
@@ -57,14 +62,14 @@ function aggregate(list, defs) {
   const avg = (f) => { const v = list.map((r) => num(r[f])).filter((x) => x > 0); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0; };
   const sum = (f) => list.reduce((a, r) => a + num(r[f]), 0);
   defs.box.forEach((d) => { o[d.f] = sum(d.f); });
-  o.AvgWorldwide = avg('BoxOfficeWorldwide');
+  o.AvgWorldwide = avg(bo('BoxOfficeWorldwide'));
   defs.crit.forEach((d) => { o[d.f] = avg(d.f); });
   return o;
 }
 function aggDefs(defs) {
   return {
-    box: [{ k: 'Total worldwide', f: 'BoxOfficeWorldwide', fmt: money }, { k: 'Avg per film', f: 'AvgWorldwide', fmt: money },
-      { k: 'Total domestic', f: 'BoxOfficeDomestic', fmt: money }, { k: 'Total opening weekends', f: 'OpeningDomestic', fmt: money, optional: true }],
+    box: [{ k: 'Total worldwide', f: bo('BoxOfficeWorldwide'), fmt: money }, { k: 'Avg per film', f: 'AvgWorldwide', fmt: money },
+      { k: 'Total domestic', f: bo('BoxOfficeDomestic'), fmt: money }, { k: 'Total opening weekends', f: bo('OpeningDomestic'), fmt: money, optional: true }],
     crit: defs.crit.map((d) => ({ ...d, k: 'Avg ' + d.k, fmt: d.f === 'Rating' ? one : d.f === 'Metascore' ? int : pct })),
   };
 }
@@ -209,6 +214,8 @@ export function render(el, redraw, toast) {
       if (pick.mode === 'movie') [pick.left, pick.right] = [pick.right, pick.left]; else [pick.cLeft, pick.cRight] = [pick.cRight, pick.cLeft];
       redraw();
     } }, 'Swap sides'),
+    h('label', { class: 'cmp-infl', title: `Box office in ${BASE_YEAR} dollars, adjusted for US inflation from each release year (worldwide is approximate)` },
+      h('input', { type: 'checkbox', checked: infl() ? true : null, onchange: (e) => S.saveSettings({ cmpInflation: e.target.checked }).then(redraw) }), ' Adjust for inflation'),
     h('button', { class: 'btn', type: 'button', title: 'Border effects and the VS', onclick: () => import('./settings.js').then((m) => m.openSettings('fun', redraw)) }, 'Effects'));
   root.append(bar);
 
@@ -221,7 +228,7 @@ export function render(el, redraw, toast) {
       h('button', { type: 'button', class: 'cmp-pbtn', title: 'Open its card', onclick: () => openCard(r, toast) }, posterBox(r, side, r.Title)),
       nameEl(r), h('small', null, [r.Year > 0 ? r.Year : '', String(r.Genre || '').split(',')[0]].filter(Boolean).join(' · ')),
       h('button', { class: 'btn', type: 'button', onclick: () => chooseMovie(side === 'l' ? pick.left : pick.right, (rid) => { if (side === 'l') pick.left = rid; else pick.right = rid; redraw(); }) }, 'Change title'));
-    const pb = statPanel('Box office', defs.box, a, b), pc = statPanel('Critical reception', defs.crit, a, b);
+    const pb = statPanel(infl() ? `Box office (${BASE_YEAR} dollars)` : 'Box office', defs.box, a, b), pc = statPanel('Critical reception', defs.crit, a, b);
     const l = pb.l + pc.l, r = pb.r + pc.r;
     root.append(h('div', { class: 'cmp-stage' }, sideBox(a, 'l'),
       h('div', { class: 'cmp-mid' }, vsMark(), tallyOn ? h('small', { class: 'lbl' }, 'Rounds won') : null, tallyOn ? h('div', { class: 'cmp-score' }, h('b', { class: 'l' }, String(l)), h('span', null, '–'), h('b', { class: 'r' }, String(r))) : null),
@@ -261,18 +268,18 @@ export function render(el, redraw, toast) {
     const cell = (r, side) => (r ? h('button', { type: 'button', class: `t ${side}${(side === 'l' ? w < 0 : w > 0) ? ' win' : ''}`, onclick: () => openCard(r, toast) }, r.Title) : h('span', { class: `t ${side} none` }, '—'));
     rows.push(h('div', { class: `cmp-trow${a && b ? '' : ' bye'}` },
       h('span', { class: 'n' }, String(i + 1)),
-      cell(a, 'l'), h('span', { class: 'g l' }, money(a?.BoxOfficeWorldwide)), h('span', { class: 'c l' }, pct(a?.RTCritic)),
+      cell(a, 'l'), h('span', { class: 'g l' }, money(a?.[bo('BoxOfficeWorldwide')])), h('span', { class: 'c l' }, pct(a?.RTCritic)),
       h('span', { class: `w ${w < 0 ? 'l' : w > 0 ? 'r' : ''}`, title: note }, w < 0 ? '◀' : w > 0 ? '▶' : '=', h('small', null, note)),
-      h('span', { class: 'c r' }, pct(b?.RTCritic)), h('span', { class: 'g r' }, money(b?.BoxOfficeWorldwide)), cell(b, 'r')));
+      h('span', { class: 'c r' }, pct(b?.RTCritic)), h('span', { class: 'g r' }, money(b?.[bo('BoxOfficeWorldwide')])), cell(b, 'r')));
   }
   root.append(h('div', { class: 'cmp-stage coll' }, head(ca, ga, 'l'),
     h('div', { class: 'cmp-mid' }, vsMark(), tallyOn ? h('small', { class: 'lbl' }, 'Rounds won') : null, tallyOn ? h('div', { class: 'cmp-score' }, h('b', { class: 'l' }, String(tl)), h('span', null, '–'), h('b', { class: 'r' }, String(tr))) : null),
     head(cb, gb, 'r')));
-  const pb = statPanel('Box office (all films)', ad.box, ga, gb), pc = statPanel('Critical reception (averages)', ad.crit, ga, gb);
+  const pb = statPanel(infl() ? `Box office (all films, ${BASE_YEAR} dollars)` : 'Box office (all films)', ad.box, ga, gb), pc = statPanel('Critical reception (averages)', ad.crit, ga, gb);
   root.append(h('div', { class: 'cmp-panels' }, pb.el, pc.el));
   root.append(fetchHint([...ma.slice(0, CAP), ...mb.slice(0, CAP)]));
   root.append(h('section', { class: 'cmp-panel card cmp-tour' },
-    h('h2', null, h('span', null, `Tournament: #1 vs #1 by worldwide gross${n ? `, ${n} round${n === 1 ? '' : 's'}` : ''}`), h('span', { class: 'tally' }, `${tl} – ${tr}`)),
+    h('h2', null, h('span', null, `Tournament: #1 vs #1 by worldwide gross${infl() ? ' (inflation-adjusted)' : ''}${n ? `, ${n} round${n === 1 ? '' : 's'}` : ''}`), h('span', { class: 'tally' }, `${tl} – ${tr}`)),
     h('div', { class: 'cmp-trow hd' }, h('span', null, '#'), h('span', null, ca.name), h('span', null, 'Gross'), h('span', null, 'RT'), h('span', null, 'Winner'), h('span', null, 'RT'), h('span', null, 'Gross'), h('span', null, cb.name)),
     ...rows));
   if (tallyOn) root.append(banner(tl, tr, ca.name, cb.name, `tournament rounds; each round is decided by the stat rows (${defs.box.length + defs.crit.length})`));

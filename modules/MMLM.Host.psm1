@@ -98,7 +98,7 @@ function Save-HostPlexSettings {
 $script:PageDefaults = [ordered]@{ theme = 'system'; updateCheck = $false; moviesView = 'posters'; tvView = 'posters'; moviesSort = 'added'; tvSort = 'title'; moviesSortRev = $false; tvSortRev = $false
     columns = @(); hideDupes = $false; detectFel = $false; posterScale = 100; widthPreset = 'full'; customWidth = $false; contentWidth = 0
     artLogo = $false; artBackground = $false; artBanner = $false
-    fxLeft = 'auto'; fxRight = 'auto'; fxMotion = 'full'; vsStyle = 'arcade'; cmpTally = $true; cmpWalkover = $true; cmpImdb = $true }
+    fxLeft = 'auto'; fxRight = 'auto'; fxMotion = 'full'; vsStyle = 'arcade'; cmpTally = $true; cmpInflation = $false; cmpWalkover = $true; cmpImdb = $true }
 function Read-PageSettings {
     $s = [ordered]@{}; foreach ($k in $script:PageDefaults.Keys) { $s[$k] = $script:PageDefaults[$k] }
     $p = Join-Path $script:AppData 'page-settings.json'
@@ -125,6 +125,7 @@ function Set-PageSetting {
         'artBanner'   { $Value = [bool]$Value; $true }
         'cmpWalkover' { $Value = [bool]$Value; $true }
         'cmpImdb'     { $Value = [bool]$Value; $true }
+        'cmpInflation' { $Value = [bool]$Value; $true }
         'fxLeft'      { $fx -contains [string]$Value }
         'fxRight'     { $fx -contains [string]$Value }
         'fxMotion'    { @('still', 'calm', 'full') -contains [string]$Value }

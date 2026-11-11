@@ -16,7 +16,7 @@ export const ALIASES = {
   audio: 'AudioFormat', atmos: 'ObjectAudio', channels: 'AudioLayout', lang: 'AudioLanguages', language: 'AudioLanguages', subs: 'SubtitleLanguages',
   size: 'FileSizeGB', gb: 'FileSizeGB', runtime: 'RuntimeMin', minutes: 'RuntimeMin', length: 'RuntimeMin', show: 'Show', season: 'Season', episode: 'Episode',
   rated: 'MPAARating', mpaa: 'MPAARating', source: 'Source', container: 'Container', added: 'Added', country: 'Country', title: 'Title', bitrate: 'VideoBitRateMbps',
-  mbps: 'VideoBitRateMbps', fps: 'FrameRate', box: 'BoxOfficeWorldwide', boxoffice: 'BoxOfficeWorldwide', domestic: 'BoxOfficeDomestic', collection: '_collection',
+  mbps: 'VideoBitRateMbps', fps: 'FrameRate', box: 'BoxOfficeWorldwide', boxoffice: 'BoxOfficeWorldwide', domestic: 'BoxOfficeDomestic', boxadj: 'BoxOfficeWorldwideAdj', adjusted: 'BoxOfficeWorldwideAdj', domesticadj: 'BoxOfficeDomesticAdj', collection: '_collection',
   watched: 'ViewCount', plays: 'ViewCount',
 };
 const NUMERIC = new Set(['int', 'double', 'long', 'bool']);

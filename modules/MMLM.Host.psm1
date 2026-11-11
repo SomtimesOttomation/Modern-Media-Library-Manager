@@ -201,7 +201,7 @@ function Export-PageLibrary {
     $artDir = Join-Path $Job.CacheDir 'art'
     $have = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     if (Test-Path -LiteralPath $artDir) { foreach ($f in [IO.Directory]::GetFiles($artDir)) { [void]$have.Add([IO.Path]::GetFileName($f)) } }
-    foreach ($k in @(@('Art', 'art', 'jpg'), @('Logo', 'logo', 'png'), @('Banner', 'banner', 'jpg'))) {
+    foreach ($k in @(@('Art', 'art', 'jpg'), @('Logo', 'clogo', 'png'), @('Banner', 'tvbanner', 'jpg'))) {
         $names.Add($k[0]); $defs.Add([ordered]@{ n = $k[0]; t = 'string'; g = 'Library'; s = $false })
         foreach ($r in $Recs) {
             $u = ''

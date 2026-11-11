@@ -103,11 +103,14 @@ function dataTab() {
 function artworkTab(repaint) {
   const s = S.state.settings;
   const status = h('p', { class: 'art-status' });
+  const anyTicked = () => !!(S.state.settings.artLogo || S.state.settings.artBackground || S.state.settings.artBanner);
+  let refreshBtn = null;
   const tick = (key, label, note) => {
     const cb = h('input', { type: 'checkbox', checked: s[key] ? true : null });
     cb.addEventListener('change', async () => {
       try {
         await S.saveSettings({ [key]: cb.checked });
+        if (refreshBtn) refreshBtn.disabled = !anyTicked();
         if (cb.checked) {
           await bridge.request('tools.start', { kind: 'artwork', tab: 'movies', rids: [] });
           S.state.tool = { kind: 'artwork', running: true, pct: 0, text: 'Starting...' }; S.notify('tool');
@@ -122,6 +125,16 @@ function artworkTab(repaint) {
     tick('artLogo', 'Clear logos', 'Movies and TV Shows: the title logo instead of the title text on cards, the series view and Compare.'),
     tick('artBackground', 'Background art', 'Movies and TV Shows: the wide background picture replaces the plain background on cards, the series view and Compare.'),
     tick('artBanner', 'TV banners', 'TV Shows: wide banners for the Banners view (shows without one get their background art and logo instead).'),
+    hr(),
+    h('div', { class: 'art-opt' },
+      h('div', null, refreshBtn = h('button', { class: 'btn', type: 'button', disabled: anyTicked() ? null : true, onclick: async () => {
+        try {
+          await bridge.request('tools.start', { kind: 'artwork', tab: 'movies', rids: [], force: true });
+          S.state.tool = { kind: 'artwork', running: true, pct: 0, text: 'Starting...' }; S.notify('tool');
+          status.textContent = 'Fetching everything again from Plex; progress shows under the bar.';
+        } catch (e) { status.textContent = e.message; }
+      } }, 'Refresh artwork')),
+      h('small', null, 'Changed a banner, logo or background in Plex (or turned on its local assets)? This fetches every ticked picture again, so MMLM shows what Plex has now. It asks Plex once per picture, so a big library takes a few minutes.')),
     status,
   ];
 }

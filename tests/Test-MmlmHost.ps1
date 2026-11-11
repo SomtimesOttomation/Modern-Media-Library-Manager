@@ -104,6 +104,12 @@ $script:Mod = Get-Module MMLM.Host
 [IO.File]::WriteAllText((Join-Path $art 'banner-3.jpg'), 'old cropped banner')
 [void](Cmd 66 'library.get' @{ tab = 'tv' }); $te = Wait-Tool
 Check ($te -match '"kind":"artwork"' -and -not (Test-Path -LiteralPath (Join-Path $art 'banner-3.jpg')) -and (Test-Path -LiteralPath (Join-Path $art 'tvbanner-3.jpg'))) 'cropped artwork from v0.10.0 is replaced by itself'
+# Refresh artwork: fetches again what is already saved (a picture changed in Plex), and the library points at the new copy
+$before = (Get-Item -LiteralPath (Join-Path $art 'art-101.jpg')).LastWriteTimeUtc
+Start-Sleep -Milliseconds 1100
+Check ((Cmd 67 'tools.start' @{ kind = 'artwork'; tab = 'movies'; force = $true }) -match '"ok":true') 'Refresh artwork starts'
+$te = Wait-Tool
+Check ($te -match 'refreshed from Plex' -and (Get-Item -LiteralPath (Join-Path $art 'art-101.jpg')).LastWriteTimeUtc -gt $before -and (Test-Path -LiteralPath (Join-Path $art 'clogo-102.none'))) 'Refresh artwork fetches saved pictures again'
 foreach ($k in 'artBackground', 'artLogo', 'artBanner') { [void](Cmd 65 'settings.set' @{ key = $k; value = $false }) }
 $sr = Cmd 20 'series.open' @{ show = 'Show A'; ep = '1001' }
 Check ($sr -match '"loading":true') 'opening a show fetches it from Plex'

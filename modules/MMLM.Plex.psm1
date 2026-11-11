@@ -164,7 +164,7 @@ function Save-MmlmPlexPoster {
             $rs = $resp.GetResponseStream()
             $rs.CopyTo($ms)
             Add-MmlmTraffic -Bytes $ms.Length
-            if ($ms.Length -gt 0) { [IO.File]::WriteAllBytes($dest, $ms.ToArray()); return $dest }
+            if ($ms.Length -gt 0) { [IO.File]::WriteAllBytes($dest + '.part', $ms.ToArray()); Move-Item -LiteralPath ($dest + '.part') -Destination $dest -Force; return $dest }
         }
         finally { $ms.Dispose() }
     }
@@ -177,15 +177,17 @@ function Save-MmlmPlexArtwork {
     # Background art, clear logo or TV banner for a title, from the same Plex item as its poster (an episode uses its
     # show's). Saved as <Folder>\<kind>-<ratingKey>.<ext>; a title Plex has none for gets a <kind>-<key>.none marker so it
     # is not asked again (Rebuild clears them). Returns 'saved', 'have', 'none' or 'failed'.
-    param([string]$BaseUrl, [string]$Token, [string]$Thumb, [ValidateSet('art', 'logo', 'banner')][string]$Kind, [string]$Folder, [switch]$Retry)
+    param([string]$BaseUrl, [string]$Token, [string]$Thumb, [ValidateSet('art', 'logo', 'banner')][string]$Kind, [string]$Folder, [switch]$Retry, [switch]$Force)
+    # -Force (Settings > Artwork > Refresh): ask Plex again even when saved or marked missing; a failed request keeps the
+    # saved copy, and a picture Plex no longer has is removed.
     if ([string]$Thumb -notmatch '^/library/metadata/(\d+)(/|$)') { return 'none' }
     $key = $Matches[1]
     $ext = $(if ($Kind -eq 'logo') { 'png' } else { 'jpg' })
     $pre  = @{ art = 'art'; logo = 'clogo'; banner = 'tvbanner' }[$Kind]       # (logo-/banner- were the cropped first version)
     $dest = Join-Path $Folder ('{0}-{1}.{2}' -f $pre, $key, $ext)
     $none = Join-Path $Folder ('{0}-{1}.none' -f $pre, $key)
-    if ((Test-Path -LiteralPath $dest) -and ((Get-Item -LiteralPath $dest).Length -gt 0)) { return 'have' }
-    if ((Test-Path -LiteralPath $none) -and -not $Retry) { return 'none' }
+    if (-not $Force -and (Test-Path -LiteralPath $dest) -and ((Get-Item -LiteralPath $dest).Length -gt 0)) { return 'have' }
+    if ((Test-Path -LiteralPath $none) -and -not $Retry -and -not $Force) { return 'none' }
     # the box each picture must fit inside. Logos and banners are never cropped (minSize 0 = fit inside, keep the shape);
     # banners come at their full 1000x185. Background art fills 1280x720 (it is shown as a cover anyway).
     $size = @{ art = @(1280, 720); logo = @(800, 310); banner = @(1000, 185) }[$Kind]
@@ -210,7 +212,7 @@ function Save-MmlmPlexArtwork {
         $code = 0
         try { $code = [int]$_.Exception.InnerException.Response.StatusCode } catch { }
         if (-not $code) { try { $code = [int]$_.Exception.Response.StatusCode } catch { } }
-        if ($code -eq 404 -or $code -eq 400) { Add-MmlmTraffic; [IO.File]::WriteAllText($none, ''); return 'none' }   # Plex has none for this title
+        if ($code -eq 404 -or $code -eq 400) { Add-MmlmTraffic; Remove-Item -LiteralPath $dest -Force -ErrorAction SilentlyContinue; [IO.File]::WriteAllText($none, ''); return 'none' }   # Plex has none for this title
         Add-MmlmTraffic -Failed
         'failed'
     }
@@ -220,7 +222,7 @@ function Save-MmlmPlexArtwork {
 function Sync-MmlmArtwork {
     # Fetches the chosen artwork kinds for every distinct Plex item behind these records (an episode uses its show), into
     # $Folder. The failed-request rule: three failures in a row stop the run. Returns @{ Saved; Failed; Stopped }.
-    param([object[]]$Recs, [string[]]$Kinds, [string]$Folder, [string]$BaseUrl, [string]$Token, [switch]$Retry)
+    param([object[]]$Recs, [string[]]$Kinds, [string]$Folder, [string]$BaseUrl, [string]$Token, [switch]$Retry, [switch]$Force)
     $res = @{ Saved = 0; Failed = 0; Stopped = $false }
     if (-not $Kinds -or $Kinds.Count -eq 0) { return $res }
     if (-not (Test-Path -LiteralPath $Folder)) { New-Item -Path $Folder -ItemType Directory -Force | Out-Null }
@@ -239,11 +241,11 @@ function Sync-MmlmArtwork {
         if (Test-MmlmScanCancelled) { break }
         $n++
         if (($n % 5) -eq 0 -or $n -eq $jobs.Count) { Set-MmlmProgress -Text ('Artwork: {0} of {1}' -f $n, $jobs.Count) -Value $n -Max $jobs.Count }
-        $r = Save-MmlmPlexArtwork -BaseUrl $BaseUrl -Token $Token -Thumb $j[0] -Kind $j[1] -Folder $Folder -Retry:$Retry
+        $r = Save-MmlmPlexArtwork -BaseUrl $BaseUrl -Token $Token -Thumb $j[0] -Kind $j[1] -Folder $Folder -Retry:$Retry -Force:$Force
         if ($r -eq 'saved') { $res.Saved++ }
         if ($r -eq 'failed') { $res.Failed++; $row++; if ($row -ge 3) { $res.Stopped = $true; break } } else { $row = 0 }
     }
-    if ($res.Saved -gt 0) { [IO.File]::WriteAllText((Join-Path $Folder 'stamp.txt'), (Get-Date).ToString('o')) }
+    if ($res.Saved -gt 0 -or $Force) { [IO.File]::WriteAllText((Join-Path $Folder 'stamp.txt'), (Get-Date).ToString('o')) }
     $res
 }
 

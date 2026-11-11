@@ -17,18 +17,20 @@ async function start(kind, tab, extra = {}) {
   catch (e) { S.toast?.(e.message); }
 }
 
-function fetchDialog(tab) {
+// rids: only these titles (Compare's two); otherwise what the tab shows now
+export function fetchDialog(tab, rids = null) {
+  const scope = rids ? (rids.length === 1 ? 'this title' : `these ${rids.length} titles`) : scopeText(tab);
   overlay((close) => {
     const keys = h('div');
     const over = h('input', { type: 'checkbox' });
-    const go = h('button', { class: 'btn primary', type: 'button', onclick: () => { close(); start('fetch', tab, { overwrite: over.checked }); } }, 'Fetch info');
+    const go = h('button', { class: 'btn primary', type: 'button', onclick: () => { close(); start('fetch', tab, { overwrite: over.checked, ...(rids ? { rids } : {}) }); } }, 'Fetch info');
     bridge.request('keys.get').then((k) => {
       keys.replaceChildren(h('p', null, h('small', null, `Keys: TMDB ${k.tmdb ? 'saved' : 'missing'}, OMDb ${k.omdb ? 'saved' : 'missing'}. `,
         h('a', { href: '#', onclick: (e) => { e.preventDefault(); close(); import('./settings.js').then((m) => m.openSettings('data')); } }, 'Change in Settings > Data'))));
       if (!k.tmdb && !k.omdb) go.disabled = true;
     }).catch(() => {});
     return h('div', { class: 'adv' }, h('h2', null, 'Fetch info'),
-      h('p', null, `Looks up ratings, Rotten Tomatoes, Metacritic and box office for ${scopeText(tab)}, as the window app's Fetch info does.`),
+      h('p', null, `Looks up ratings, Rotten Tomatoes, Metacritic and box office for ${scope}, as the window app's Fetch info does.`),
       h('p', { class: 'warnbox' }, h('b', null, 'This contacts outside services: '), 'TMDB and OMDb (with your own keys) and the IMDb ratings file from datasets.imdbws.com. Use it sparingly; each title is one or two requests. Values you typed in yourself are never replaced.'),
       keys,
       h('p', null, h('label', null, over, ' Also replace values that are already filled in')),

@@ -2,8 +2,9 @@
 // episodes). From the old dashboard page's modal; "Save as picture" now goes through the backend (picture.save).
 import * as S from '../store.js';
 import { overlay } from './settings.js';
-import { esc, num, v, fmtInt, fmtMoney, fmtSize, fmtHMS, fmtRun, hdrLabel, posterHtml } from '../common.js';
+import { esc, num, v, fmtInt, fmtMoney, fmtSize, fmtHMS, fmtRun, hdrLabel, posterHtml, logoOrTitle, artUrl } from '../common.js';
 import { hdrClass, deviceStatus, ALL_DEVICES, STATUS } from './devices.js';
+import { BASE_YEAR } from '../inflation.js';
 import { addToCollection } from './collections.js';
 
 function spec(title, pairs) {
@@ -26,8 +27,10 @@ function scoreCards(r) {
     ['RT Critics', rt(r.RTCritic)], ['RT Audience', rt(r.RTAudience)],
     // Metacritic always shows on a movie: its score comes from OMDb, so say how to get it when it is missing
     ['Metacritic', mc(r.Metascore) || (r.Show ? '' : { html: '<span class="muted" title="Metacritic scores come from OMDb: Tools > Fetch info (needs an OMDb key in Settings > Data)">not fetched</span>' })], ['CinemaScore', r.CinemaScore]];
-  const money = [['Domestic (all-time)', fmtMoney(r.BoxOfficeDomestic)], ['Worldwide (all-time)', fmtMoney(r.BoxOfficeWorldwide)],
-    ['Opening, domestic', fmtMoney(r.OpeningDomestic)], ['Opening, worldwide', fmtMoney(r.OpeningWorldwide)]];
+  // each figure with its inflation-adjusted value underneath (inflation.js)
+  const m = (raw, adj, approx) => (fmtMoney(raw) ? (adj > 0 ? { html: `${esc(fmtMoney(raw))}<small class="adj" title="Adjusted for US inflation from the release year (${BASE_YEAR} dollars)${approx ? '; approximate for worldwide' : ''}">${approx ? '≈ ' : ''}${esc(fmtMoney(adj))} in ${BASE_YEAR} $</small>` } : fmtMoney(raw)) : '');
+  const money = [['Domestic (all-time)', m(r.BoxOfficeDomestic, r.BoxOfficeDomesticAdj)], ['Worldwide (all-time)', m(r.BoxOfficeWorldwide, r.BoxOfficeWorldwideAdj, true)],
+    ['Opening, domestic', m(r.OpeningDomestic, r.OpeningDomesticAdj)], ['Opening, worldwide', fmtMoney(r.OpeningWorldwide)]];
   const has = (rows) => rows.some((x) => x[1] && !(x[1].html && x[1].html.includes('not fetched')));
   return (has(rating) ? spec('Ratings', rating) : '') + (has(money) ? spec('Box office', money) : '');
 }
@@ -61,10 +64,13 @@ function titleSheet(r) {
     `<div class="spec compat"><h4>Device compatibility</h4><dl>${ALL_DEVICES.map((d) => { const s = deviceStatus(d, r);
       return `<dt title="${esc(d.note)}">${esc(d.name)}</dt><dd><span class="sdot" style="background:${STATUS[s].color}"></span>${STATUS[s].label}</dd>`; }).join('')}</dl></div>`;
   const ep = r.Show ? `<div class="eyebrow">${esc(r.Show)} · ${num(r.Season) === 0 ? 'Specials' : 'Season ' + num(r.Season)}, episode ${num(r.Episode)}</div>` : '';
-  return `<div class="sheet">${EXPORT_BTN}<button class="x" type="button" data-close="1" aria-label="Close">✕</button>
+  const art = artUrl(r);
+  // an episode keeps its own title as text; the show's logo goes above it in place of the show name
+  const head = r.Show ? (S.state.settings.artLogo && r.Logo ? `<div class="eyebrow logo-row">${logoOrTitle(r, r.Show, 'span')}</div>${ep}` : ep) + `<h2>${esc(String(r.Title).replace(/^.* - S\d+E\d+ - /, ''))}</h2>` : logoOrTitle(r, r.Title);
+  return `<div class="sheet${art ? ' has-art' : ''}"${art ? ` style="--art:url('${esc(art)}')"` : ''}>${EXPORT_BTN}<button class="x" type="button" data-close="1" aria-label="Close">✕</button>
     <div class="pcol"><div class="pimg">${posterHtml(r)}</div>${scoreCards(r)}</div>
     <div>
-      ${ep}<h2>${esc(r.Show ? String(r.Title).replace(/^.* - S\d+E\d+ - /, '') : r.Title)}</h2>
+      ${head}
       <div class="meta">${[r.Year > 0 ? r.Year : '', num(r.RuntimeMin) > 0 ? fmtHMS(r.RuntimeMin) : '', r.MPAARating, num(r.Rating) > 0 ? '★ ' + num(r.Rating).toFixed(1) : ''].filter(Boolean).map(esc).join(' · ')}</div>
       ${r.Tagline ? `<div class="tagline">${esc(r.Tagline)}</div>` : ''}
       ${r.Plot ? `<p class="plot">${esc(r.Plot)}</p>` : ''}
@@ -105,10 +111,11 @@ function showSheet(name, eps) {
   const q = (e) => [e.ResolutionClass, hdrLabel(e) !== 'SDR' ? hdrLabel(e) : ''].filter(Boolean).map((x) => `<span>${esc(x)}</span>`).join('');
   const seasonsHtml = s.seasons.map(([n, list]) => `<h3>${n === 0 ? 'Specials' : 'Season ' + n} <small>${list.length} episode${list.length === 1 ? '' : 's'} · ${fmtSize(list.reduce((a, e) => a + num(e.FileSizeGB), 0))}</small></h3>`
     + list.map((e) => `<div class="eprow" data-ep="${e._i}"><span class="n">E${String(num(e.Episode)).padStart(2, '0')}</span><span class="t">${esc(String(e.Title).replace(/^.* - S\d+E\d+ - /, ''))}</span><span class="q">${q(e)}</span><span class="s">${num(e.FileSizeGB) > 0 ? fmtSize(e.FileSizeGB) : ''}</span></div>`).join('')).join('');
-  return `<div class="sheet"><button class="x" type="button" data-close="1" aria-label="Close">✕</button>
+  const art = artUrl(first);
+  return `<div class="sheet${art ? ' has-art' : ''}"${art ? ` style="--art:url('${esc(art)}')"` : ''}><button class="x" type="button" data-close="1" aria-label="Close">✕</button>
     <div class="pcol"><div class="pimg">${posterHtml(first, name)}</div>
       ${spec('Show', [['Seasons', s.seasons.filter((x) => x[0] > 0).length], ['Episodes', eps.length], ['First aired', s.firstAired], ['Last added', s.added], ['Size', fmtSize(s.size)], ['Runtime', fmtRun(s.runtime)]])}</div>
-    <div><h2>${esc(name)}</h2>
+    <div>${logoOrTitle(first, name)}
       <div class="meta">${[years, first.Studio, first.MPAARating].filter(Boolean).map(esc).join(' · ')}</div>
       <div class="gchips">${first._genres.map((g) => `<span>${esc(g)}</span>`).join('')}</div>
       ${links({ IMDBID: '', TMDBID: '', Show: name, __show: true })}

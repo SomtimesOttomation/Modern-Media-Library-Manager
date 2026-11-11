@@ -97,7 +97,8 @@ function Save-HostPlexSettings {
 # The page's own settings (theme, view and sort per tab, grid columns), kept apart from the app's settings.json.
 $script:PageDefaults = [ordered]@{ theme = 'system'; updateCheck = $false; moviesView = 'posters'; tvView = 'posters'; moviesSort = 'added'; tvSort = 'title'; moviesSortRev = $false; tvSortRev = $false
     columns = @(); hideDupes = $false; detectFel = $false; posterScale = 100; widthPreset = 'full'; customWidth = $false; contentWidth = 0
-    fxLeft = 'auto'; fxRight = 'auto'; fxMotion = 'full'; vsStyle = 'arcade'; cmpTally = $true; cmpWalkover = $true; cmpImdb = $true }
+    artLogo = $false; artBackground = $false; artBanner = $false
+    fxLeft = 'auto'; fxRight = 'auto'; fxMotion = 'full'; vsStyle = 'arcade'; cmpTally = $true; cmpInflation = $false; cmpWalkover = $true; cmpImdb = $true }
 function Read-PageSettings {
     $s = [ordered]@{}; foreach ($k in $script:PageDefaults.Keys) { $s[$k] = $script:PageDefaults[$k] }
     $p = Join-Path $script:AppData 'page-settings.json'
@@ -119,8 +120,12 @@ function Set-PageSetting {
         'customWidth' { $Value = [bool]$Value; $true }
         'detectFel'   { $Value = [bool]$Value; $true }
         'cmpTally'    { $Value = [bool]$Value; $true }
+        'artLogo'     { $Value = [bool]$Value; $true }
+        'artBackground' { $Value = [bool]$Value; $true }
+        'artBanner'   { $Value = [bool]$Value; $true }
         'cmpWalkover' { $Value = [bool]$Value; $true }
         'cmpImdb'     { $Value = [bool]$Value; $true }
+        'cmpInflation' { $Value = [bool]$Value; $true }
         'fxLeft'      { $fx -contains [string]$Value }
         'fxRight'     { $fx -contains [string]$Value }
         'fxMotion'    { @('still', 'calm', 'full') -contains [string]$Value }
@@ -129,7 +134,7 @@ function Set-PageSetting {
         'contentWidth' { $n = 0; if ([int]::TryParse([string]$Value, [ref]$n) -and $n -ge 0 -and $n -le 20000) { $Value = $n; $true } else { $false } }
         'widthPreset' { @('full', '16:9', '21:9', '32:9') -contains [string]$Value }
         'moviesView'  { $views -contains [string]$Value }
-        'tvView'      { $views -contains [string]$Value }
+        'tvView'      { @('posters', 'grid', 'dashboard', 'banners') -contains [string]$Value }
         'moviesSort'  { [string]$Value -match '^[a-zA-Z]{1,30}$' }
         'tvSort'      { [string]$Value -match '^[a-zA-Z]{1,30}$' }
         'columns'     { $Value = @(@($Value) | Where-Object { [string]$_ -match '^[A-Za-z]{1,40}$' } | Select-Object -First 80); $true }
@@ -192,6 +197,18 @@ function Export-PageLibrary {
         $names.Add([string]$f.Name); $defs.Add([ordered]@{ n = [string]$f.Name; t = [string]$f.Type; g = [string]$f.Group; s = [bool]$f.Show })
     }
     $names.Add('Poster'); $defs.Add([ordered]@{ n = 'Poster'; t = 'string'; g = 'Library'; s = $false })
+    # artwork from Settings > Artwork, when it has been saved: art\<kind>-<Plex key>.<ext> (an episode uses its show's)
+    $artDir = Join-Path $Job.CacheDir 'art'
+    $have = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    if (Test-Path -LiteralPath $artDir) { foreach ($f in [IO.Directory]::GetFiles($artDir)) { [void]$have.Add([IO.Path]::GetFileName($f)) } }
+    foreach ($k in @(@('Art', 'art', 'jpg'), @('Logo', 'logo', 'png'), @('Banner', 'banner', 'jpg'))) {
+        $names.Add($k[0]); $defs.Add([ordered]@{ n = $k[0]; t = 'string'; g = 'Library'; s = $false })
+        foreach ($r in $Recs) {
+            $u = ''
+            if ([string]$r.PlexThumb -match '^/library/metadata/(\d+)(/|$)') { $leaf = '{0}-{1}.{2}' -f $k[1], $Matches[1], $k[2]; if ($have.Contains($leaf)) { $u = 'art/' + $leaf } }
+            $r.PSObject.Properties.Remove($k[0]); $r.PSObject.Properties.Add((New-Object Management.Automation.PSNoteProperty($k[0], $u)))
+        }
+    }
     # collection ids: Plex titles keep "p:<key>"; a local file gets "h:<hash of its path>", and the path behind each hash is
     # kept in Library\idmap-<tab>.json (never in the folder the page can read) so collections saved from the page keep the window app's ids
     $names.Add('Rid'); $defs.Add([ordered]@{ n = 'Rid'; t = 'string'; g = 'Library'; s = $false })
@@ -236,6 +253,10 @@ try {
     if (-not (Test-Path -LiteralPath $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
     try { Merge-MmlmMetaStore -Records $recs -Path $Job.MetaStore } catch { }          # fetched scores (Metacritic, RT, box office) and hand edits
     [Mmlm.Native.Snapshot]::Save([object[]]$recs, $Job.Snapshot, ('{0}|{1}' -f $recs.Count, (Get-Date).ToString('yyyy-MM-dd HH:mm')))
+    if (@($Job.ArtKinds).Count -gt 0) {          # Settings > Artwork: fetched like posters, from your Plex server only
+        Set-MmlmScanPhase -Lo 0.0 -Hi 1.0
+        try { [void](Sync-MmlmArtwork -Recs $recs -Kinds @($Job.ArtKinds) -Folder (Join-Path $Job.CacheDir 'art') -BaseUrl $Job.BaseUrl -Token $Job.Token -Retry:([bool]$Job.Rebuild)) } catch { }
+    }
     Export-PageLibrary -Recs $recs -Tab $Job.Tab
     # Today-page card: the six most recently added titles (episodes collapse to their show), posters copied into the cache dir
     $thumbs = Join-Path $Job.CacheDir 'thumbs'
@@ -288,6 +309,10 @@ function Start-HostExport {
     $script:Exports[$Tab] = @{ Ps = $ps; Async = $ps.BeginInvoke(); Sync = $sync }
 }
 
+function Get-ArtKinds {
+    # the artwork kinds ticked in Settings > Artwork
+    @(if ($script:PageSettings.artBackground) { 'art' }; if ($script:PageSettings.artLogo) { 'logo' }; if ($script:PageSettings.artBanner) { 'banner' })
+}
 function Get-LibraryState {
     # 'ready' (the page copy is at least as new as the snapshot), 'stale' (needs building) or 'empty' (never scanned)
     param([string]$Tab)
@@ -297,6 +322,8 @@ function Get-LibraryState {
     # stale when the scan or the saved scores (Fetch info, Edit info in the window app) are newer than the page's copy
     $newest = (Get-Item -LiteralPath $snap).LastWriteTimeUtc
     if (Test-Path -LiteralPath $script:MetaStore) { $m = (Get-Item -LiteralPath $script:MetaStore).LastWriteTimeUtc; if ($m -gt $newest) { $newest = $m } }
+    $st = Join-Path $script:CacheDir 'art\stamp.txt'                     # artwork saved since (Settings > Artwork)
+    if (Test-Path -LiteralPath $st) { $m = (Get-Item -LiteralPath $st).LastWriteTimeUtc; if ($m -gt $newest) { $newest = $m } }
     if ((Test-Path -LiteralPath $page) -and (Get-Item -LiteralPath $page).LastWriteTimeUtc -ge $newest) { return 'ready' }
     'stale'
 }
@@ -316,7 +343,7 @@ function Start-HostScan {
     $script:Sync = [hashtable]::Synchronized(@{ Text = 'Starting...'; Value = 0; Max = 0; Cancel = $false; Done = $false; Error = $null; PhaseLo = 0.0; PhaseHi = 1.0; Count = 0; New = 0; Cancelled = $false })
     $ctx = New-WorkerContext $script:Sync
     foreach ($d in $ctx.CacheFolder, $ctx.ThumbFolder) { if (-not (Test-Path -LiteralPath $d)) { New-Item -Path $d -ItemType Directory -Force | Out-Null } }
-    $job = @{ Kind = 'scan'; Tab = $Tab; Rebuild = $Rebuild; DetectFel = [bool]$script:PageSettings.detectFel; BaseUrl = $set.PlexUrl; Token = $token; Snapshot = (Get-SnapshotFile $Tab); CacheDir = $script:CacheDir; Hidden = $script:HiddenFields; MetaStore = $script:MetaStore }
+    $job = @{ Kind = 'scan'; Tab = $Tab; Rebuild = $Rebuild; DetectFel = [bool]$script:PageSettings.detectFel; ArtKinds = @(Get-ArtKinds); BaseUrl = $set.PlexUrl; Token = $token; Snapshot = (Get-SnapshotFile $Tab); CacheDir = $script:CacheDir; Hidden = $script:HiddenFields; MetaStore = $script:MetaStore }
     $ps = [powershell]::Create()
     [void]$ps.AddScript($script:ScanScript).AddArgument(@(Get-HostModuleFiles)).AddArgument($ctx).AddArgument($job)
     $script:ScanPs = $ps
@@ -610,6 +637,15 @@ $script:ToolScript = {
         $outDir = $(if ($outDir) { Join-Path $outDir 'Modern Media Library Manager' } else { Join-Path $Ctx.AppData 'Exports' })
         $safe = (([string]$Job.Name) -replace '[^A-Za-z0-9 ._()-]', '').Trim(); if (-not $safe) { $safe = 'Library' }
         switch ($Job.Kind) {
+            'artwork' {
+                # Settings > Artwork was ticked: fetch it now for every scanned tab instead of waiting for the next scan
+                $all = New-Object System.Collections.Generic.List[object]
+                foreach ($snap in @($Job.Snapshots)) { if (Test-Path -LiteralPath $snap) { foreach ($r in [Mmlm.Native.Snapshot]::Load($snap)) { $all.Add($r) } } }
+                $res = Sync-MmlmArtwork -Recs $all.ToArray() -Kinds @($Job.ArtKinds) -Folder (Join-Path $Job.CacheDir 'art') -BaseUrl $Job.BaseUrl -Token $Job.Token
+                $S.Summary = $(if ($res.Stopped) { 'Artwork stopped: Plex did not answer three times in a row. Try again later.' } else { ('Artwork: {0} new picture{1}.' -f $res.Saved, $(if ($res.Saved -eq 1) { '' } else { 's' })) })
+                if ($res.Stopped) { $S.Error = $S.Summary }
+                $S.Library = ($res.Saved -gt 0)
+            }
             'fetch' {
                 $S.Partial = New-Object System.Collections.ArrayList
                 Invoke-MmlmMetadataScrape -Records $recs -Indexes $idx.ToArray() -TmdbKey $Job.TmdbKey -OmdbKey $Job.OmdbKey -Overwrite ([bool]$Job.Overwrite) -DataFolder $Job.DataFolder -StorePath $Job.MetaStore
@@ -708,14 +744,26 @@ function Save-HostKeys {
 function Start-HostTool {
     param($A)
     $kind = [string]$A.kind
-    if (@('fetch', 'fel', 'csv', 'html') -notcontains $kind) { throw 'Unknown tool.' }
+    if (@('fetch', 'fel', 'csv', 'html', 'artwork') -notcontains $kind) { throw 'Unknown tool.' }
     if ($script:Tool -and -not $script:Tool.Sync.Done) { throw 'Another tool is still running. Wait for it or cancel it.' }
     $tab = $(if ([string]$A.tab -eq 'tv') { 'tv' } else { 'movies' })
-    if (-not (Test-Path -LiteralPath (Get-SnapshotFile $tab))) { throw 'Scan this tab first.' }
-    if (@('fetch', 'fel') -contains $kind -and $script:Traffic.Halted) { throw 'Traffic is paused. Resume it first.' }
+    if ($kind -ne 'artwork' -and -not (Test-Path -LiteralPath (Get-SnapshotFile $tab))) { throw 'Scan this tab first.' }
+    if (@('fetch', 'fel', 'artwork') -contains $kind -and $script:Traffic.Halted) { throw 'Traffic is paused. Resume it first.' }
     $job = @{ Kind = $kind; Tab = $tab; Snapshot = (Get-SnapshotFile $tab); CacheDir = $script:CacheDir; Hidden = $script:HiddenFields; MetaStore = $script:MetaStore
         Rids = @(@($A.rids) | ForEach-Object { [string]$_ } | Where-Object { $_ -match '^(p|h):' }); Columns = @(@($A.columns) | ForEach-Object { [string]$_ })
         Name = [string]$A.name; Library = $(if ($tab -eq 'tv') { 'TV Shows' } else { 'Movies' }); Overwrite = [bool]$A.overwrite; DataFolder = (Join-Path $script:AppData 'datasets') }
+    if ($kind -eq 'artwork') {
+        $job.ArtKinds = @(Get-ArtKinds)
+        if ($job.ArtKinds.Count -eq 0) { throw 'Tick an artwork option first.' }
+        $job.Snapshots = @((Get-SnapshotFile 'movies'), (Get-SnapshotFile 'tv'))
+        $set = Read-HostSettings
+        if (-not $set.PlexUrl) { throw 'No Plex server address is set yet. Add it in Settings.' }
+        $token = ''
+        try { $token = Unprotect-MmlmPlexToken $set.PlexTokenProtected } catch { Write-HostLog 'token' $_ }
+        if ($script:Ctx.Debug -and $env:MMLM_HOST_TEST_TOKEN) { $token = $env:MMLM_HOST_TEST_TOKEN }
+        if (-not $token) { throw 'No Plex token is saved yet. Add it in Settings.' }
+        $job.BaseUrl = $set.PlexUrl; $job.Token = $token
+    }
     if ($kind -eq 'fetch') {
         if ($tab -eq 'tv') { throw 'Fetch info works on movies (as in the window app).' }
         $k = Read-HostKeys
@@ -736,7 +784,7 @@ function Get-ToolEvents {
         $script:Tool = $null
         try { $x.Ps.Dispose() } catch { Write-HostLog 'tool dispose' $_ }
         Push-HostEvent 'tool' ([ordered]@{ kind = $x.Kind; tab = $x.Tab; running = $false; error = $s.Error; summary = [string]$s.Summary; path = [string]$s.Path; cancelled = [bool]$s.Cancel })
-        if ($s.Library -and -not $s.Error) { Push-HostEvent 'library' @{ tab = $x.Tab; ready = $true; error = $null } }
+        if ($s.Library -and -not $s.Error) { foreach ($t in $(if ($x.Kind -eq 'artwork') { @('movies', 'tv') } else { @($x.Tab) })) { Push-HostEvent 'library' @{ tab = $t; ready = $true; error = $null } } }
         return
     }
     $pct = $(if ($s.Max -gt 0) { [int](100 * $s.Value / $s.Max) } else { 0 })
@@ -976,7 +1024,7 @@ $script:Commands = [ordered]@{
             # a cached picture as a data: URL, so the page can read its colours (series view background)
             param($a)
             $rel = ([string]$a.path) -replace '/', '\'
-            if ($rel -notmatch '^(series\\img|thumbs)\\[A-Za-z0-9._-]+\.(jpg|png)$') { throw 'Not a cached picture.' }
+            if ($rel -notmatch '^(series\\img|thumbs|art)\\[A-Za-z0-9._-]+\.(jpg|png)$') { throw 'Not a cached picture.' }
             $f = Join-Path $script:CacheDir $rel
             if (-not (Test-Path -LiteralPath $f) -or (Get-Item -LiteralPath $f).Length -gt 2MB) { return 'null' }
             ConvertTo-PageJson ('data:image/jpeg;base64,' + [Convert]::ToBase64String([IO.File]::ReadAllBytes($f))) } }

@@ -23,13 +23,15 @@ export const MOVIE_SORTS = [
   ['metascore', 'Metacritic', desc('Metascore')],
   ['boxdom', 'Box office, domestic', desc('BoxOfficeDomestic')],
   ['boxww', 'Box office, worldwide', desc('BoxOfficeWorldwide')],
+  ['boxdomadj', 'Box office, domestic (inflation-adjusted)', desc('BoxOfficeDomesticAdj')],
+  ['boxwwadj', 'Box office, worldwide (inflation-adjusted)', desc('BoxOfficeWorldwideAdj')],
   ['runtime', 'Runtime', desc('RuntimeMin')],
 ];
 
 // ---- grid columns (shared with the TV grid) ----------------------------------------------------------------
 const LABELS = { MPAARating: 'Rated', RuntimeMin: 'Runtime', ResolutionClass: 'Res', VideoBitRateMbps: 'Video Mbps', FileSizeGB: 'Size', HDRType: 'HDR', DVProfile: 'DV', DVLayer: 'DV layer',
   AudioFormat: 'Audio', ObjectAudio: 'Immersive', AudioLayout: 'Channels', AudioLanguages: 'Audio lang.', SubtitleTracks: 'Subs', RTCritic: 'RT critics', RTAudience: 'RT audience',
-  Metascore: 'Metacritic', BoxOfficeDomestic: 'Box office (dom.)', BoxOfficeWorldwide: 'Box office (ww)', FileName: 'File name', BitDepth: 'Bit depth', FrameRate: 'FPS' };
+  Metascore: 'Metacritic', BoxOfficeDomestic: 'Box office (dom.)', BoxOfficeWorldwide: 'Box office (ww)', BoxOfficeDomesticAdj: 'Box office (dom., adj.)', BoxOfficeWorldwideAdj: 'Box office (ww, adj.)', OpeningDomesticAdj: 'Opening (adj.)', FileName: 'File name', BitDepth: 'Bit depth', FrameRate: 'FPS' };
 export const colLabel = (n) => LABELS[n] || n.replace(/([a-z])([A-Z])/g, '$1 $2');
 const NEVER = new Set(['Title', 'Poster', 'Library', 'PlexKey', 'PlexThumb', 'MetaSources', 'Show', 'Season', 'Episode']);
 export function gridColumns(L) {
@@ -104,10 +106,11 @@ export function stateBox(tab, L, toast) {
 export function viewSeg(mode, key, redraw) {
   const views = [['posters', 'Posters'], ['grid', 'Grid'], ['dashboard', 'Dashboard']];
   if (key === 'moviesView') views.push(['compare', 'Compare']);
+  else views.push(['banners', 'Banners']);
   return h('div', { class: 'seg', role: 'tablist', 'aria-label': 'View' }, views.map(([k, label]) =>
     h('button', { type: 'button', class: mode === k ? 'active' : '', 'aria-selected': mode === k ? 'true' : 'false', onclick: () => S.saveSettings({ [key]: k }).then(redraw) }, label)));
 }
-export const viewMode = (v, tab) => (v === 'grid' || v === 'dashboard' || (v === 'compare' && tab !== 'tv') ? v : 'posters');
+export const viewMode = (v, tab) => (v === 'grid' || v === 'dashboard' || (v === 'compare' && tab !== 'tv') || (v === 'banners' && tab === 'tv') ? v : 'posters');
 
 export function mount(ctx) {
   const L = S.state.libs.movies;

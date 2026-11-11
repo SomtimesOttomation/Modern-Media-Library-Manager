@@ -1,6 +1,7 @@
 // Settings: the Sample's overlay with tabs. General (theme, updates), Plex (server and token), Data (sources, traffic),
-// Fun (Compare's borders and VS).
+// Artwork (clear logos, background art, TV banners from Plex), Fun (Compare's borders and VS).
 import * as S from '../store.js';
+import * as bridge from '../bridge.js';
 import { h } from '../util.js';
 import { openUpdate } from './update.js';
 import { openTraffic } from './traffic.js';
@@ -19,7 +20,7 @@ export { overlay };
 
 const TAB_KEY = 'mmlm.settingsTab';
 let settingsTab = 'general';
-try { const v = localStorage.getItem(TAB_KEY); if (['general', 'plex', 'data', 'fun'].includes(v)) settingsTab = v; } catch (e) { /* ignore */ }
+try { const v = localStorage.getItem(TAB_KEY); if (['general', 'plex', 'data', 'artwork', 'fun'].includes(v)) settingsTab = v; } catch (e) { /* ignore */ }
 const hr = () => h('hr', { style: { border: 0, borderTop: '1px solid var(--line)' } });
 
 function generalTab(close, repaint) {
@@ -97,6 +98,34 @@ function dataTab() {
   ];
 }
 
+// Artwork: extra pictures from your own Plex server, saved like posters. Ticking one fetches it for both tabs now (a
+// tool run with progress); later scans keep it up to date. Unticking only hides it.
+function artworkTab(repaint) {
+  const s = S.state.settings;
+  const status = h('p', { class: 'art-status' });
+  const tick = (key, label, note) => {
+    const cb = h('input', { type: 'checkbox', checked: s[key] ? true : null });
+    cb.addEventListener('change', async () => {
+      try {
+        await S.saveSettings({ [key]: cb.checked });
+        if (cb.checked) {
+          await bridge.request('tools.start', { kind: 'artwork', tab: 'movies', rids: [] });
+          S.state.tool = { kind: 'artwork', running: true, pct: 0, text: 'Starting...' }; S.notify('tool');
+          status.textContent = 'Fetching from Plex now; progress shows under the bar. It appears as each library refreshes.';
+        } else status.textContent = 'Hidden. The saved pictures stay in the cache.';
+      } catch (e) { status.textContent = e.message; }
+    });
+    return h('div', { class: 'art-opt' }, h('label', null, cb, ' ', h('b', null, label)), h('small', null, note));
+  };
+  return [
+    h('p', null, h('small', null, 'Pictures from your own Plex server, saved on this PC the same way posters are. Nothing comes from other sites. Plex does not have every picture for every title; those without one keep the usual look.')),
+    tick('artLogo', 'Clear logos', 'Movies and TV Shows: the title logo instead of the title text on cards, the series view and Compare.'),
+    tick('artBackground', 'Background art', 'Movies and TV Shows: the wide background picture replaces the plain background on cards, the series view and Compare.'),
+    tick('artBanner', 'TV banners', 'TV Shows: wide banners for the Banners view (shows without one get their background art and logo instead).'),
+    status,
+  ];
+}
+
 // Fun: the Compare page's poster borders, animation and VS
 const FX = [['auto', 'Auto'], ['fire', 'Fire'], ['lightning', 'Lightning'], ['specter', 'Specter'], ['poster', 'Poster colours'], ['off', 'Off']];
 function funTab(repaint) {
@@ -127,10 +156,10 @@ export function openSettings(tab, onClose) {
     const body = h('div', { class: 'settings-body', role: 'tabpanel' });
     const tabs = h('div', { class: 'seg settings-tabs', role: 'tablist', 'aria-label': 'Settings sections' });
     const paint = () => {
-      tabs.replaceChildren(...[['general', 'General'], ['plex', 'Plex'], ['data', 'Data'], ['fun', 'Fun']].map(([k, label]) => h('button', {
+      tabs.replaceChildren(...[['general', 'General'], ['plex', 'Plex'], ['data', 'Data'], ['artwork', 'Artwork'], ['fun', 'Fun']].map(([k, label]) => h('button', {
         type: 'button', role: 'tab', 'aria-selected': settingsTab === k ? 'true' : 'false', class: settingsTab === k ? 'active' : '',
         onclick: () => { settingsTab = k; try { localStorage.setItem(TAB_KEY, k); } catch (e) { /* ignore */ } paint(); } }, label)));
-      body.replaceChildren(...(settingsTab === 'plex' ? plexTab(paint) : settingsTab === 'data' ? dataTab() : settingsTab === 'fun' ? funTab(paint) : generalTab(close, paint)));
+      body.replaceChildren(...(settingsTab === 'plex' ? plexTab(paint) : settingsTab === 'data' ? dataTab() : settingsTab === 'artwork' ? artworkTab(paint) : settingsTab === 'fun' ? funTab(paint) : generalTab(close, paint)));
     };
     paint();
     return h('div', null, h('h2', null, 'Settings'), tabs, body,

@@ -67,7 +67,7 @@ function updateToast() {
 let lastRunning = false;
 const tabName = (t) => (t === 'tv' ? 'TV Shows' : 'Movies');
 // A tool (Fetch info, FEL check, export) uses the same strip when no scan is running.
-const TOOL_NAMES = { fetch: 'Fetch info', fel: 'FEL / MEL check', csv: 'CSV export', html: 'HTML export' };
+const TOOL_NAMES = { fetch: 'Fetch info', fel: 'FEL / MEL check', csv: 'CSV export', html: 'HTML export', artwork: 'Artwork' };
 let toolShown = false;
 function toolBar() {
   const t = S.state.tool, bar = $('#syncbar');

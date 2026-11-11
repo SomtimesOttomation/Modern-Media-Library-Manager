@@ -12,7 +12,7 @@ export const state = {
   hostMode: 'standalone',
   hostTheme: '',
   settings: { theme: 'system', updateCheck: false, moviesView: 'posters', tvView: 'posters', moviesSort: 'added', tvSort: 'title', moviesSortRev: false, tvSortRev: false,
-    columns: [], hideDupes: false, posterScale: 100, widthPreset: 'full', customWidth: false, contentWidth: 0,
+    columns: [], hideDupes: false, posterScale: 100, widthPreset: 'full', customWidth: false, contentWidth: 0, artLogo: false, artBackground: false, artBanner: false,
     fxLeft: 'auto', fxRight: 'auto', fxMotion: 'full', vsStyle: 'arcade', cmpTally: true, cmpWalkover: true, cmpImdb: true },
   plex: { url: '', hasToken: false },
   counts: { movies: { count: 0, when: '' }, tv: { count: 0, when: '' } },
@@ -53,7 +53,7 @@ function prepare(raw, tab) {
     r.Year = num(r.Year);
     r._genres = splitList(r.Genre);
     r._search = [r.Title, r.Show, r.Genre, r.Cast, r.Studio, r.Director, r.Year || '', r.Collection].join(' ').toLowerCase();
-    if (r.Poster && !/^(https?:|data:|blob:)/.test(r.Poster)) r.Poster = (bridge.isHost ? 'https://mmlm.cache/' : '') + r.Poster;
+    for (const k of ['Poster', 'Art', 'Logo', 'Banner']) if (r[k] && !/^(https?:|data:|blob:)/.test(r[k])) r[k] = (bridge.isHost ? 'https://mmlm.cache/' : '') + r[k];
     return r;
   });
   return { rows, fields: raw.fields, byName: new Map(raw.fields.map((f) => [f.n, f])) };

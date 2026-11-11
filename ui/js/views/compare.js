@@ -5,7 +5,7 @@
 import * as S from '../store.js';
 import * as bridge from '../bridge.js';
 import { h } from '../util.js';
-import { num, fmtMoney, dedupe } from '../common.js';
+import { num, fmtMoney, dedupe, logoOrTitle, artUrl } from '../common.js';
 import { overlay } from './settings.js';
 import { inTab } from './collections.js';
 import { openCard } from './card.js';
@@ -216,9 +216,10 @@ export function render(el, redraw, toast) {
   if (pick.mode === 'movie') {
     const a = byRid.get(pick.left), b = byRid.get(pick.right);
     if (!a || !b) { root.append(h('div', { class: 'state' }, h('p', null, 'Compare needs at least two movies in the library.'))); el.replaceChildren(root); return; }
-    const sideBox = (r, side) => h('div', { class: 'cmp-side' },
+    const nameEl = (r) => { const d = h('div', { class: 'cmp-name' }); d.innerHTML = logoOrTitle(r, r.Title, 'span'); return d; };
+    const sideBox = (r, side) => h('div', { class: `cmp-side${artUrl(r) ? ' has-art' : ''}`, style: artUrl(r) ? { '--art': `url('${artUrl(r).replace(/'/g, '%27')}')` } : null },
       h('button', { type: 'button', class: 'cmp-pbtn', title: 'Open its card', onclick: () => openCard(r, toast) }, posterBox(r, side, r.Title)),
-      h('div', { class: 'cmp-name' }, r.Title), h('small', null, [r.Year > 0 ? r.Year : '', String(r.Genre || '').split(',')[0]].filter(Boolean).join(' · ')),
+      nameEl(r), h('small', null, [r.Year > 0 ? r.Year : '', String(r.Genre || '').split(',')[0]].filter(Boolean).join(' · ')),
       h('button', { class: 'btn', type: 'button', onclick: () => chooseMovie(side === 'l' ? pick.left : pick.right, (rid) => { if (side === 'l') pick.left = rid; else pick.right = rid; redraw(); }) }, 'Change title'));
     const pb = statPanel('Box office', defs.box, a, b), pc = statPanel('Critical reception', defs.crit, a, b);
     const l = pb.l + pc.l, r = pb.r + pc.r;

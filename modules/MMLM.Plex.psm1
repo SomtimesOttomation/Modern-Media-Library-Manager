@@ -173,6 +173,75 @@ function Save-MmlmPlexPoster {
     ''
 }
 
+function Save-MmlmPlexArtwork {
+    # Background art, clear logo or TV banner for a title, from the same Plex item as its poster (an episode uses its
+    # show's). Saved as <Folder>\<kind>-<ratingKey>.<ext>; a title Plex has none for gets a <kind>-<key>.none marker so it
+    # is not asked again (Rebuild clears them). Returns 'saved', 'have', 'none' or 'failed'.
+    param([string]$BaseUrl, [string]$Token, [string]$Thumb, [ValidateSet('art', 'logo', 'banner')][string]$Kind, [string]$Folder, [switch]$Retry)
+    if ([string]$Thumb -notmatch '^/library/metadata/(\d+)(/|$)') { return 'none' }
+    $key = $Matches[1]
+    $ext = $(if ($Kind -eq 'logo') { 'png' } else { 'jpg' })
+    $dest = Join-Path $Folder ('{0}-{1}.{2}' -f $Kind, $key, $ext)
+    $none = Join-Path $Folder ('{0}-{1}.none' -f $Kind, $key)
+    if ((Test-Path -LiteralPath $dest) -and ((Get-Item -LiteralPath $dest).Length -gt 0)) { return 'have' }
+    if ((Test-Path -LiteralPath $none) -and -not $Retry) { return 'none' }
+    $size = @{ art = @(1280, 720); logo = @(800, 310); banner = @(758, 140) }[$Kind]
+    $path = '/library/metadata/{0}/{1}' -f $key, @{ art = 'art'; logo = 'clearLogo'; banner = 'banner' }[$Kind]
+    $q = @{ width = $size[0]; height = $size[1]; minSize = 1; upscale = 1; url = $path }
+    if ($Kind -eq 'logo') { $q.format = 'png' }
+    $resp = $null
+    try {
+        Assert-MmlmTrafficAllowed
+        $req  = New-MmlmPlexRequest -BaseUrl $BaseUrl -Path '/photo/:/transcode' -Token $Token -Accept 'image/*' -Query $q
+        $resp = $req.GetResponse()
+        $ms   = New-Object IO.MemoryStream
+        try {
+            $resp.GetResponseStream().CopyTo($ms)
+            Add-MmlmTraffic -Bytes $ms.Length
+            if ($ms.Length -gt 0) { [IO.File]::WriteAllBytes($dest, $ms.ToArray()); Remove-Item -LiteralPath $none -Force -ErrorAction SilentlyContinue; return 'saved' }
+        }
+        finally { $ms.Dispose() }
+        [IO.File]::WriteAllText($none, ''); return 'none'
+    }
+    catch {
+        $code = 0
+        try { $code = [int]$_.Exception.InnerException.Response.StatusCode } catch { }
+        if (-not $code) { try { $code = [int]$_.Exception.Response.StatusCode } catch { } }
+        if ($code -eq 404 -or $code -eq 400) { Add-MmlmTraffic; [IO.File]::WriteAllText($none, ''); return 'none' }   # Plex has none for this title
+        Add-MmlmTraffic -Failed
+        'failed'
+    }
+    finally { if ($resp) { $resp.Close() } }
+}
+
+function Sync-MmlmArtwork {
+    # Fetches the chosen artwork kinds for every distinct Plex item behind these records (an episode uses its show), into
+    # $Folder. The failed-request rule: three failures in a row stop the run. Returns @{ Saved; Failed; Stopped }.
+    param([object[]]$Recs, [string[]]$Kinds, [string]$Folder, [string]$BaseUrl, [string]$Token, [switch]$Retry)
+    $res = @{ Saved = 0; Failed = 0; Stopped = $false }
+    if (-not $Kinds -or $Kinds.Count -eq 0) { return $res }
+    if (-not (Test-Path -LiteralPath $Folder)) { New-Item -Path $Folder -ItemType Directory -Force | Out-Null }
+    $seen = @{}; $jobs = New-Object System.Collections.Generic.List[object]
+    foreach ($r in $Recs) {
+        $th = [string]$r.PlexThumb
+        if (-not $th -or $seen.ContainsKey($th)) { continue }
+        $seen[$th] = $true
+        $tv = [bool][string]$r.Show
+        foreach ($k in $Kinds) { if ($k -eq 'banner' -and -not $tv) { continue }; $jobs.Add(@($th, $k)) }
+    }
+    $n = 0; $row = 0
+    foreach ($j in $jobs) {
+        if (Test-MmlmScanCancelled) { break }
+        $n++
+        if (($n % 5) -eq 0 -or $n -eq $jobs.Count) { Set-MmlmProgress -Text ('Artwork: {0} of {1}' -f $n, $jobs.Count) -Value $n -Max $jobs.Count }
+        $r = Save-MmlmPlexArtwork -BaseUrl $BaseUrl -Token $Token -Thumb $j[0] -Kind $j[1] -Folder $Folder -Retry:$Retry
+        if ($r -eq 'saved') { $res.Saved++ }
+        if ($r -eq 'failed') { $res.Failed++; $row++; if ($row -ge 3) { $res.Stopped = $true; break } } else { $row = 0 }
+    }
+    if ($res.Saved -gt 0) { [IO.File]::WriteAllText((Join-Path $Folder 'stamp.txt'), (Get-Date).ToString('o')) }
+    $res
+}
+
 function Save-MmlmPlexImage {
     # Any Plex image (poster, episode still, cast photo) resized by Plex's own image resizer and saved as <Folder>\<hash>.jpg.
     # Returns the file name ('' when there is no image or Plex could not send it). Already saved = no request.
@@ -647,6 +716,8 @@ Export-ModuleMember -Function @(
     'Get-MmlmPlexMetadataMap',
     'Get-MmlmPlexShowNode',
     'Save-MmlmPlexPoster',
+    'Save-MmlmPlexArtwork',
+    'Sync-MmlmArtwork',
     'Save-MmlmPlexImage',
     'Convert-MmlmPlexEpoch',
     'Get-MmlmPlexTags',

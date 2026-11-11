@@ -84,6 +84,18 @@ $dash = @{ movies = @(@{ id = 'a1'; name = 'Mine'; widgets = @(@{ id = 'w1'; typ
 Check ((Cmd 29 'dashboards.get') -match '"name":"Mine"' -and (Test-Path -LiteralPath (Join-Path $data 'dashboards.json'))) 'your own dashboards are saved'
 [void](Cmd 3 'scan.start' @{ tab = 'tv' }); $e = Wait-Scan
 Check ($e -match '"count":10') 'TV scan finished with 10 episodes'
+# Settings > Artwork: ticking fetches it now for both tabs; a title Plex has none for gets a marker, not a retry
+Check ((Cmd 60 'tools.start' @{ kind = 'artwork'; tab = 'movies' }) -match 'Tick an artwork option') 'Artwork needs an option ticked'
+foreach ($k in 'artBackground', 'artLogo', 'artBanner') { [void](Cmd 61 'settings.set' @{ key = $k; value = $true }) }
+Check ((Cmd 62 'tools.start' @{ kind = 'artwork'; tab = 'movies' }) -match '"ok":true') 'Artwork starts'
+$te = Wait-Tool
+$art = Join-Path $data 'Dashboard\art'
+Check ($te -match 'new picture' -and (Test-Path -LiteralPath (Join-Path $art 'art-101.jpg')) -and (Test-Path -LiteralPath (Join-Path $art 'logo-101.png'))) 'background art and clear logos saved in the cache'
+Check ((Test-Path -LiteralPath (Join-Path $art 'logo-102.none')) -and -not (Test-Path -LiteralPath (Join-Path $art 'logo-102.png'))) 'a missing clear logo is remembered, not asked for again'
+Check ((Test-Path -LiteralPath (Join-Path $art 'banner-2.jpg')) -and -not (Test-Path -LiteralPath (Join-Path $art 'banner-101.jpg'))) 'banners for TV shows only'
+$lj = ''; for ($k = 0; $k -lt 100; $k++) { $lj = Cmd 63 'library.get' @{ tab = 'movies' }; if ($lj -match '"rows"') { break }; [void](@(Receive-DashEvents)); Start-Sleep -Milliseconds 200 }
+Check ($lj -match 'art/art-101\.jpg' -and $lj -match 'art/logo-101\.png' -and $lj -notmatch 'art/logo-102') 'the library carries the artwork it has'
+foreach ($k in 'artBackground', 'artLogo', 'artBanner') { [void](Cmd 65 'settings.set' @{ key = $k; value = $false }) }
 $sr = Cmd 20 'series.open' @{ show = 'Show A'; ep = '1001' }
 Check ($sr -match '"loading":true') 'opening a show fetches it from Plex'
 $ev = ''; for ($k = 0; $k -lt 300 -and $ev -notmatch '"event":"series","data":\{"show":"Show A","running":false'; $k++) { $ev += (@(Receive-DashEvents) -join ''); Start-Sleep -Milliseconds 100 }

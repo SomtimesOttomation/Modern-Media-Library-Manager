@@ -200,12 +200,13 @@ function Export-PageLibrary {
     # artwork from Settings > Artwork, when it has been saved: art\<kind>-<Plex key>.<ext> (an episode uses its show's)
     $artDir = Join-Path $Job.CacheDir 'art'
     $have = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
-    if (Test-Path -LiteralPath $artDir) { foreach ($f in [IO.Directory]::GetFiles($artDir)) { [void]$have.Add([IO.Path]::GetFileName($f)) } }
+    $ver = @{}   # ?v=<last write> so a refreshed picture is not served from the page's image cache
+    if (Test-Path -LiteralPath $artDir) { foreach ($f in (New-Object IO.DirectoryInfo $artDir).GetFiles()) { [void]$have.Add($f.Name); $ver[$f.Name] = $f.LastWriteTimeUtc.Ticks } }
     foreach ($k in @(@('Art', 'art', 'jpg'), @('Logo', 'clogo', 'png'), @('Banner', 'tvbanner', 'jpg'))) {
         $names.Add($k[0]); $defs.Add([ordered]@{ n = $k[0]; t = 'string'; g = 'Library'; s = $false })
         foreach ($r in $Recs) {
             $u = ''
-            if ([string]$r.PlexThumb -match '^/library/metadata/(\d+)(/|$)') { $leaf = '{0}-{1}.{2}' -f $k[1], $Matches[1], $k[2]; if ($have.Contains($leaf)) { $u = 'art/' + $leaf } }
+            if ([string]$r.PlexThumb -match '^/library/metadata/(\d+)(/|$)') { $leaf = '{0}-{1}.{2}' -f $k[1], $Matches[1], $k[2]; if ($have.Contains($leaf)) { $u = 'art/' + $leaf + '?v=' + $ver[$leaf] } }
             $r.PSObject.Properties.Remove($k[0]); $r.PSObject.Properties.Add((New-Object Management.Automation.PSNoteProperty($k[0], $u)))
         }
     }
@@ -312,6 +313,19 @@ function Start-HostExport {
 function Get-ArtKinds {
     # the artwork kinds ticked in Settings > Artwork
     @(if ($script:PageSettings.artBackground) { 'art' }; if ($script:PageSettings.artLogo) { 'logo' }; if ($script:PageSettings.artBanner) { 'banner' })
+}
+function Update-OldArtwork {
+    # v0.10.0 saved TV banners and clear logos cropped (art\banner-*, art\logo-*). Once per session: when any are left
+    # and artwork is ticked, fetch them again uncropped (Settings > Artwork's own run; it drops the old files and the
+    # libraries refresh when it finishes). Not while traffic is paused or another tool runs; then it waits for next time.
+    if ($script:ArtChecked) { return }
+    $dir = Join-Path $script:CacheDir 'art'
+    if (-not (Test-Path -LiteralPath $dir)) { $script:ArtChecked = $true; return }
+    $old = @(Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(logo|banner)-\d+\.(png|jpg|none)$' })
+    if ($old.Count -eq 0 -or @(Get-ArtKinds).Count -eq 0) { $script:ArtChecked = $true; return }
+    if ($script:Traffic.Halted -or ($script:Tool -and -not $script:Tool.Sync.Done)) { return }
+    $script:ArtChecked = $true
+    try { [void](Start-HostTool @{ kind = 'artwork'; tab = 'tv'; rids = @() }) } catch { Write-HostLog 'artwork refresh' $_ }
 }
 function Get-LibraryState {
     # 'ready' (the page copy is at least as new as the snapshot), 'stale' (needs building) or 'empty' (never scanned)
@@ -641,10 +655,10 @@ $script:ToolScript = {
                 # Settings > Artwork was ticked: fetch it now for every scanned tab instead of waiting for the next scan
                 $all = New-Object System.Collections.Generic.List[object]
                 foreach ($snap in @($Job.Snapshots)) { if (Test-Path -LiteralPath $snap) { foreach ($r in [Mmlm.Native.Snapshot]::Load($snap)) { $all.Add($r) } } }
-                $res = Sync-MmlmArtwork -Recs $all.ToArray() -Kinds @($Job.ArtKinds) -Folder (Join-Path $Job.CacheDir 'art') -BaseUrl $Job.BaseUrl -Token $Job.Token
-                $S.Summary = $(if ($res.Stopped) { 'Artwork stopped: Plex did not answer three times in a row. Try again later.' } else { ('Artwork: {0} new picture{1}.' -f $res.Saved, $(if ($res.Saved -eq 1) { '' } else { 's' })) })
+                $res = Sync-MmlmArtwork -Recs $all.ToArray() -Kinds @($Job.ArtKinds) -Folder (Join-Path $Job.CacheDir 'art') -BaseUrl $Job.BaseUrl -Token $Job.Token -Force:([bool]$Job.Force)
+                $S.Summary = $(if ($res.Stopped) { 'Artwork stopped: Plex did not answer three times in a row. Try again later.' } elseif ($Job.Force) { ('Artwork refreshed from Plex: {0} picture{1}.' -f $res.Saved, $(if ($res.Saved -eq 1) { '' } else { 's' })) } else { ('Artwork: {0} new picture{1}.' -f $res.Saved, $(if ($res.Saved -eq 1) { '' } else { 's' })) })
                 if ($res.Stopped) { $S.Error = $S.Summary }
-                $S.Library = ($res.Saved -gt 0)
+                $S.Library = ($res.Saved -gt 0 -or [bool]$Job.Force)
             }
             'fetch' {
                 $S.Partial = New-Object System.Collections.ArrayList
@@ -754,6 +768,7 @@ function Start-HostTool {
         Name = [string]$A.name; Library = $(if ($tab -eq 'tv') { 'TV Shows' } else { 'Movies' }); Overwrite = [bool]$A.overwrite; DataFolder = (Join-Path $script:AppData 'datasets') }
     if ($kind -eq 'artwork') {
         $job.ArtKinds = @(Get-ArtKinds)
+        $job.Force = [bool]$a.force          # Settings > Artwork > Refresh artwork: everything again from Plex
         if ($job.ArtKinds.Count -eq 0) { throw 'Tick an artwork option first.' }
         $job.Snapshots = @((Get-SnapshotFile 'movies'), (Get-SnapshotFile 'tv'))
         $set = Read-HostSettings
@@ -1000,6 +1015,7 @@ $script:Commands = [ordered]@{
             # the page's copy of a tab: sent when ready; otherwise built from the snapshot in the background ('library' event)
             param($a)
             $tab = $(if ([string]$a.tab -eq 'tv') { 'tv' } else { 'movies' })
+            Update-OldArtwork
             switch (Get-LibraryState $tab) {
                 'ready' { [IO.File]::ReadAllText((Join-Path $script:CacheDir ('library-' + $tab + '.json'))) }
                 'empty' { '{"empty":true}' }

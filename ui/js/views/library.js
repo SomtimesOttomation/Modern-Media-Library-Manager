@@ -104,10 +104,11 @@ export function stateBox(tab, L, toast) {
 export function viewSeg(mode, key, redraw) {
   const views = [['posters', 'Posters'], ['grid', 'Grid'], ['dashboard', 'Dashboard']];
   if (key === 'moviesView') views.push(['compare', 'Compare']);
+  else views.push(['banners', 'Banners']);
   return h('div', { class: 'seg', role: 'tablist', 'aria-label': 'View' }, views.map(([k, label]) =>
     h('button', { type: 'button', class: mode === k ? 'active' : '', 'aria-selected': mode === k ? 'true' : 'false', onclick: () => S.saveSettings({ [key]: k }).then(redraw) }, label)));
 }
-export const viewMode = (v, tab) => (v === 'grid' || v === 'dashboard' || (v === 'compare' && tab !== 'tv') ? v : 'posters');
+export const viewMode = (v, tab) => (v === 'grid' || v === 'dashboard' || (v === 'compare' && tab !== 'tv') || (v === 'banners' && tab === 'tv') ? v : 'posters');
 
 export function mount(ctx) {
   const L = S.state.libs.movies;

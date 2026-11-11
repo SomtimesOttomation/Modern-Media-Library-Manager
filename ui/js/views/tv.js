@@ -95,6 +95,31 @@ export function mount(ctx) {
       });
       return;
     }
+    if (mode === 'banners') {
+      // Banners: one wide strip per show. Plex's banner when Settings > Artwork has saved it; otherwise the background
+      // art with the clear logo (or the name) on it; otherwise the name on a plain strip.
+      const wall = h('div', { class: 'bwall' });
+      body.append(wall);
+      const st = S.state.settings;
+      if (!st.artBanner) body.prepend(h('p', { class: 'bnote' }, h('small', null, 'Tick "TV banners" in Settings > Artwork to show Plex\'s banners here (fetched from your Plex server, like posters).')));
+      const years = (sh) => (!sh.sum.y0 ? '' : sh.sum.y0 === sh.sum.y1 ? String(sh.sum.y0) : `${sh.sum.y0}–${sh.sum.y1}`);
+      stopWall = fillWall(wall, list, (sh) => {
+        const ban = st.artBanner ? sh.eps.find((e) => e.Banner)?.Banner : '';
+        const art = st.artBackground || st.artBanner ? sh.eps.find((e) => e.Art)?.Art : '';
+        const logo = st.artLogo ? sh.eps.find((e) => e.Logo)?.Logo : '';
+        const cm = CM.tv.on ? CM.tv.picked.has(sh.name) : undefined;
+        const face = ban ? `<img class="bimg" loading="lazy" src="${esc(ban)}" alt="">`
+          : `<span class="bfake"${art ? ` style="background-image:url('${esc(art)}')"` : ''}>${logo ? `<img loading="lazy" src="${esc(logo)}" alt="">` : `<b>${esc(sh.name)}</b>`}</span>`;
+        return `<button class="bn${cm ? ' picked' : ''}" type="button" data-k="${esc(sh.name)}" title="${esc(sh.name)}"><span class="bpic">${face}${cm === undefined ? '' : `<span class="cm-add${cm ? ' on' : ''}" role="button" tabindex="0" data-cm="1">${cm ? '\u2713' : '+'}</span>`}</span>`
+          + `<span class="binfo"><b>${esc(sh.name)}</b><small>${[years(sh), `${sh.nSeasons} season${sh.nSeasons === 1 ? '' : 's'}`, `${sh.eps.length} ep.`].filter(Boolean).join(' · ')}</small></span></button>`;
+      }, 40);
+      wall.addEventListener('click', (e) => {
+        const t = e.target.closest('.bn'); if (!t) return;
+        if (e.target.closest('[data-cm]')) { const sh = byKey.get(t.dataset.k); if (sh) pick(sh, t); return; }
+        location.hash = `#/tv/${encodeURIComponent(t.dataset.k)}`;
+      });
+      return;
+    }
     // grid: flatten the open parts of the tree
     const cols = gridColumns(L);
     const flat = () => {

@@ -110,3 +110,12 @@ export function sortMenu(sorts, key, rev, onPick) {
   });
   return wrap;
 }
+
+// Settings > Artwork: the clear logo instead of the title text, and background art behind a title's page.
+// Both only when ticked and saved for that title; otherwise the plain title and the usual background.
+import * as S from './store.js';
+export function logoOrTitle(r, title, tag = 'h2') {
+  const t = esc(title);
+  return S.state.settings.artLogo && r && r.Logo ? `<${tag} class="has-logo"><img class="clearlogo" src="${esc(r.Logo)}" alt="${t}" title="${t}"></${tag}>` : `<${tag}>${t}</${tag}>`;
+}
+export const artUrl = (r) => (S.state.settings.artBackground && r && r.Art ? r.Art : '');

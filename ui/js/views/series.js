@@ -5,7 +5,7 @@
 import * as S from '../store.js';
 import * as bridge from '../bridge.js';
 import { h } from '../util.js';
-import { esc, num, fmtSize, fmtRun, hdrLabel } from '../common.js';
+import { esc, num, fmtSize, fmtRun, hdrLabel, logoOrTitle, artUrl } from '../common.js';
 import { openCard, showSummary } from './card.js';
 import { addToCollection } from './collections.js';
 
@@ -104,7 +104,7 @@ export function mount(ctx) {
       <div class="sv-head">
         <div class="sv-poster">${posterSrc ? `<img src="${esc(posterSrc)}" alt="">` : `<div class="ph">${esc(name)}</div>`}${cur ? `<span class="sv-pnum">${cur.index}</span>` : ''}</div>
         <div class="sv-main">
-          <h1>${esc(P ? P.title || name : name)}</h1>
+          ${logoOrTitle(local.find((e) => e.Logo) || first, P ? P.title || name : name, 'h1')}
           <h2>${cur ? esc(cur.title || (cur.index === 0 ? 'Specials' : 'Season ' + cur.index)) : ''}</h2>
           <div class="sv-meta">${starHtml(P ? P.rating || P.audienceRating : first.Rating)}<span>${[years, P ? P.rated : first.MPAARating, P ? P.studio : first.Studio].filter(Boolean).map(esc).join(' · ')}</span></div>
           <div class="sv-strip"><button class="edge l" type="button" data-scroll="seasons" data-dir="-1" aria-label="Earlier seasons" hidden>\u2039</button><div class="sv-seasons hrow" data-row="seasons" role="tablist">${seasons.map((s) => `<button type="button" role="tab" data-season="${s.index}" class="${s.index === state.season ? 'on' : ''}" aria-selected="${s.index === state.season}"><b>${esc(s.index === 0 ? 'Specials' : 'Season ' + s.index)}</b><small>${s.episodes} episode${s.episodes === 1 ? '' : 's'}${P && s.watched ? ` · ${s.watched} watched` : ''}</small></button>`).join('')}</div><button class="edge r" type="button" data-scroll="seasons" data-dir="1" aria-label="Later seasons" hidden>\u203a</button></div>
@@ -143,6 +143,10 @@ export function mount(ctx) {
         return `<button class="sv-rel${inLib ? '' : ' notlib'}" type="button" data-rel="${esc(r.title)}" title="${inLib ? 'Open' : 'Not in your library'}"><div class="sv-rp">${r.poster ? `<img loading="lazy" src="${esc(cacheUrl(r.poster))}" alt="">` : `<div class="ph">${esc(r.title)}</div>`}${r.unwatched ? `<span class="sv-badge">${r.unwatched}</span>` : ''}</div><b>${esc(r.title)}</b><small>${r.seasons ? `${r.seasons} season${r.seasons === 1 ? '' : 's'}` : r.year || ''}</small></button>`;
       }).join('')}</div>` : ''}`;
     arrowsInit();
+    // Settings > Artwork: the show's background art over the colour gradient
+    const art = artUrl(local.find((e) => e.Art) || first);
+    root.classList.toggle('has-art', !!art);
+    if (art) root.style.setProperty('--art', `url('${art.replace(/'/g, '%27')}')`); else root.style.removeProperty('--art');
     const cols = await posterColours(posterSrc);
     if (cols && root.isConnected) { root.style.setProperty('--s1', cols[0]); root.style.setProperty('--s2', cols[1]); root.style.setProperty('--s3', cols[2]); }
   };

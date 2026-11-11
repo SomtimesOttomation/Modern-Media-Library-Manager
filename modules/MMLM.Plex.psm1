@@ -181,13 +181,16 @@ function Save-MmlmPlexArtwork {
     if ([string]$Thumb -notmatch '^/library/metadata/(\d+)(/|$)') { return 'none' }
     $key = $Matches[1]
     $ext = $(if ($Kind -eq 'logo') { 'png' } else { 'jpg' })
-    $dest = Join-Path $Folder ('{0}-{1}.{2}' -f $Kind, $key, $ext)
-    $none = Join-Path $Folder ('{0}-{1}.none' -f $Kind, $key)
+    $pre  = @{ art = 'art'; logo = 'clogo'; banner = 'tvbanner' }[$Kind]       # (logo-/banner- were the cropped first version)
+    $dest = Join-Path $Folder ('{0}-{1}.{2}' -f $pre, $key, $ext)
+    $none = Join-Path $Folder ('{0}-{1}.none' -f $pre, $key)
     if ((Test-Path -LiteralPath $dest) -and ((Get-Item -LiteralPath $dest).Length -gt 0)) { return 'have' }
     if ((Test-Path -LiteralPath $none) -and -not $Retry) { return 'none' }
-    $size = @{ art = @(1280, 720); logo = @(800, 310); banner = @(758, 140) }[$Kind]
+    # the box each picture must fit inside. Logos and banners are never cropped (minSize 0 = fit inside, keep the shape);
+    # banners come at their full 1000x185. Background art fills 1280x720 (it is shown as a cover anyway).
+    $size = @{ art = @(1280, 720); logo = @(800, 310); banner = @(1000, 185) }[$Kind]
     $path = '/library/metadata/{0}/{1}' -f $key, @{ art = 'art'; logo = 'clearLogo'; banner = 'banner' }[$Kind]
-    $q = @{ width = $size[0]; height = $size[1]; minSize = 1; upscale = 1; url = $path }
+    $q = $(if ($Kind -eq 'art') { @{ width = $size[0]; height = $size[1]; minSize = 1; upscale = 1; url = $path } } else { @{ width = $size[0]; height = $size[1]; minSize = 0; upscale = 0; url = $path } })
     if ($Kind -eq 'logo') { $q.format = 'png' }
     $resp = $null
     try {
@@ -221,6 +224,8 @@ function Sync-MmlmArtwork {
     $res = @{ Saved = 0; Failed = 0; Stopped = $false }
     if (-not $Kinds -or $Kinds.Count -eq 0) { return $res }
     if (-not (Test-Path -LiteralPath $Folder)) { New-Item -Path $Folder -ItemType Directory -Force | Out-Null }
+    # the first version saved cropped logos and banners (logo-*, banner-*): drop them so they are fetched again uncropped
+    Get-ChildItem -LiteralPath $Folder -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(logo|banner)-\d+\.(png|jpg|none)$' } | Remove-Item -Force -ErrorAction SilentlyContinue
     $seen = @{}; $jobs = New-Object System.Collections.Generic.List[object]
     foreach ($r in $Recs) {
         $th = [string]$r.PlexThumb

@@ -52,6 +52,8 @@ class H(http.server.BaseHTTPRequestHandler):
             seasons=sorted(set(x[3] for x in eps))
             return self.send('<MediaContainer>'+''.join(f'<Directory ratingKey="{k}0{n}" type="season" index="{n}" title="Season {n}" leafCount="{sum(1 for x in eps if x[3]==n)}" viewedLeafCount="1" thumb="/library/metadata/{k}0{n}/thumb/3"/>' for n in seasons)+'</MediaContainer>')
         if p=='/photo/:/transcode':
+            if re.search(r'/(banner|clearLogo)$', q.get('url',[''])[0]) and q.get('minSize',['1'])[0] != '0':   # logos and banners must never be cropped
+                self.send_response(500); self.end_headers(); return
             if q.get('url',[''])[0].endswith('/102/clearLogo'):      # a title Plex has no clear logo for
                 self.send_response(404); self.end_headers(); return
             return self.send(POSTER,'image/jpeg')

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.10.1
+
+**Bug/Fix**
+- TV banners and clear logos were cropped; they now keep their full shape (banners at 1000x185) and are fetched again once.
+
 ## 0.10.0
 
 **Feature**

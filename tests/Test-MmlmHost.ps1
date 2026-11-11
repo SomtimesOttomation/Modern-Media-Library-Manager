@@ -98,6 +98,12 @@ Check (-not (Test-Path -LiteralPath (Join-Path $art 'banner-2.jpg'))) 'the old c
 Check ((Test-Path -LiteralPath (Join-Path $art 'tvbanner-2.jpg')) -and -not (Test-Path -LiteralPath (Join-Path $art 'tvbanner-101.jpg'))) 'banners for TV shows only'
 $lj = ''; for ($k = 0; $k -lt 100; $k++) { $lj = Cmd 63 'library.get' @{ tab = 'movies' }; if ($lj -match '"rows"') { break }; [void](@(Receive-DashEvents)); Start-Sleep -Milliseconds 200 }
 Check ($lj -match 'art/art-101\.jpg' -and $lj -match 'art/clogo-101\.png' -and $lj -notmatch 'art/clogo-102') 'the library carries the artwork it has'
+# an old cropped banner left from v0.10.0 is fetched again by itself when the page next asks for a library
+$script:Mod = Get-Module MMLM.Host
+& $script:Mod { $script:ArtChecked = $false }
+[IO.File]::WriteAllText((Join-Path $art 'banner-3.jpg'), 'old cropped banner')
+[void](Cmd 66 'library.get' @{ tab = 'tv' }); $te = Wait-Tool
+Check ($te -match '"kind":"artwork"' -and -not (Test-Path -LiteralPath (Join-Path $art 'banner-3.jpg')) -and (Test-Path -LiteralPath (Join-Path $art 'tvbanner-3.jpg'))) 'cropped artwork from v0.10.0 is replaced by itself'
 foreach ($k in 'artBackground', 'artLogo', 'artBanner') { [void](Cmd 65 'settings.set' @{ key = $k; value = $false }) }
 $sr = Cmd 20 'series.open' @{ show = 'Show A'; ep = '1001' }
 Check ($sr -match '"loading":true') 'opening a show fetches it from Plex'

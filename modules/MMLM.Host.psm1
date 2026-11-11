@@ -313,6 +313,19 @@ function Get-ArtKinds {
     # the artwork kinds ticked in Settings > Artwork
     @(if ($script:PageSettings.artBackground) { 'art' }; if ($script:PageSettings.artLogo) { 'logo' }; if ($script:PageSettings.artBanner) { 'banner' })
 }
+function Update-OldArtwork {
+    # v0.10.0 saved TV banners and clear logos cropped (art\banner-*, art\logo-*). Once per session: when any are left
+    # and artwork is ticked, fetch them again uncropped (Settings > Artwork's own run; it drops the old files and the
+    # libraries refresh when it finishes). Not while traffic is paused or another tool runs; then it waits for next time.
+    if ($script:ArtChecked) { return }
+    $dir = Join-Path $script:CacheDir 'art'
+    if (-not (Test-Path -LiteralPath $dir)) { $script:ArtChecked = $true; return }
+    $old = @(Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(logo|banner)-\d+\.(png|jpg|none)$' })
+    if ($old.Count -eq 0 -or @(Get-ArtKinds).Count -eq 0) { $script:ArtChecked = $true; return }
+    if ($script:Traffic.Halted -or ($script:Tool -and -not $script:Tool.Sync.Done)) { return }
+    $script:ArtChecked = $true
+    try { [void](Start-HostTool @{ kind = 'artwork'; tab = 'tv'; rids = @() }) } catch { Write-HostLog 'artwork refresh' $_ }
+}
 function Get-LibraryState {
     # 'ready' (the page copy is at least as new as the snapshot), 'stale' (needs building) or 'empty' (never scanned)
     param([string]$Tab)
@@ -1000,6 +1013,7 @@ $script:Commands = [ordered]@{
             # the page's copy of a tab: sent when ready; otherwise built from the snapshot in the background ('library' event)
             param($a)
             $tab = $(if ([string]$a.tab -eq 'tv') { 'tv' } else { 'movies' })
+            Update-OldArtwork
             switch (Get-LibraryState $tab) {
                 'ready' { [IO.File]::ReadAllText((Join-Path $script:CacheDir ('library-' + $tab + '.json'))) }
                 'empty' { '{"empty":true}' }

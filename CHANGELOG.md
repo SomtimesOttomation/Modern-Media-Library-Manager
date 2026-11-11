@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.10.0
+
+**Feature**
+- Settings > Artwork: clear logos instead of title text, and background art behind cards, the series view and Compare (from your own Plex server, opt-in).
+- TV Shows: a new Banners view (Plex banners when ticked in Settings > Artwork; background art and logo stand in otherwise).
+- Box office adjusted for inflation (2024 dollars): shown on cards, as sorts, Grid columns and search fields (boxadj), and as an Adjust for inflation checkbox in Compare.
+
+**Bug/Fix**
+- Compare: titles with no box office or Metacritic now say so, with Fetch info for just those titles; the Opening weekend row only shows when there is a value.
+
 ## 0.9.0
 
 **Feature**

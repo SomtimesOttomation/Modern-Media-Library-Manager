@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.11.0
+
+**Feature**
+- Settings > Artwork: a Refresh artwork button fetches every ticked picture again from Plex (after changing banners, logos or backgrounds there).
+
+**Bug/Fix**
+- Cropped TV banners and clear logos saved by v0.10.0 are now replaced by themselves.
+
 ## 0.10.1
 
 **Bug/Fix**

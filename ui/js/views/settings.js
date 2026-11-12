@@ -128,6 +128,12 @@ function artworkTab(repaint) {
     tick('artBanner', 'TV banners', 'TV Shows: wide banners for the Banners view (shows without one get their background art and logo instead).'),
     hr(),
     h('div', { class: 'art-opt' },
+      h('div', null, h('button', { class: 'btn', type: 'button', onclick: async () => {
+        await S.saveSettings({ posterScale: 100, tvScale: 100, clearScale: 100, bannerScale: 100 });
+        status.textContent = 'All poster sizes are back to 100%.';
+      } }, 'Reset to Defaults')),
+      h('small', null, 'Poster size: Movies posters, TV posters, Clear logos and Banners each keep their own size. This puts all of them back to 100%.')),
+    h('div', { class: 'art-opt' },
       h('div', null, refreshBtn = h('button', { class: 'btn', type: 'button', disabled: anyTicked() ? null : true, onclick: async () => {
         try {
           await bridge.request('tools.start', { kind: 'artwork', tab: 'movies', rids: [], force: true });

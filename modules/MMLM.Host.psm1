@@ -96,7 +96,7 @@ function Save-HostPlexSettings {
 
 # The page's own settings (theme, view and sort per tab, grid columns), kept apart from the app's settings.json.
 $script:PageDefaults = [ordered]@{ theme = 'system'; updateCheck = $false; moviesView = 'posters'; tvView = 'posters'; moviesSort = 'added'; tvSort = 'title'; moviesSortRev = $false; tvSortRev = $false
-    columns = @(); hideDupes = $false; detectFel = $false; posterScale = 100; tvScale = 100;
+    columns = @(); hideDupes = $false; detectFel = $false; posterScale = 100; tvScale = 100; clearScale = 100; bannerScale = 100;
     doctorFreq = 'off'; doctorAck = $false; doctorDay = 0; doctorTime = '03:00'; doctorStyle = 'compact'; doctorChecks = @('unreadable', 'unmatched', 'wrongmatch', 'gaps', 'poster', 'dupes', 'av1'); widthPreset = 'full'; customWidth = $false; contentWidth = 0
     artLogo = $false; artBackground = $false; artBanner = $false
     fxLeft = 'auto'; fxRight = 'auto'; fxMotion = 'full'; vsStyle = 'arcade'; cmpTally = $true; cmpInflation = $false; cmpWalkover = $true; cmpImdb = $true }
@@ -137,6 +137,7 @@ function Set-PageSetting {
         'doctorAck'   { $Value = [bool]$Value; $true }
         'doctorStyle' { @('compact', 'verbose') -contains [string]$Value }
         'doctorChecks' { $ok = @(Get-MmlmDoctorCheckIds); $Value = @(@($Value) | ForEach-Object { [string]$_ } | Where-Object { $ok -contains $_ } | Select-Object -Unique); $true }
+        { $_ -in @('clearScale', 'bannerScale') } { $n = 0; if ([int]::TryParse([string]$Value, [ref]$n) -and $n -ge 50 -and $n -le 200) { $Value = $n; $true } else { $false } }
         'tvScale'     { $n = 0; if ([int]::TryParse([string]$Value, [ref]$n) -and $n -ge 50 -and $n -le 200) { $Value = $n; $true } else { $false } }
         'posterScale' { $n = 0; if ([int]::TryParse([string]$Value, [ref]$n) -and $n -ge 50 -and $n -le 200) { $Value = $n; $true } else { $false } }
         'contentWidth' { $n = 0; if ([int]::TryParse([string]$Value, [ref]$n) -and $n -ge 0 -and $n -le 20000) { $Value = $n; $true } else { $false } }

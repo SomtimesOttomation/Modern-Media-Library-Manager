@@ -219,36 +219,6 @@ function Save-MmlmPlexArtwork {
     finally { if ($resp) { $resp.Close() } }
 }
 
-function Sync-MmlmArtwork {
-    # Fetches the chosen artwork kinds for every distinct Plex item behind these records (an episode uses its show), into
-    # $Folder. The failed-request rule: three failures in a row stop the run. Returns @{ Saved; Failed; Stopped }.
-    param([object[]]$Recs, [string[]]$Kinds, [string]$Folder, [string]$BaseUrl, [string]$Token, [switch]$Retry, [switch]$Force)
-    $res = @{ Saved = 0; Failed = 0; Stopped = $false }
-    if (-not $Kinds -or $Kinds.Count -eq 0) { return $res }
-    if (-not (Test-Path -LiteralPath $Folder)) { New-Item -Path $Folder -ItemType Directory -Force | Out-Null }
-    # the first version saved cropped logos and banners (logo-*, banner-*): drop them so they are fetched again uncropped
-    Get-ChildItem -LiteralPath $Folder -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(logo|banner)-\d+\.(png|jpg|none)$' } | Remove-Item -Force -ErrorAction SilentlyContinue
-    $seen = @{}; $jobs = New-Object System.Collections.Generic.List[object]
-    foreach ($r in $Recs) {
-        $th = [string]$r.PlexThumb
-        if (-not $th -or $seen.ContainsKey($th)) { continue }
-        $seen[$th] = $true
-        $tv = [bool][string]$r.Show
-        foreach ($k in $Kinds) { if ($k -eq 'banner' -and -not $tv) { continue }; $jobs.Add(@($th, $k)) }
-    }
-    $n = 0; $row = 0
-    foreach ($j in $jobs) {
-        if (Test-MmlmScanCancelled) { break }
-        $n++
-        if (($n % 5) -eq 0 -or $n -eq $jobs.Count) { Set-MmlmProgress -Text ('Artwork: {0} of {1}' -f $n, $jobs.Count) -Value $n -Max $jobs.Count }
-        $r = Save-MmlmPlexArtwork -BaseUrl $BaseUrl -Token $Token -Thumb $j[0] -Kind $j[1] -Folder $Folder -Retry:$Retry -Force:$Force
-        if ($r -eq 'saved') { $res.Saved++ }
-        if ($r -eq 'failed') { $res.Failed++; $row++; if ($row -ge 3) { $res.Stopped = $true; break } } else { $row = 0 }
-    }
-    if ($res.Saved -gt 0 -or $Force) { [IO.File]::WriteAllText((Join-Path $Folder 'stamp.txt'), (Get-Date).ToString('o')) }
-    $res
-}
-
 function Save-MmlmPlexImage {
     # Any Plex image (poster, episode still, cast photo) resized by Plex's own image resizer and saved as <Folder>\<hash>.jpg.
     # Returns the file name ('' when there is no image or Plex could not send it). Already saved = no request.
@@ -274,6 +244,72 @@ function Save-MmlmPlexImage {
     catch { Add-MmlmTraffic -Failed }
     finally { if ($resp) { $resp.Close() } }
     ''
+}
+
+function Get-MmlmPlexSeries {
+    # The series view's data for one show: what a scan does not keep (episode stills, summaries, watched marks, cast,
+    # related shows). Pictures are saved in $ImageFolder; progress goes to $Sync (Text, Pct, Cancel).
+    # Returns @{ Key = <show ratingKey>; Data = <ordered page object> }, or $null when cancelled.
+    param([string]$BaseUrl, [string]$Token, [string]$ShowKey, [string]$EpKey, [string]$ImageFolder, $Sync)
+    $u = $BaseUrl; $t = $Token; $S = $Sync
+    $tag = { param($n, $c) @($n.SelectNodes($c) | ForEach-Object { $_.GetAttribute('tag') } | Where-Object { $_ }) }
+    $attr = { param($n, $a) [string]$n.GetAttribute($a) }
+    $int = { param($x) $v = 0; [void][int]::TryParse([string]$x, [ref]$v); $v }
+    $S.Text = 'Finding the show on Plex...'
+    $showKey = [string]$ShowKey
+    if (-not $showKey) {
+        $ep = (Get-MmlmPlexXml -BaseUrl $u -Path ('/library/metadata/' + $EpKey) -Token $t).MediaContainer.SelectSingleNode('Video')
+        if ($null -eq $ep) { throw 'Plex no longer has this episode. Scan TV Shows again.' }
+        $showKey = $ep.GetAttribute('grandparentRatingKey')
+    }
+    $S.Text = 'Reading the show...'
+    $sx = (Get-MmlmPlexXml -BaseUrl $u -Path ('/library/metadata/' + $showKey) -Query @{ includeRelated = 1 } -Token $t).MediaContainer
+    $show = $sx.SelectSingleNode('Directory')
+    if ($null -eq $show) { throw 'Plex did not return the show.' }
+    $seasons = @((Get-MmlmPlexXml -BaseUrl $u -Path ('/library/metadata/' + $showKey + '/children') -Token $t).MediaContainer.SelectNodes('Directory') | Where-Object { $_.GetAttribute('type') -eq 'season' })
+    $S.Text = 'Reading the episodes...'
+    $eps = @((Get-MmlmPlexXml -BaseUrl $u -Path ('/library/metadata/' + $showKey + '/allLeaves') -Token $t).MediaContainer.SelectNodes('Video'))
+    $img = $ImageFolder
+    if (-not (Test-Path -LiteralPath $img)) { New-Item -ItemType Directory -Path $img -Force | Out-Null }
+    $pic = { param($p, $w, $hgt) $f = Save-MmlmPlexImage -BaseUrl $u -Token $t -ThumbPath $p -Width $w -Height $hgt -Folder $img; if ($f) { 'series/img/' + $f } else { '' } }
+    # cast and related shows from the show page
+    $cast = @(foreach ($r in @($show.SelectNodes('Role') | Select-Object -First 30)) { [ordered]@{ name = & $attr $r 'tag'; role = & $attr $r 'role'; thumb = & $attr $r 'thumb' } })
+    $related = New-Object System.Collections.Generic.List[object]
+    foreach ($hub in @($sx.SelectNodes('Hub') + $show.SelectNodes('Related/Hub'))) {
+        foreach ($d in @($hub.SelectNodes('Directory'))) {
+            if ($related.Count -ge 24 -or (& $attr $d 'type') -ne 'show' -or (& $attr $d 'ratingKey') -eq $showKey) { continue }
+            if (@($related | Where-Object { $_.key -eq (& $attr $d 'ratingKey') }).Count) { continue }
+            $related.Add([ordered]@{ key = & $attr $d 'ratingKey'; title = & $attr $d 'title'; year = & $int (& $attr $d 'year'); seasons = & $int (& $attr $d 'childCount')
+                unwatched = [Math]::Max(0, (& $int (& $attr $d 'leafCount')) - (& $int (& $attr $d 'viewedLeafCount'))); thumb = & $attr $d 'thumb' })
+        }
+    }
+    # images: posters first (they show at the top), then the episode stills, then faces
+    $total = 1 + $seasons.Count + $eps.Count + $cast.Count + $related.Count
+    $count = @{ n = 0 }
+    $step = { $count.n++; $S.Pct = [int](100 * $count.n / [Math]::Max(1, $total)) }
+    $S.Text = 'Fetching pictures...'
+    $data = [ordered]@{
+        key = $showKey; title = & $attr $show 'title'; year = & $int (& $attr $show 'year'); summary = & $attr $show 'summary'; studio = & $attr $show 'studio'
+        rated = & $attr $show 'contentRating'; rating = & $attr $show 'rating'; audienceRating = & $attr $show 'audienceRating'; genres = @(& $tag $show 'Genre')
+        firstAired = & $attr $show 'originallyAvailableAt'; poster = (& $pic (& $attr $show 'thumb') 300 450); fetchedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm')
+    }
+    & $step
+    $data.seasons = @(foreach ($se in $seasons) {
+        if ($S.Cancel) { break }
+        $o = [ordered]@{ key = & $attr $se 'ratingKey'; index = & $int (& $attr $se 'index'); title = & $attr $se 'title'; episodes = & $int (& $attr $se 'leafCount')
+            watched = & $int (& $attr $se 'viewedLeafCount'); poster = (& $pic (& $attr $se 'thumb') 300 450) }
+        & $step; $o })
+    $data.episodes = @(foreach ($e in $eps) {
+        if ($S.Cancel) { break }
+        $o = [ordered]@{ key = & $attr $e 'ratingKey'; season = & $int (& $attr $e 'parentIndex'); index = & $int (& $attr $e 'index'); title = & $attr $e 'title'
+            summary = & $attr $e 'summary'; aired = & $attr $e 'originallyAvailableAt'; minutes = [int]((& $int (& $attr $e 'duration')) / 60000)
+            watched = ((& $int (& $attr $e 'viewCount')) -gt 0); progress = $(if ((& $int (& $attr $e 'duration')) -gt 0) { [int](100 * (& $int (& $attr $e 'viewOffset')) / (& $int (& $attr $e 'duration'))) } else { 0 })
+            thumb = (& $pic (& $attr $e 'thumb') 400 225) }
+        & $step; $o })
+    $data.cast = @(foreach ($c in $cast) { if ($S.Cancel) { break }; $c.photo = (& $pic $c.thumb 200 200); $c.Remove('thumb'); & $step; $c })
+    $data.related = @(foreach ($r in $related) { if ($S.Cancel) { break }; $r.poster = (& $pic $r.thumb 200 300); $r.Remove('thumb'); & $step; $r })
+    if ($S.Cancel) { return $null }
+    @{ Key = $showKey; Data = $data }
 }
 
 function Convert-MmlmPlexEpoch {
@@ -724,8 +760,8 @@ Export-ModuleMember -Function @(
     'Get-MmlmPlexShowNode',
     'Save-MmlmPlexPoster',
     'Save-MmlmPlexArtwork',
-    'Sync-MmlmArtwork',
     'Save-MmlmPlexImage',
+    'Get-MmlmPlexSeries',
     'Convert-MmlmPlexEpoch',
     'Get-MmlmPlexTags',
     'Get-MmlmPlexRatings',

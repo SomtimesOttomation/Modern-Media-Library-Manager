@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.14.0
+
+**Feature**
+- Poster size is remembered per view: Movies posters, TV posters, Clear logos and Banners each keep their own size.
+- Settings > Artwork: Reset to Defaults puts every poster size back to 100%.
+
 ## 0.13.2
 
 **Bug/Fix**

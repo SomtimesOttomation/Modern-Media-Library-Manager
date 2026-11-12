@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+**Housekeeping**
+- MMLM now talks to the media server through one layer (step 1 of Jellyfin support); no visible change.
+
 ## 0.14.0
 
 **Feature**

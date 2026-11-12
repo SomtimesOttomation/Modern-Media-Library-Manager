@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+**Feature**
+- Jellyfin support: Movies and TV Shows can each be read from Plex or Jellyfin (Settings > Servers), with artwork and a Test button.
+- First launch: a popup asks whether you use Jellyfin or Plex, then connects to it and scans your library.
+
 **Housekeeping**
 - MMLM now talks to the media server through one layer (step 1 of Jellyfin support); no visible change.
 

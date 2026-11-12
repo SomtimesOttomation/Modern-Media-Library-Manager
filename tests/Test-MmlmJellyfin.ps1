@@ -59,6 +59,22 @@ $sid = Get-MmlmArtworkFileId $e1.PlexThumb
 Check ((Test-Path (Join-Path $art "tvbanner-$sid.jpg")) -and $res.Saved -ge 5 -and -not $res.Stopped) "artwork: the show's banner"
 Check ((Test-Path (Join-Path $art ('art-{0}.none' -f (Get-MmlmArtworkFileId $by['Old Reel'].PlexThumb))))) 'artwork: a title Jellyfin has none for is remembered'
 Check ((Get-MmlmArtworkFileId '/library/metadata/42/thumb/1') -eq '42') 'artwork ids: Plex unchanged'
+
+# series view: one show's seasons, episodes with stills, cast and similar shows, from an episode key (as the page sends)
+$sync = [hashtable]::Synchronized(@{ Text = ''; Pct = 0; Cancel = $false })
+$sv = Get-MmlmServerSeries -Server $srv -ShowKey '' -EpKey $e1.PlexKey -ImageFolder (Join-Path $tmp 'series\img') -Sync $sync
+$d = $sv.Data
+Check ($sv.Key -eq ('jf-{0:x32}' -f 0xb001) -and $d.title -eq 'Show J' -and $d.year -eq 2010 -and $d.firstAired -eq '2010-09-01' -and $d.studio -eq 'Net J' -and @($d.genres) -contains 'Comedy') 'series: the show found from an episode, with its details'
+Check (@($d.seasons).Count -eq 1 -and $d.seasons[0].index -eq 1 -and $d.seasons[0].episodes -eq 3 -and $d.seasons[0].poster -like 'series/img/jf*.jpg') 'series: seasons with episode counts and posters'
+Check (@($d.episodes).Count -eq 3 -and $d.episodes[0].minutes -eq 45 -and $d.episodes[0].summary -eq 'Episode 1.' -and $d.episodes[0].thumb -like 'series/img/*' -and $d.episodes[0].aired -eq '2015-01-11' -and -not $d.episodes[0].watched) 'series: episodes with stills, length and summary (no watched marks yet)'
+Check (@($d.cast).Count -eq 1 -and $d.cast[0].name -eq 'Cast One' -and $d.cast[0].role -eq 'Lead' -and $d.cast[0].photo -like 'series/img/*') 'series: cast with photos (actors only)'
+Check (@($d.related).Count -eq 1 -and $d.related[0].title -eq 'Show K' -and $d.related[0].seasons -eq 2) 'series: similar shows'
+Check ((Test-Path (Join-Path $tmp ('series\img\' + ($d.poster -replace '^series/img/', ''))))) 'series: pictures saved in the series folder'
+$before = $ctx.Traffic.Requests
+$sv2 = Get-MmlmServerSeries -Server $srv -ShowKey $sv.Key -EpKey '' -ImageFolder (Join-Path $tmp 'series\img') -Sync $sync
+Check ($sv2.Data.title -eq 'Show J' -and ($ctx.Traffic.Requests - $before) -le 4) 'series: a refresh asks again but reuses saved pictures'
+$k2 = Get-MmlmServerSeries -Server $srv -ShowKey '' -EpKey $k.PlexKey -ImageFolder (Join-Path $tmp 'series\img') -Sync $sync
+Check ($k2.Data.title -eq 'Show K' -and -not $k2.Data.poster -and @($k2.Data.seasons).Count -eq 2 -and -not $k2.Data.seasons[0].poster) 'series: a show with no pictures still opens'
 Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
 "Done: $fail problem(s)."
 exit ([int]($fail -gt 0))

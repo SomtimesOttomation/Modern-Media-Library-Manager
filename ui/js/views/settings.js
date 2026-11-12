@@ -2,6 +2,7 @@
 // Artwork (clear logos, background art, TV banners from Plex), Fun (Compare's borders and VS).
 import * as S from '../store.js';
 import * as bridge from '../bridge.js';
+import { doctorTab } from './doctor.js';
 import { h } from '../util.js';
 import { openUpdate } from './update.js';
 import { openTraffic } from './traffic.js';
@@ -20,7 +21,7 @@ export { overlay };
 
 const TAB_KEY = 'mmlm.settingsTab';
 let settingsTab = 'general';
-try { const v = localStorage.getItem(TAB_KEY); if (['general', 'plex', 'data', 'artwork', 'fun'].includes(v)) settingsTab = v; } catch (e) { /* ignore */ }
+try { const v = localStorage.getItem(TAB_KEY); if (['general', 'plex', 'data', 'artwork', 'doctor', 'fun'].includes(v)) settingsTab = v; } catch (e) { /* ignore */ }
 const hr = () => h('hr', { style: { border: 0, borderTop: '1px solid var(--line)' } });
 
 function generalTab(close, repaint) {
@@ -169,10 +170,10 @@ export function openSettings(tab, onClose) {
     const body = h('div', { class: 'settings-body', role: 'tabpanel' });
     const tabs = h('div', { class: 'seg settings-tabs', role: 'tablist', 'aria-label': 'Settings sections' });
     const paint = () => {
-      tabs.replaceChildren(...[['general', 'General'], ['plex', 'Plex'], ['data', 'Data'], ['artwork', 'Artwork'], ['fun', 'Fun']].map(([k, label]) => h('button', {
+      tabs.replaceChildren(...[['general', 'General'], ['plex', 'Plex'], ['data', 'Data'], ['artwork', 'Artwork'], ['doctor', 'PlexDoctor'], ['fun', 'Fun']].map(([k, label]) => h('button', {
         type: 'button', role: 'tab', 'aria-selected': settingsTab === k ? 'true' : 'false', class: settingsTab === k ? 'active' : '',
         onclick: () => { settingsTab = k; try { localStorage.setItem(TAB_KEY, k); } catch (e) { /* ignore */ } paint(); } }, label)));
-      body.replaceChildren(...(settingsTab === 'plex' ? plexTab(paint) : settingsTab === 'data' ? dataTab() : settingsTab === 'artwork' ? artworkTab(paint) : settingsTab === 'fun' ? funTab(paint) : generalTab(close, paint)));
+      body.replaceChildren(...(settingsTab === 'plex' ? plexTab(paint) : settingsTab === 'data' ? dataTab() : settingsTab === 'artwork' ? artworkTab(paint) : settingsTab === 'doctor' ? doctorTab(paint) : settingsTab === 'fun' ? funTab(paint) : generalTab(close, paint)));
     };
     paint();
     return h('div', null, h('h2', null, 'Settings'), tabs, body,

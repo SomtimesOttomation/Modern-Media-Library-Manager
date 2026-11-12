@@ -7,6 +7,7 @@ import { h, ago } from './util.js';
 import * as library from './views/library.js';
 import * as tv from './views/tv.js';
 import { openSettings } from './views/settings.js';
+import { initDoctor } from './views/doctor.js';
 import { openTraffic } from './views/traffic.js';
 import { openUpdate } from './views/update.js';
 import { openAdvanced } from './views/advanced.js';
@@ -67,7 +68,7 @@ function updateToast() {
 let lastRunning = false;
 const tabName = (t) => (t === 'tv' ? 'TV Shows' : 'Movies');
 // A tool (Fetch info, FEL check, export) uses the same strip when no scan is running.
-const TOOL_NAMES = { fetch: 'Fetch info', fel: 'FEL / MEL check', csv: 'CSV export', html: 'HTML export', artwork: 'Artwork' };
+const TOOL_NAMES = { fetch: 'Fetch info', fel: 'FEL / MEL check', csv: 'CSV export', html: 'HTML export', artwork: 'Artwork', doctor: 'PlexDoctor' };
 let toolShown = false;
 function toolBar() {
   const t = S.state.tool, bar = $('#syncbar');
@@ -243,23 +244,27 @@ frame.addEventListener('mousedown', (e) => {
 });
 frame.addEventListener('dblclick', (e) => { if (e.target.closest('.wgrip')) S.saveSettings({ contentWidth: 0 }); });
 
-// ---- poster size (50% to 200%), only while a poster wall is showing ----
+// ---- poster size (50% to 200%), each tab its own: Movies posters; TV posters, Clear logos and Banners ----
 const pop = $('#sizepop'), range = $('#size-range');
+const scaleKey = () => (currentTab() === 'tv' ? 'tvScale' : 'posterScale');
+const SIZED = { movies: ['posters'], tv: ['posters', 'clear', 'banners'] };
 function applyPosterScale(v) {
   document.documentElement.style.setProperty('--poster-scale', String((v || 100) / 100));
   $('#size-val').textContent = `${v || 100}%`; range.value = String(v || 100);
 }
 function sizeButton() {
-  const tab = currentTab(), posters = (S.state.settings[`${tab}View`] || 'posters') === 'posters';
-  $('#btn-size').hidden = !posters;
-  if (!posters) pop.hidden = true;
+  const tab = currentTab(), sized = SIZED[tab].includes(S.state.settings[`${tab}View`] || 'posters') && !location.hash.match(/^#\/tv\/./);
+  $('#btn-size').hidden = !sized;
+  $('#btn-size').title = tab === 'tv' ? 'Size of posters, logos and banners' : 'Poster size';
+  if (!sized) pop.hidden = true;
+  applyPosterScale(S.state.settings[scaleKey()]);
 }
 let sizeTimer = 0;
 range.addEventListener('input', () => {
   applyPosterScale(+range.value);
-  clearTimeout(sizeTimer); sizeTimer = setTimeout(() => S.saveSettings({ posterScale: +range.value }), 300);
+  const k = scaleKey(); clearTimeout(sizeTimer); sizeTimer = setTimeout(() => S.saveSettings({ [k]: +range.value }), 300);
 });
-$('#size-reset').addEventListener('click', () => { applyPosterScale(100); S.saveSettings({ posterScale: 100 }); });
+$('#size-reset').addEventListener('click', () => { applyPosterScale(100); S.saveSettings({ [scaleKey()]: 100 }); });
 $('#btn-size').addEventListener('click', (e) => {
   if (!pop.hidden) { pop.hidden = true; return; }
   const r = e.currentTarget.getBoundingClientRect();
@@ -273,7 +278,7 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !pop.hid
 
 S.subscribe((topics) => {
   if (topics.has('queryset')) { $('#psearch').value = S.state.query; focusQueryTab(false); }
-  if (topics.has('settings')) { applyWidth(); applyPosterScale(S.state.settings.posterScale); sizeButton(); }
+  if (topics.has('settings')) { applyWidth(); sizeButton(); }
   if (topics.has('theme') || topics.has('settings')) themeIcon();
   if (topics.has('traffic')) { haltBar(); liveStatus(); }
   if (topics.has('dropped')) dropBar();
@@ -289,8 +294,9 @@ window.addEventListener('hashchange', route);
 S.init().then(() => {
   if (S.inLauncher()) $('#btn-theme').hidden = true;      // the launcher owns the theme
   haltBar(); dropBar();
-  themeIcon(); applyWidth(); applyPosterScale(S.state.settings.posterScale); route(); versionChip(); syncBar();
+  themeIcon(); applyWidth(); route(); versionChip(); syncBar();
   for (const t of S.TABS) S.loadLibrary(t);               // both libraries load once, from the saved scan (no network)
+  initDoctor();                                            // PlexDoctor's alert (a check-up that found issues)
   const n = S.state.update.note;
   if (n) toast(n.ok ? `Updated to v${n.to}.` : `The update to v${n.to} did not work (${n.reason || 'unknown reason'}). v${n.from} was restored.`);
 }).catch((e) => {

@@ -167,7 +167,7 @@ function Test-Stage {
     if (-not (Test-Path $vf)) { throw 'The update package has no VERSION file.' }
     $pkgVer = ConvertTo-Ver ([IO.File]::ReadAllText($vf))
     if (-not $pkgVer) { throw 'The update package has an unreadable VERSION file.' }
-    foreach ($must in 'Modern-Media-Library-Manager.ps1', 'Run-ModernMediaLibraryManager.cmd', 'dashboard-template.html', 'tv-template.html', 'Update-MMLM.ps1', 'Apply-Update.ps1', 'src/Mmlm.Native.cs', 'modules/MMLM.Library.psm1', 'modules/MMLM.Plex.psm1', 'modules/MMLM.Fetch.psm1', 'modules/MMLM.Host.psm1', 'Start-MMLM.ps1', 'Start-MMLM.bat', 'Setup-WebView2.ps1', 'dash.json', 'ui/index.html', 'ui/js/app.js') {
+    foreach ($must in 'Modern-Media-Library-Manager.ps1', 'Run-ModernMediaLibraryManager.cmd', 'dashboard-template.html', 'tv-template.html', 'Update-MMLM.ps1', 'Apply-Update.ps1', 'src/Mmlm.Native.cs', 'modules/MMLM.Library.psm1', 'modules/MMLM.Plex.psm1', 'modules/MMLM.Fetch.psm1', 'modules/MMLM.Doctor.psm1', 'modules/MMLM.Host.psm1', 'Start-MMLM.ps1', 'Start-MMLM.bat', 'Setup-WebView2.ps1', 'dash.json', 'ui/index.html', 'ui/js/app.js') {
         if (-not (Test-Path (Join-Path $StageDir $must))) { throw "The update package is missing $must." }
     }
     foreach ($f in @(Get-ChildItem -LiteralPath $StageDir -Recurse -File | Where-Object { @('.ps1', '.psm1') -contains $_.Extension.ToLowerInvariant() })) {

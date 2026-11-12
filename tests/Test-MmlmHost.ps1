@@ -126,6 +126,22 @@ Check ($sd.episodes[0].watched -eq $true -and $sd.episodes[4].watched -eq $false
 Check (Test-Path -LiteralPath (Join-Path $data ('Dashboard\' + ($sd.cast[0].photo -replace '/', '\')))) 'cast photos saved in the cache'
 Check ((Cmd 22 'image.data' @{ path = $sd.seasons[0].poster }) -match 'data:image/jpeg;base64') 'a season poster can be read for its colours'
 Check ((Cmd 23 'image.data' @{ path = '..\settings.json' }) -match '"ok":false') 'image.data only reads cached pictures'
+# PlexDoctor: settings, a check-up (scans each scanned tab, then the read-only checks), the report and the alert flag
+Check ((Cmd 70 'settings.set' @{ key = 'doctorFreq'; value = 'fortnightly' }) -match '"ok":false') 'PlexDoctor: an unknown schedule is refused'
+Check ((Cmd 71 'settings.set' @{ key = 'doctorChecks'; value = @('gaps', 'nope', 'unmatched', 'subs') }) -match '"doctorChecks":\["gaps","unmatched","subs"\]') 'PlexDoctor: only known checks are kept'
+$dsj = Cmd 72 'doctor.status' @{}
+Check ($dsj -match '"next":"\d{4}-\d\d-\d\dT03:00:00"' -and $dsj -match '"last":null') 'PlexDoctor: the next run is shown before any report'
+Check ((Cmd 73 'doctor.run' @{}) -match '"ok":true') 'PlexDoctor: Run check-up now starts'
+Check ((Cmd 74 'doctor.run' @{}) -match 'already running') 'PlexDoctor: one check-up at a time'
+$ev = ''; for ($k = 0; $k -lt 600 -and $ev -notmatch '"event":"doctor","data":\{"running":false,"done":true'; $k++) { $ev += (@(Receive-DashEvents) -join ''); Start-Sleep -Milliseconds 100 }
+Check ($ev -match '"event":"scan","data":\{[^}]*"tab":"movies"' -and $ev -match '"event":"scan","data":\{[^}]*"tab":"tv"') 'PlexDoctor: it scans both libraries first'
+Check ($ev -match '"event":"doctor","data":\{"running":false,"done":true,"error":null') 'PlexDoctor: the check-up finishes'
+$rep = ((Cmd 75 'doctor.report' @{}) | ConvertFrom-Json).data
+Check ($rep.counts.movies -eq 7 -and $rep.counts.shows -eq 2 -and @($rep.skipped) -contains 'av1' -and @($rep.issues | Where-Object { $_.check -notin @('gaps', 'unmatched', 'subs') }).Count -eq 0) 'PlexDoctor: the report counts the library and runs only the ticked checks'
+Check (@(Get-ChildItem (Join-Path $data 'PlexDoctor\reports') -Filter 'report-*.json').Count -eq 1) 'PlexDoctor: the report is saved'
+$ds = ((Cmd 76 'doctor.status' @{}) | ConvertFrom-Json).data
+Check ($ds.unseen -eq $false -and $ds.last.issues -eq @($rep.issues).Count) 'PlexDoctor: opening the report clears the alert'
+[void](Cmd 77 'settings.set' @{ key = 'doctorChecks'; value = @('unreadable', 'unmatched', 'wrongmatch', 'gaps', 'poster', 'dupes', 'av1') })
 Start-DashWorker
 Check ($null -eq (Get-DashStatus).Badge.Count) 'badge clears when the tab is shown'
 [void](Cmd 4 'scan.start' @{ tab = 'movies'; rebuild = $true }); Start-Sleep -Milliseconds 150; Stop-DashTraffic; $e = Wait-Scan

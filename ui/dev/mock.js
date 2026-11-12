@@ -5,7 +5,7 @@ let emit = () => {};
 export function attach(fn) { emit = fn; }
 
 const qs = new URLSearchParams(location.search);
-const settings = { theme: qs.get('theme') || 'system', updateCheck: false, moviesView: qs.get('view') || 'posters', tvView: qs.get('view') || 'posters', moviesSort: 'added', tvSort: 'title', columns: [], hideDupes: false, cmpInflation: false, artLogo: false, artBackground: false, artBanner: false, fxLeft: 'auto', fxRight: 'auto', fxMotion: 'full', vsStyle: 'arcade', cmpTally: true, cmpWalkover: true, cmpImdb: true };
+const settings = { theme: qs.get('theme') || 'system', updateCheck: false, moviesView: qs.get('view') || 'posters', tvView: qs.get('view') || 'posters', moviesSort: 'added', tvSort: 'title', columns: [], hideDupes: false, tvScale: 100, doctorFreq: 'weekly', doctorDay: 0, doctorTime: '03:00', doctorStyle: 'compact', doctorChecks: ['unreadable', 'unmatched', 'wrongmatch', 'gaps', 'poster', 'dupes', 'av1'], cmpInflation: false, artLogo: false, artBackground: false, artBanner: false, fxLeft: 'auto', fxRight: 'auto', fxMotion: 'full', vsStyle: 'arcade', cmpTally: true, cmpWalkover: true, cmpImdb: true };
 const plex = { url: 'http://plex-server:32400', hasToken: true };
 const traffic = { requests: 0, bytes: 0, errors: 0 };
 let halted = false, scanTimer = 0;
@@ -87,6 +87,25 @@ function tv() {
   return out;
 }
 const libs = { movies: movies(), tv: tv() };
+// PlexDoctor sample report (made up, from the sample library)
+let doctorReport = null;
+function mockDoctorReport() {
+  const mv = libs.movies, shows = [...new Set(libs.tv.map((r) => r.Show))], today = '2026-11-12';
+  const I = (check, sev, title, detail, rid, show, firstSeen) => ({ id: check + '|' + (rid || show), check, sev, title, detail, rid: rid || '', show: show || '', firstSeen: firstSeen || today });
+  const issues = [
+    I('unreadable', 'important', `${mv[3].Title} (${mv[3].Year})`, 'Plex found no video or audio in it, so it will not play.', mv[3].Rid),
+    I('unmatched', 'important', `${mv[8].Title} (${mv[8].Year})`, 'Plex did not match it: no IMDb or TMDB link, no genres or plot.', mv[8].Rid, '', '2026-10-22'),
+    I('wrongmatch', 'minor', mv[12].Title, `The folder says 1995, Plex says ${mv[12].Year}.`, mv[12].Rid),
+    I('gaps', 'minor', `${shows[1]}, Season 2`, 'Missing E07 (has 9 of 10).', '', shows[1], '2026-10-29'),
+    I('gaps', 'minor', `${shows[4]}, Season 1`, 'Missing E03, E04 (has 6 of 8).', '', shows[4]),
+    I('poster', 'minor', `${mv[20].Title} (${mv[20].Year})`, 'No poster in Plex.', mv[20].Rid, '', '2026-10-08'),
+    I('av1', 'minor', `${mv[30].Title} (${mv[30].Year})`, 'AV1 4K', mv[30].Rid),
+  ];
+  return { at: '2026-11-08T03:00:00', late: '', notes: [], counts: { movies: mv.length, shows: shows.length, episodes: libs.tv.length }, issues,
+    important: 2, minor: 5, clean: ['dupes'], skipped: ['subs'], compared: true, newCount: 2, fixedCount: 3,
+    names: { unreadable: "Plex couldn't read the file", unmatched: 'Not matched', wrongmatch: 'Possible wrong match', gaps: 'Gaps in a season', poster: 'Missing poster', dupes: 'Duplicate copies', av1: "Won't play on Shield (AV1)", subs: 'No English subtitles' } };
+}
+function doctorSum() { const r = doctorReport; return { at: r.at, late: r.late, issues: r.issues.length, important: r.important, minor: r.minor, importantText: '1 unreadable file, 1 not matched', counts: r.counts, newCount: r.newCount, fixedCount: r.fixedCount, compared: true }; }
 let dashData = { movies: [], tv: [] };
 let collections = [
   { name: 'Weekend picks', type: 'manual', query: '', items: [0, 3, 7, 11].map((i) => ({ ids: ['p:' + (1000 + i)], title: '', year: 0 })) },
@@ -128,6 +147,14 @@ export async function request(cmd, args = {}) {
         cast: ['Alex Hale', 'Sam Brandt', 'Jordan Pike', 'Robin Vale', 'Casey Moor', 'Drew Lin'].map((n, i) => ({ name: n, role: ['Charlie', 'Mac', 'Dee', 'Dennis', 'Frank', 'The Waitress'][i], photo: poster(n.split(' ')[0], (hue + i * 50) % 360) })),
         related: libs.tv.filter((r) => r.Show !== args.show && r.Episode === 1 && r.Season === 1).slice(0, 8).map((r, i) => ({ key: 'r' + i, title: r.Show, year: r.Year, seasons: 2 + i, unwatched: i * 7, poster: r.Poster })) };
     }
+    case 'doctor.status': return { running: false, next: '2026-11-15T03:00:00', unseen: false, last: doctorReport ? doctorSum() : null, checks: [] };
+    case 'doctor.run': {
+      emit('doctor', { running: true, text: 'Starting the check-up...' });
+      setTimeout(() => { doctorReport = mockDoctorReport(); emit('doctor', { running: false, done: true, error: null, cancelled: false, summary: doctorSum() }); }, 900);
+      return true;
+    }
+    case 'doctor.report': return doctorReport;
+    case 'doctor.seen': return true;
     case 'image.data': return null;
     case 'shows.status': return Object.fromEntries([...new Set(libs.tv.map((r) => r.Show))].map((n, i) => [n, { state: i % 3 ? 'Ongoing' : 'Ended', tmdb: i % 3 ? 'Returning Series' : 'Ended' }]));
     case 'keys.get': case 'keys.set': return { tmdb: true, omdb: false };

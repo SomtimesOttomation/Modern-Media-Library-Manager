@@ -92,10 +92,10 @@ export function stateBox(tab, L, toast) {
   if (L.status === 'pending') return h('div', { class: 'state' }, h('h2', null, `Opening ${name}...`), h('p', null, 'Preparing the library from the last scan. This takes a moment the first time.'));
   if (L.status === 'error') return h('div', { class: 'state' }, h('h2', null, `${name} could not be opened`), h('p', null, L.error), h('button', { class: 'btn primary', type: 'button', onclick: () => S.loadLibrary(tab, { force: true }) }, 'Try again'));
   if (L.status === 'empty') {
-    const ready = S.state.plex.url && S.state.plex.hasToken;
+    const srv = S.serverFor(tab), ready = srv.ready;
     return h('div', { class: 'state' }, h('h2', null, `No ${name} yet`),
-      h('p', null, ready ? `Scan your Plex ${name} library to fill this page. Only you start a scan; it never runs on its own.` : 'Add your Plex server address and token in Settings, then scan.'),
-      ready ? h('button', { class: 'btn primary', type: 'button', disabled: S.state.halted || S.state.scan.running ? true : null, onclick: scan }, `Scan ${name} from Plex`)
+      h('p', null, ready ? `Scan your ${srv.name} ${name} library to fill this page. Only you start a scan; it never runs on its own.` : `Add your ${srv.name} server in Settings > Servers, then scan.`),
+      ready ? h('button', { class: 'btn primary', type: 'button', disabled: S.state.halted || S.state.scan.running ? true : null, onclick: scan }, `Scan ${name} from ${srv.name}`)
         : h('button', { class: 'btn primary', type: 'button', onclick: () => import('./settings.js').then((m) => m.openSettings('plex')) }, 'Open Settings'));
   }
   return null;

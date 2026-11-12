@@ -48,8 +48,32 @@ function generalTab(close, repaint) {
   ];
 }
 
+// Servers: where each library comes from (Plex or Jellyfin), and each server's address and key.
 function plexTab(repaint) {
-  const p = S.state.plex;
+  const p = S.state.plex, jf = p.jellyfin || {}, use = p.use || {};
+  const name = (k) => (k === 'jellyfin' ? 'Jellyfin' : 'Plex');
+  // which server each library comes from
+  const choose = (tab) => {
+    const cur = use[tab] || 'plex';
+    return h('div', { class: 'seg' }, ['plex', 'jellyfin'].map((k) => h('button', { type: 'button', class: cur === k ? 'active' : '', onclick: async () => {
+      if (k === cur) return;
+      try { await S.useServer(tab, k); repaint(); S.toast(`${tab === 'tv' ? 'TV Shows' : 'Movies'} now come from ${name(k)}. Scan to read the library from it.`); } catch (e) { S.toast(e.message); }
+    } }, name(k))));
+  };
+  const testLine = (kind) => {
+    const out = h('small', { class: 'srv-test' });
+    const btn = h('button', { class: 'btn', type: 'button', disabled: S.state.halted ? true : null, onclick: async () => {
+      btn.disabled = true; out.textContent = 'Asking the server...';
+      const off = bridge.on('servertest', (d) => {
+        if (d.kind !== kind) return;
+        off?.(); btn.disabled = false;
+        out.textContent = d.ok ? `Connected to ${d.info.name}${d.info.version ? ' ' + d.info.version : ''}. Libraries: ${(d.info.libraries || []).map((l) => `${l.name} (${l.type === 'show' ? 'TV' : 'movies'})`).join(', ') || 'none'}.` : d.error;
+      });
+      try { await bridge.request('server.test', { kind }); } catch (e) { off?.(); btn.disabled = false; out.textContent = e.message; }
+    } }, 'Test');
+    return h('p', null, btn, ' ', out);
+  };
+  // Plex
   const url = h('input', { type: 'text', value: p.url || '', placeholder: 'http://plex-server:32400', spellcheck: 'false' });
   const tok = h('input', { type: 'password', value: '', placeholder: p.hasToken ? 'saved (type a new one to replace it)' : 'your Plex token', autocomplete: 'off' });
   const msg = h('small', null, '');
@@ -59,13 +83,35 @@ function plexTab(repaint) {
     catch (e) { msg.textContent = e.message; }
     save.disabled = false;
   } }, 'Save');
+  // Jellyfin
+  const jurl = h('input', { type: 'text', value: jf.url || '', placeholder: 'http://jellyfin-server:8096', spellcheck: 'false' });
+  const jkey = h('input', { type: 'password', value: '', placeholder: jf.hasKey ? 'saved (type a new one to replace it)' : 'an API key from Jellyfin', autocomplete: 'off' });
+  const jmsg = h('small', null, '');
+  const jsave = h('button', { class: 'btn primary', type: 'button', onclick: async () => {
+    jsave.disabled = true; jmsg.textContent = 'Saving...';
+    try { await S.saveJellyfin(jurl.value.trim(), jkey.value.trim()); jkey.value = ''; jmsg.textContent = 'Saved.'; repaint(); }
+    catch (e) { jmsg.textContent = e.message; }
+    jsave.disabled = false;
+  } }, 'Save');
   return [
-    h('p', null, h('small', null, 'The libraries are read from your Plex server, only when you scan (the circular arrow in the bar, or F5). The token is stored encrypted for your Windows account, in the same place the window app keeps it.')),
+    h('p', null, h('small', null, 'Each library is read from your own server, only when you scan (the circular arrow in the bar, or F5). Tokens and keys are stored encrypted for your Windows account.')),
+    h('div', { class: 'form-row' }, h('label', null, 'Movies come from'), choose('movies')),
+    h('div', { class: 'form-row' }, h('label', null, 'TV Shows come from'), choose('tv')),
+    h('p', null, h('small', null, 'Switching reads the whole library from the other server at the next scan. Collections keep titles by their server id, so titles added from the other server need adding again.')),
+    hr(),
+    h('p', null, h('b', null, 'Plex')),
     h('div', { class: 'form-row' }, h('label', null, 'Server address'), url),
     h('div', { class: 'form-row' }, h('label', null, 'Token'), tok),
     h('p', null, save, ' ', msg),
+    p.url && p.hasToken ? testLine('plex') : null,
     hr(),
-    h('p', null, h('b', null, 'Scan '), h('small', null, 'A scan reuses titles Plex has not changed. A full rescan reads every title again.')),
+    h('p', null, h('b', null, 'Jellyfin '), h('small', null, 'Make an API key in Jellyfin: Dashboard > API Keys > +.')),
+    h('div', { class: 'form-row' }, h('label', null, 'Server address'), jurl),
+    h('div', { class: 'form-row' }, h('label', null, 'API key'), jkey),
+    h('p', null, jsave, ' ', jmsg),
+    jf.url && jf.hasKey ? testLine('jellyfin') : null,
+    hr(),
+    h('p', null, h('b', null, 'Scan '), h('small', null, 'A scan reuses titles the server has not changed. A full rescan reads every title again.')),
     h('p', null, ...S.TABS.map((t) => h('button', { class: 'btn', type: 'button', style: { marginRight: '6px' }, disabled: S.state.scan.running || S.state.halted ? true : null,
       onclick: () => S.startScan(t, true).catch((e) => { msg.textContent = e.message; }) }, `Full rescan of ${t === 'tv' ? 'TV Shows' : 'Movies'}`))),
   ];
@@ -176,7 +222,7 @@ export function openSettings(tab, onClose) {
     const body = h('div', { class: 'settings-body', role: 'tabpanel' });
     const tabs = h('div', { class: 'seg settings-tabs', role: 'tablist', 'aria-label': 'Settings sections' });
     const paint = () => {
-      tabs.replaceChildren(...[['general', 'General'], ['plex', 'Plex'], ['data', 'Data'], ['artwork', 'Artwork'], ['doctor', 'PlexDoctor'], ['fun', 'Fun']].map(([k, label]) => h('button', {
+      tabs.replaceChildren(...[['general', 'General'], ['plex', 'Servers'], ['data', 'Data'], ['artwork', 'Artwork'], ['doctor', 'PlexDoctor'], ['fun', 'Fun']].map(([k, label]) => h('button', {
         type: 'button', role: 'tab', 'aria-selected': settingsTab === k ? 'true' : 'false', class: settingsTab === k ? 'active' : '',
         onclick: () => { settingsTab = k; try { localStorage.setItem(TAB_KEY, k); } catch (e) { /* ignore */ } paint(); } }, label)));
       body.replaceChildren(...(settingsTab === 'plex' ? plexTab(paint) : settingsTab === 'data' ? dataTab() : settingsTab === 'artwork' ? artworkTab(paint) : settingsTab === 'doctor' ? doctorTab(paint) : settingsTab === 'fun' ? funTab(paint) : generalTab(close, paint)));

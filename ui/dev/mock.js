@@ -6,7 +6,7 @@ export function attach(fn) { emit = fn; }
 
 const qs = new URLSearchParams(location.search);
 const settings = { theme: qs.get('theme') || 'system', updateCheck: false, moviesView: qs.get('view') || 'posters', tvView: qs.get('view') || 'posters', moviesSort: 'added', tvSort: 'title', columns: [], hideDupes: false, tvScale: 100, clearScale: 100, bannerScale: 100, doctorFreq: 'off', doctorAck: false, doctorDay: 0, doctorTime: '03:00', doctorStyle: 'compact', doctorChecks: ['unreadable', 'unmatched', 'wrongmatch', 'gaps', 'poster', 'dupes', 'av1'], cmpInflation: false, artLogo: false, artBackground: false, artBanner: false, fxLeft: 'auto', fxRight: 'auto', fxMotion: 'full', vsStyle: 'arcade', cmpTally: true, cmpWalkover: true, cmpImdb: true };
-const plex = { url: 'http://plex-server:32400', hasToken: true };
+const plex = { url: 'http://plex-server:32400', hasToken: true, jellyfin: { url: '', hasKey: false }, use: { movies: 'plex', tv: 'plex' } };
 const traffic = { requests: 0, bytes: 0, errors: 0 };
 let halted = false, scanTimer = 0;
 const empty = qs.has('empty');
@@ -122,6 +122,13 @@ export async function request(cmd, args = {}) {
     case 'library.get': return empty ? { empty: true } : pack(libs[args.tab === 'tv' ? 'tv' : 'movies']);
     case 'settings.set': settings[args.key] = args.value; return settings;
     case 'plex.set': plex.url = args.url; if (args.token) plex.hasToken = true; return plex;
+    case 'jellyfin.set': plex.jellyfin.url = args.url; if (args.key) plex.jellyfin.hasKey = true; return plex;
+    case 'server.use': plex.use[args.tab] = args.kind; return plex;
+    case 'server.test':
+      setTimeout(() => emit('servertest', args.kind === 'jellyfin'
+        ? { kind: 'jellyfin', ok: true, info: { name: 'Sample Jellyfin', version: '10.10.3', libraries: [{ name: 'Films', type: 'movie' }, { name: 'Series', type: 'show' }] }, error: '' }
+        : { kind: 'plex', ok: true, info: { name: 'Plex', version: '', libraries: [{ name: 'Movies', type: 'movie' }, { name: 'TV Shows', type: 'show' }] }, error: '' }), 400);
+      return true;
     case 'scan.start': {
       if (halted) throw new Error('Traffic is paused. Resume it first.');
       let pct = 0;

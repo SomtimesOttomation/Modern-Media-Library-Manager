@@ -178,11 +178,12 @@ function versionChip() {
   b.classList.toggle('has-update', S.updateReady());
   b.title = u.phase === 'available' ? `Version ${u.info?.latest} is available` : u.phase === 'staged' ? 'Update downloaded: click to install' : 'Check for updates';
 }
-// Refresh = scan the open library from Plex (what "refresh" means for a library). Only when asked.
+// Refresh = scan the open library from its server (what "refresh" means for a library). Only when asked.
 async function scanNow() {
   const b = $('#btn-refresh');
   if (S.state.scan.running) { toast('A scan is already running.'); return; }
-  if (!S.state.plex.url || !S.state.plex.hasToken) { toast('Add your Plex server and token in Settings first.'); openSettings('plex'); return; }
+  const srv = S.serverFor(currentTab());
+  if (!srv.ready) { toast(`Add your ${srv.name} server in Settings > Servers first.`); openSettings('plex'); return; }
   b.classList.add('spin');
   try { await S.startScan(currentTab()); } catch (e) { toast(e.message); b.classList.remove('spin'); }
 }

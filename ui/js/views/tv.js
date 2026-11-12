@@ -95,6 +95,28 @@ export function mount(ctx) {
       });
       return;
     }
+    if (mode === 'clear') {
+      // Clear: each show's clear logo on a dark tile (Settings > Artwork > Clear logos); the name, set large, when Plex has none.
+      // An ended show (TV Shows > Fetch info) gets a small Ended mark.
+      const wall = h('div', { class: 'cwall' });
+      body.append(wall);
+      const st = S.state.settings;
+      if (!st.artLogo) body.prepend(h('p', { class: 'bnote' }, h('small', null, 'Tick "Clear logos" in Settings > Artwork to show each show\'s logo here (fetched from your Plex server, like posters).')));
+      const years = (sh) => (!sh.sum.y0 ? '' : sh.sum.y0 === sh.sum.y1 ? String(sh.sum.y0) : `${sh.sum.y0}–${sh.sum.y1}`);
+      stopWall = fillWall(wall, list, (sh) => {
+        const logo = st.artLogo ? sh.eps.find((e) => e.Logo)?.Logo : '';
+        const ended = S.state.showStatus[sh.name]?.state === 'Ended';
+        const cm = CM.tv.on ? CM.tv.picked.has(sh.name) : undefined;
+        return `<button class="bn cl${cm ? ' picked' : ''}" type="button" data-k="${esc(sh.name)}" title="${esc(sh.name)}"><span class="cpic">${logo ? `<img loading="lazy" src="${esc(logo)}" alt="${esc(sh.name)}">` : `<b>${esc(sh.name)}</b>`}${ended ? '<span class="ended-tag">Ended</span>' : ''}${cm === undefined ? '' : `<span class="cm-add${cm ? ' on' : ''}" role="button" tabindex="0" data-cm="1">${cm ? '\u2713' : '+'}</span>`}</span>`
+          + `<span class="binfo"><b>${esc(sh.name)}</b><small>${[years(sh), `${sh.nSeasons} season${sh.nSeasons === 1 ? '' : 's'}`].filter(Boolean).join(' · ')}</small></span></button>`;
+      }, 60);
+      wall.addEventListener('click', (e) => {
+        const t = e.target.closest('.bn'); if (!t) return;
+        if (e.target.closest('[data-cm]')) { const sh = byKey.get(t.dataset.k); if (sh) pick(sh, t); return; }
+        location.hash = `#/tv/${encodeURIComponent(t.dataset.k)}`;
+      });
+      return;
+    }
     if (mode === 'banners') {
       // Banners: one wide strip per show. Plex's banner when Settings > Artwork has saved it; otherwise the background
       // art with the clear logo (or the name) on it; otherwise the name on a plain strip.

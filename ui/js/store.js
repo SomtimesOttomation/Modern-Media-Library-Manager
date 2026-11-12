@@ -12,6 +12,7 @@ export const state = {
   version: '',
   hostMode: 'standalone',
   hostTheme: '',
+  showStatus: {},           // TV: show name -> { state: 'Ongoing'|'Ended', tmdb, lastAir } (TV Shows > Fetch info)
   settings: { theme: 'system', updateCheck: false, moviesView: 'posters', tvView: 'posters', moviesSort: 'added', tvSort: 'title', moviesSortRev: false, tvSortRev: false,
     columns: [], hideDupes: false, posterScale: 100, widthPreset: 'full', customWidth: false, contentWidth: 0, artLogo: false, artBackground: false, artBanner: false, cmpInflation: false,
     fxLeft: 'auto', fxRight: 'auto', fxMotion: 'full', vsStyle: 'arcade', cmpTally: true, cmpWalkover: true, cmpImdb: true },
@@ -73,6 +74,7 @@ export async function loadLibrary(tab, { force = false } = {}) {
     if (raw.empty) { Object.assign(L, lib(), { status: 'empty' }); }
     else if (raw.pending) { L.status = 'pending'; }                  // being built from the last scan; a 'library' event follows
     else { Object.assign(L, prepare(raw, tab), { status: 'ready' }); }
+    if (tab === 'tv' && L.status === 'ready') { try { state.showStatus = (await bridge.request('shows.status')) || {}; } catch (e) { state.showStatus = {}; } }
   } catch (e) { L.status = 'error'; L.error = e.message; }
   notify('library');
 }

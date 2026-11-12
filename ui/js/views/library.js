@@ -104,13 +104,14 @@ export function stateBox(tab, L, toast) {
 // The view switch shared by both tabs: Posters | Grid | Dashboard
 // (Compare is Movies only: it is about box office.)
 export function viewSeg(mode, key, redraw) {
-  const views = [['posters', 'Posters'], ['grid', 'Grid'], ['dashboard', 'Dashboard']];
-  if (key === 'moviesView') views.push(['compare', 'Compare']);
-  else views.push(['banners', 'Banners']);
+  // Dashboard is always last. TV: Posters - Clear - Banners - Grid - Dashboard; Movies: Posters - Grid - Compare - Dashboard
+  const views = key === 'moviesView'
+    ? [['posters', 'Posters'], ['grid', 'Grid'], ['compare', 'Compare'], ['dashboard', 'Dashboard']]
+    : [['posters', 'Posters'], ['clear', 'Clear'], ['banners', 'Banners'], ['grid', 'Grid'], ['dashboard', 'Dashboard']];
   return h('div', { class: 'seg', role: 'tablist', 'aria-label': 'View' }, views.map(([k, label]) =>
     h('button', { type: 'button', class: mode === k ? 'active' : '', 'aria-selected': mode === k ? 'true' : 'false', onclick: () => S.saveSettings({ [key]: k }).then(redraw) }, label)));
 }
-export const viewMode = (v, tab) => (v === 'grid' || v === 'dashboard' || (v === 'compare' && tab !== 'tv') || (v === 'banners' && tab === 'tv') ? v : 'posters');
+export const viewMode = (v, tab) => (v === 'grid' || v === 'dashboard' || (v === 'compare' && tab !== 'tv') || ((v === 'banners' || v === 'clear') && tab === 'tv') ? v : 'posters');
 
 export function mount(ctx) {
   const L = S.state.libs.movies;

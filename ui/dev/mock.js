@@ -129,6 +129,7 @@ export async function request(cmd, args = {}) {
         related: libs.tv.filter((r) => r.Show !== args.show && r.Episode === 1 && r.Season === 1).slice(0, 8).map((r, i) => ({ key: 'r' + i, title: r.Show, year: r.Year, seasons: 2 + i, unwatched: i * 7, poster: r.Poster })) };
     }
     case 'image.data': return null;
+    case 'shows.status': return Object.fromEntries([...new Set(libs.tv.map((r) => r.Show))].map((n, i) => [n, { state: i % 3 ? 'Ongoing' : 'Ended', tmdb: i % 3 ? 'Returning Series' : 'Ended' }]));
     case 'keys.get': case 'keys.set': return { tmdb: true, omdb: false };
     case 'tools.start': {
       let pct = 0; const t = setInterval(() => { pct += 25; if (pct < 100) emit('tool', { kind: args.kind, tab: args.tab, running: true, pct, text: 'Working on it...' });

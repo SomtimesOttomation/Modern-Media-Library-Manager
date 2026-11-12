@@ -32,6 +32,10 @@ Check ((Cmd 2 'summary.get' @{ tab = 'movies' }) -match 'mmlm.cache/thumbs/') 's
 $lib = Cmd 9 'library.get' @{ tab = 'movies' }
 Check ($lib -match '"rows":\[\[' -and $lib -match '"Poster"') 'library.get sends the movie rows with poster links'
 Check ($lib -notmatch 'FullPath|PosterPath|Directory') 'no file paths reach the page'
+Check ((Cmd 56 'settings.set' @{ key = 'tvView'; value = 'clear' }) -match '"tvView":"clear"') 'Clear is a TV view'
+[void](Cmd 57 'settings.set' @{ key = 'tvView'; value = 'posters' })
+Check ((Cmd 58 'shows.status' @{}) -match '"data":\{\}') 'show status is empty until fetched'
+Check ((Cmd 59 'tools.start' @{ kind = 'fetch'; tab = 'tv' }) -match 'TMDB key|Scan this tab') 'TV Fetch info (show status) needs a TMDB key'
 Check ((Cmd 50 'settings.set' @{ key = 'moviesView'; value = 'compare' }) -match '"moviesView":"compare"') 'Compare is a movies view'
 Check ((Cmd 51 'settings.set' @{ key = 'fxLeft'; value = 'lightning' }) -match '"fxLeft":"lightning"') 'Fun: a border effect saves'
 Check ((Cmd 52 'settings.set' @{ key = 'fxLeft'; value = 'rainbow' }) -match '"ok":false') 'Fun: an unknown effect is refused'

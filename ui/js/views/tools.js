@@ -27,8 +27,16 @@ export function fetchDialog(tab, rids = null) {
     bridge.request('keys.get').then((k) => {
       keys.replaceChildren(h('p', null, h('small', null, `Keys: TMDB ${k.tmdb ? 'saved' : 'missing'}, OMDb ${k.omdb ? 'saved' : 'missing'}. `,
         h('a', { href: '#', onclick: (e) => { e.preventDefault(); close(); import('./settings.js').then((m) => m.openSettings('data')); } }, 'Change in Settings > Data'))));
-      if (!k.tmdb && !k.omdb) go.disabled = true;
+      if (tab === 'tv' ? !k.tmdb : !k.tmdb && !k.omdb) go.disabled = true;
     }).catch(() => {});
+    if (tab === 'tv') {
+      return h('div', { class: 'adv' }, h('h2', null, 'Fetch info: show status'),
+        h('p', null, `Looks up whether each show in ${scope} is still running (Ongoing) or has ended, for the Status line and the Ended mark.`),
+        h('p', { class: 'warnbox' }, h('b', null, 'This contacts an outside service: '), 'TMDB, with your own key. One request per show (two when Plex has no TMDB id for it), so a big library takes a few minutes. Shows already known to have ended are skipped.'),
+        keys,
+        h('p', null, h('label', null, over, ' Also check shows already marked as ended')),
+        h('p', { class: 'adv-actions' }, h('button', { class: 'btn', type: 'button', onclick: close }, 'Cancel'), go));
+    }
     return h('div', { class: 'adv' }, h('h2', null, 'Fetch info'),
       h('p', null, `Looks up ratings, Rotten Tomatoes, Metacritic and box office for ${scope}, as the window app's Fetch info does.`),
       h('p', { class: 'warnbox' }, h('b', null, 'This contacts outside services: '), 'TMDB and OMDb (with your own keys) and the IMDb ratings file from datasets.imdbws.com. Use it sparingly; each title is one or two requests. Values you typed in yourself are never replaced.'),
@@ -51,7 +59,7 @@ export function toolsMenu(tab) {
     const busy = S.state.tool && S.state.tool.running;
     const cols = S.state.libs[tab].status === 'ready' ? gridColumns(S.state.libs[tab]) : [];
     menu = h('div', { class: 'sortmenu card', role: 'menu' },
-      tab === 'movies' ? item('Fetch info…', 'ratings, Metacritic, box office', () => fetchDialog(tab), busy || S.state.halted) : null,
+      item('Fetch info…', tab === 'movies' ? 'ratings, Metacritic, box office' : 'show status: ongoing or ended', () => fetchDialog(tab), busy || S.state.halted),
       item('Check FEL / MEL', 'Dolby Vision dual layer', () => start('fel', tab), busy || S.state.halted),
       item('Export CSV', 'grid columns', () => start('csv', tab, { columns: cols }), busy),
       item('Export HTML dashboard', 'one file, posters inside', () => start('html', tab), busy),

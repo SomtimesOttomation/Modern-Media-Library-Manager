@@ -134,7 +134,7 @@ function Set-PageSetting {
         'contentWidth' { $n = 0; if ([int]::TryParse([string]$Value, [ref]$n) -and $n -ge 0 -and $n -le 20000) { $Value = $n; $true } else { $false } }
         'widthPreset' { @('full', '16:9', '21:9', '32:9') -contains [string]$Value }
         'moviesView'  { $views -contains [string]$Value }
-        'tvView'      { @('posters', 'grid', 'dashboard', 'banners') -contains [string]$Value }
+        'tvView'      { @('posters', 'clear', 'banners', 'grid', 'dashboard') -contains [string]$Value }
         'moviesSort'  { [string]$Value -match '^[a-zA-Z]{1,30}$' }
         'tvSort'      { [string]$Value -match '^[a-zA-Z]{1,30}$' }
         'columns'     { $Value = @(@($Value) | Where-Object { [string]$_ -match '^[A-Za-z]{1,40}$' } | Select-Object -First 80); $true }
@@ -661,6 +661,11 @@ $script:ToolScript = {
                 $S.Library = ($res.Saved -gt 0 -or [bool]$Job.Force)
             }
             'fetch' {
+                if ($Job.Tab -eq 'tv') {      # TV Shows: whether each show is still running (TMDB)
+                    $S.Summary = Invoke-MmlmShowStatusFetch -Records $recs -Indexes $idx.ToArray() -TmdbKey $Job.TmdbKey -StorePath $Job.StatusStore -Overwrite ([bool]$Job.Overwrite)
+                    $S.Library = $true
+                    break
+                }
                 $S.Partial = New-Object System.Collections.ArrayList
                 Invoke-MmlmMetadataScrape -Records $recs -Indexes $idx.ToArray() -TmdbKey $Job.TmdbKey -OmdbKey $Job.OmdbKey -Overwrite ([bool]$Job.Overwrite) -DataFolder $Job.DataFolder -StorePath $Job.MetaStore
                 $S.Summary = [string]$S.Summary
@@ -780,9 +785,10 @@ function Start-HostTool {
         $job.BaseUrl = $set.PlexUrl; $job.Token = $token
     }
     if ($kind -eq 'fetch') {
-        if ($tab -eq 'tv') { throw 'Fetch info works on movies (as in the window app).' }
         $k = Read-HostKeys
+        if ($tab -eq 'tv' -and -not $k.Tmdb) { throw 'Show status comes from TMDB: add a TMDB key in Settings > Data first.' }
         if (-not $k.Tmdb -and -not $k.Omdb) { throw 'Add a TMDB or OMDb key in Settings > Data first.' }
+        $job.StatusStore = Join-Path $script:AppData 'Library\show-status.json'
         $job.TmdbKey = $k.Tmdb; $job.OmdbKey = $k.Omdb
     }
     $sync = [hashtable]::Synchronized(@{ Text = 'Starting...'; Value = 0; Max = 0; Cancel = $false; Done = $false; Error = $null; PhaseLo = 0.0; PhaseHi = 1.0; Summary = ''; Path = ''; Library = $false; Total = 0; Partial = $null })
@@ -1036,6 +1042,10 @@ $script:Commands = [ordered]@{
             param($a)
             $r = Start-HostSeries -Show ([string]$a.show) -EpKey ([string]$a.ep) -Refresh ([bool]$a.refresh)
             if ($r -eq 'loading') { '{"loading":true}' } else { $r } } }
+    'shows.status'   = @{ Fetch = $false; Run = {
+            # show name -> { state: Ongoing|Ended, tmdb, lastAir }, saved by TV Shows > Fetch info (no network here)
+            $p = Join-Path $script:AppData 'Library\show-status.json'
+            if (Test-Path -LiteralPath $p) { [IO.File]::ReadAllText($p) } else { '{}' } } }
     'image.data'     = @{ Fetch = $false; Run = {
             # a cached picture as a data: URL, so the page can read its colours (series view background)
             param($a)

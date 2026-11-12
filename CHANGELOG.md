@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.15.2
+
+**Bug/Fix**
+- TV series view: the season strip, Cast & Crew and Related Shows scroll with the mouse wheel and by click-and-drag; the season being shown starts in view.
+
 ## 0.15.1
 
 **Bug/Fix**

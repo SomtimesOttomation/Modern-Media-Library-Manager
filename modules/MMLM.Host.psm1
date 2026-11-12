@@ -593,12 +593,15 @@ function Start-HostSeries {
     }
     $idx = Get-SeriesIndex
     $key = [string]$idx[$Show]
+    # a copy saved from the other server (TV Shows switched between Plex and Jellyfin) is fetched again from this one
+    $tvJelly = ((Read-HostSettings).TvServer -eq 'jellyfin')
+    if ($key -and ($key.StartsWith('jf-') -ne $tvJelly)) { $key = '' }
     if ($key -and -not $Refresh) {
         $f = Join-Path $script:CacheDir ('series\' + $key + '.json')
         if (Test-Path -LiteralPath $f) { return [IO.File]::ReadAllText($f) }
     }
     if ($script:Traffic.Halted) { throw 'Traffic is paused. Resume it first.' }
-    if (-not $EpKey -and -not $key) { throw 'This show was not scanned from Plex, so there is nothing more to fetch.' }
+    if (-not $EpKey -and -not $key) { throw 'This show was not scanned from your server, so there is nothing more to fetch. Scan TV Shows first.' }
     $server = $null
     try { $server = Get-HostServer -Tab 'tv' } catch { throw 'Add your server in Settings > Servers first.' }
     $sync = [hashtable]::Synchronized(@{ Text = 'Starting...'; Pct = 0; Cancel = $false; Done = $false; Error = $null; Cancelled = $false; ShowKey = ''; Value = 0; Max = 0; PhaseLo = 0.0; PhaseHi = 1.0 })

@@ -427,6 +427,91 @@ function Invoke-MmlmJellyfinScan {
     $out.ToArray()
 }
 
+function Save-MmlmJellyfinSeriesImage {
+    # A picture for the series view, saved once as <Folder>\jf<hash>.jpg; returns 'series/img/<file>' or ''.
+    param([string]$BaseUrl, [string]$Token, [string]$ItemId, [string]$Kind = 'Primary', [int]$Width, [int]$Height, [string]$Folder)
+    if (-not $ItemId) { return '' }
+    $path = '/Items/{0}/Images/{1}' -f $ItemId, $Kind
+    $name = 'jf' + (Get-MmlmStringHash ($BaseUrl.ToLowerInvariant() + '|' + $path + '|' + $Width + 'x' + $Height)).Substring(0, 22) + '.jpg'
+    $dest = Join-Path $Folder $name
+    if ((Test-Path -LiteralPath $dest) -and ((Get-Item -LiteralPath $dest).Length -gt 0)) { return 'series/img/' + $name }
+    if ((Save-MmlmJellyfinImage -BaseUrl $BaseUrl -Token $Token -Path $path -Width $Width -Height $Height -Dest $dest -Fit fill) -eq 'saved') { return 'series/img/' + $name }
+    ''
+}
+
+function Get-MmlmJellyfinSeries {
+    # The series view's data for one show, in the same shape as Get-MmlmPlexSeries: seasons, episodes with stills,
+    # cast and similar shows. Watched marks need a Jellyfin user, so they stay empty until that is added.
+    # Returns @{ Key = 'jf-<series id>'; Data = <ordered page object> }, or $null when cancelled.
+    param([string]$BaseUrl, [string]$Token, [string]$ShowKey, [string]$EpKey, [string]$ImageFolder, $Sync)
+    $u = $BaseUrl; $t = $Token; $S = $Sync
+    $P = { param($o, $n) if ($null -ne $o -and $o.PSObject.Properties[$n]) { $o.$n } else { $null } }
+    $str = { param($o, $n) $v = & $P $o $n; if ($null -eq $v) { '' } else { [string]$v } }
+    $int = { param($x) $v = 0; [void][int]::TryParse([string]$x, [ref]$v); $v }
+    $day = { param($x) if ($x -is [datetime]) { $x.ToUniversalTime().ToString('yyyy-MM-dd') } elseif ([string]$x -match '^(\d{4}-\d{2}-\d{2})') { $Matches[1] } else { '' } }   # PS 7 turns dates into [datetime]
+    $hasPic = { param($o) $tags = & $P $o 'ImageTags'; [bool]($tags -and $tags.PSObject.Properties['Primary']) }
+    $S.Text = 'Finding the show on Jellyfin...'
+    $sid = ([string]$ShowKey) -replace '^jf-', ''
+    if (-not $sid) {
+        $eid = ([string]$EpKey) -replace '^jf-', ''
+        if (-not $eid) { throw 'This show was not scanned from Jellyfin. Scan TV Shows again.' }
+        $ep = (Get-MmlmJellyfinItems -BaseUrl $u -Token $t -Ids @($eid) -Fields 'Overview')[$eid]
+        if ($null -eq $ep) { throw 'Jellyfin no longer has this episode. Scan TV Shows again.' }
+        $sid = & $str $ep 'SeriesId'
+    }
+    $S.Text = 'Reading the show...'
+    $show = (Get-MmlmJellyfinItems -BaseUrl $u -Token $t -Ids @($sid) -Fields 'Overview,Genres,Studios,People,ProviderIds')[$sid]
+    if ($null -eq $show) { throw 'Jellyfin did not return the show.' }
+    $seasons = @((Invoke-MmlmJellyfinJson -BaseUrl $u -Token $t -Path ('/Shows/{0}/Seasons' -f $sid)).Items)
+    $S.Text = 'Reading the episodes...'
+    $eps = @((Invoke-MmlmJellyfinJson -BaseUrl $u -Token $t -Path ('/Shows/{0}/Episodes' -f $sid) -Query @{ Fields = 'Overview' }).Items)
+    $similar = @()
+    try { $similar = @((Invoke-MmlmJellyfinJson -BaseUrl $u -Token $t -Path ('/Items/{0}/Similar' -f $sid) -Query @{ Limit = 24 }).Items) } catch { }   # optional: some servers have none
+    if (-not (Test-Path -LiteralPath $ImageFolder)) { New-Item -ItemType Directory -Path $ImageFolder -Force | Out-Null }
+    $pic = { param($id, $w, $h) Save-MmlmJellyfinSeriesImage -BaseUrl $u -Token $t -ItemId $id -Width $w -Height $h -Folder $ImageFolder }
+    $cast = @(@(& $P $show 'People') | Where-Object { $_ -and (& $str $_ 'Type') -in @('Actor', 'GuestStar') } | Select-Object -First 30)
+    $total = 1 + $seasons.Count + $eps.Count + $cast.Count + $similar.Count
+    $count = @{ n = 0 }
+    $step = { $count.n++; $S.Pct = [int](100 * $count.n / [Math]::Max(1, $total)) }
+    $S.Text = 'Fetching pictures...'
+    $cr = & $P $show 'CommunityRating'
+    $data = [ordered]@{
+        key = 'jf-' + $sid; title = & $str $show 'Name'; year = & $int (& $P $show 'ProductionYear'); summary = & $str $show 'Overview'
+        studio = (@(& $P $show 'Studios') | Where-Object { $_ } | ForEach-Object { [string]$_.Name } | Select-Object -First 1) -join ''
+        rated = & $str $show 'OfficialRating'; rating = $(if ($cr) { [string]$cr } else { '' }); audienceRating = ''
+        genres = @(@(& $P $show 'Genres') | Where-Object { $_ } | ForEach-Object { [string]$_ })
+        firstAired = & $day (& $P $show 'PremiereDate'); poster = $(if (& $hasPic $show) { & $pic $sid 300 450 } else { '' }); fetchedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm')
+    }
+    & $step
+    $data.seasons = @(foreach ($se in $seasons) {
+        if ($S.Cancel) { break }
+        $idx = & $int (& $P $se 'IndexNumber'); $seid = & $str $se 'Id'
+        $o = [ordered]@{ key = 'jf-' + $seid; index = $idx; title = & $str $se 'Name'
+            episodes = @($eps | Where-Object { (& $int (& $P $_ 'ParentIndexNumber')) -eq $idx }).Count; watched = 0
+            poster = $(if (& $hasPic $se) { & $pic $seid 300 450 } else { '' }) }
+        & $step; $o })
+    $data.episodes = @(foreach ($e in $eps) {
+        if ($S.Cancel) { break }
+        $eid = & $str $e 'Id'
+        $o = [ordered]@{ key = 'jf-' + $eid; season = & $int (& $P $e 'ParentIndexNumber'); index = & $int (& $P $e 'IndexNumber'); title = & $str $e 'Name'
+            summary = & $str $e 'Overview'; aired = & $day (& $P $e 'PremiereDate'); minutes = [int]([double]$(try { [long](& $P $e 'RunTimeTicks') } catch { 0 }) / 600000000)
+            watched = $false; progress = 0; thumb = $(if (& $hasPic $e) { & $pic $eid 400 225 } else { '' }) }
+        & $step; $o })
+    $data.cast = @(foreach ($c in $cast) {
+        if ($S.Cancel) { break }
+        $o = [ordered]@{ name = & $str $c 'Name'; role = & $str $c 'Role'; photo = $(if (& $str $c 'PrimaryImageTag') { & $pic (& $str $c 'Id') 200 200 } else { '' }) }
+        & $step; $o })
+    $data.related = @(foreach ($r in $similar) {
+        if ($S.Cancel) { break }
+        if ((& $str $r 'Type') -ne 'Series') { & $step; continue }
+        $rid = & $str $r 'Id'
+        $o = [ordered]@{ key = 'jf-' + $rid; title = & $str $r 'Name'; year = & $int (& $P $r 'ProductionYear'); seasons = & $int (& $P $r 'ChildCount'); unwatched = 0
+            poster = $(if (& $hasPic $r) { & $pic $rid 200 300 } else { '' }) }
+        & $step; $o })
+    if ($S.Cancel) { return $null }
+    @{ Key = 'jf-' + $sid; Data = $data }
+}
+
 Export-ModuleMember -Function @(
     'Set-MmlmJellyfinContext',
     'Invoke-MmlmJellyfinJson',
@@ -438,5 +523,6 @@ Export-ModuleMember -Function @(
     'Save-MmlmJellyfinPoster',
     'Get-MmlmJellyfinArtworkId',
     'Save-MmlmJellyfinArtwork',
-    'Invoke-MmlmJellyfinScan'
+    'Invoke-MmlmJellyfinScan',
+    'Get-MmlmJellyfinSeries'
 )

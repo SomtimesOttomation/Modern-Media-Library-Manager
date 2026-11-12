@@ -45,7 +45,7 @@ MOVIES = [
 ]
 SERIES = {
     'Show J': {'Id': '%032x' % 0xb001, 'Name': 'Show J', 'Type': 'Series', 'ProductionYear': 2010, 'OfficialRating': 'TV-14', 'CommunityRating': 8.4,
-               'Genres': ['Comedy'], 'Studios': [{'Name': 'Net J'}], 'People': [{'Name': 'Cast One', 'Type': 'Actor'}], 'Overview': 'A show.',
+               'Genres': ['Comedy'], 'Studios': [{'Name': 'Net J'}], 'People': [{'Name': 'Cast One', 'Type': 'Actor', 'Role': 'Lead', 'Id': '%032x' % 0xd001, 'PrimaryImageTag': 'x'}, {'Name': 'Dee Rector', 'Type': 'Director', 'Id': '%032x' % 0xd002}], 'Overview': 'A show.', 'PremiereDate': '2010-09-01T00:00:00.0000000Z',
                'ProviderIds': {'Imdb': 'tt0900001', 'Tmdb': '9001', 'Tvdb': '7001'}, 'Status': 'Ended', 'ImageTags': {'Primary': 'p'}},
     'Show K': {'Id': '%032x' % 0xb002, 'Name': 'Show K', 'Type': 'Series', 'ProductionYear': 2020, 'OfficialRating': 'TV-MA',
                'Genres': ['Drama'], 'Studios': [], 'People': [], 'Overview': 'Another.', 'ProviderIds': {'Tvdb': '7002'}, 'Status': 'Continuing', 'ImageTags': {}},
@@ -60,7 +60,10 @@ def episode(i, show, s, e):
     if ser['ImageTags'].get('Primary'): ep['SeriesPrimaryImageTag'] = 'sp'
     return ep
 EPISODES = [episode(1, 'Show J', 1, 1), episode(2, 'Show J', 1, 2), episode(3, 'Show J', 1, 4), episode(4, 'Show K', 1, 1), episode(5, 'Show K', 2, 1), episode(6, 'Show K', 2, 2)]
-BY_ID = {x['Id']: x for x in MOVIES + EPISODES + list(SERIES.values())}
+SEASONS = {ser['Id']: [{'Id': '%032x' % (0xe000 + n * 16 + i), 'Name': f'Season {n}', 'Type': 'Season', 'IndexNumber': n, 'SeriesId': ser['Id'], 'ImageTags': ({'Primary': 'p'} if i == 1 else {})}
+                       for n in sorted({e['ParentIndexNumber'] for e in EPISODES if e['SeriesId'] == ser['Id']})] for i, ser in enumerate(SERIES.values(), 1)}
+BY_ID = {x['Id']: x for x in MOVIES + EPISODES + list(SERIES.values()) + [s for L in SEASONS.values() for s in L]}
+BY_ID['%032x' % 0xd001] = {'Id': '%032x' % 0xd001, 'Name': 'Cast One', 'ImageTags': {'Primary': 'x'}}
 IMAGES = {('%032x' % 0xa001, 'Backdrop'), ('%032x' % 0xa001, 'Logo'), ('%032x' % 0xb001, 'Banner'), ('%032x' % 0xb001, 'Backdrop'), ('%032x' % 0xb001, 'Logo')}
 
 class H(http.server.BaseHTTPRequestHandler):
@@ -90,6 +93,15 @@ class H(http.server.BaseHTTPRequestHandler):
             start = int(q.get('StartIndex', ['0'])[0]); lim = int(q.get('Limit', ['100'])[0])
             page = [{'Id': x['Id'], 'Name': x['Name'], 'Type': x['Type'], 'Etag': x['Etag']} for x in pool[start:start + lim]]
             return self.send(json.dumps({'Items': page, 'TotalRecordCount': len(pool), 'StartIndex': start}))
+        m = re.match(r'^/Shows/([0-9a-f]{32})/(Seasons|Episodes)$', p)
+        if m:
+            sid, what = m.groups()
+            items = SEASONS.get(sid, []) if what == 'Seasons' else [e for e in EPISODES if e['SeriesId'] == sid]
+            return self.send(json.dumps({'Items': items, 'TotalRecordCount': len(items)}))
+        m = re.match(r'^/Items/([0-9a-f]{32})/Similar$', p)
+        if m:
+            other = [dict(x, ChildCount=2) for x in SERIES.values() if x['Id'] != m.group(1)]
+            return self.send(json.dumps({'Items': other, 'TotalRecordCount': len(other)}))
         m = re.match(r'^/Items/([0-9a-f]{32})/Images/(Primary|Backdrop|Logo|Banner)$', p)
         if m:
             iid, kind = m.group(1), m.group(2)

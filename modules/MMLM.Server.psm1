@@ -128,7 +128,7 @@ function Get-MmlmServerSeries {
     Assert-MmlmServer $Server
     switch ([string]$Server.Kind) {
         'plex'     { Get-MmlmPlexSeries -BaseUrl $Server.BaseUrl -Token $Server.Token -ShowKey $ShowKey -EpKey $EpKey -ImageFolder $ImageFolder -Sync $Sync }
-        'jellyfin' { throw 'The full series view (episode pictures, cast, related shows) for Jellyfin comes in a later update. The posters and episode list from the scan are all here.' }
+        'jellyfin' { Get-MmlmJellyfinSeries -BaseUrl $Server.BaseUrl -Token $Server.Token -ShowKey $ShowKey -EpKey $EpKey -ImageFolder $ImageFolder -Sync $Sync }
     }
 }
 

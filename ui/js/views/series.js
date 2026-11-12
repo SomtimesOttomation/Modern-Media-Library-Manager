@@ -1,7 +1,7 @@
 // The series view (#/tv/<show>): Plex-style page for one show. Season strip, a raised info card, episode stills with
 // watched marks, cast and related shows. The background is a gradient from the open season's poster colours, with
-// white text. Library data shows straight away; the Plex details (stills, watched marks, cast, related) come from your
-// Plex server the first time the show is opened, then from the saved copy until you press Refresh.
+// white text. Library data shows straight away; the server's details (stills, watched marks, cast, related) come from your
+// Plex or Jellyfin server the first time the show is opened, then from the saved copy until you press Refresh.
 import * as S from '../store.js';
 import * as bridge from '../bridge.js';
 import { h } from '../util.js';
@@ -10,7 +10,8 @@ import { openCard, showSummary } from './card.js';
 import { addToCollection } from './collections.js';
 
 const cacheUrl = (p) => (p ? (bridge.isHost ? 'https://mmlm.cache/' : '') + p : '');
-const plexByShow = new Map();          // show -> data from Plex (kept while the page is open)
+const plexByShow = new Map();          // server + show -> details from the server (kept while the page is open)
+const srvKey = (name) => `${S.serverFor('tv').kind}|${name}`;   // switching servers fetches from the new one
 const colourCache = new Map();         // poster path -> [c1, c2, c3]
 
 // ---- colours: the poster's dominant and second colours, darkened so white text stays readable ----------------
@@ -76,7 +77,7 @@ export function mount(ctx) {
     if (L.status !== 'ready') { root.innerHTML = '<div class="state"><h2>Opening TV Shows...</h2></div>'; return; }
     if (!local.length) { root.innerHTML = `<div class="state"><h2>${esc(name)}</h2><p>This show is not in your library (any more).</p><p><a class="btn" href="#/tv">Back to TV Shows</a></p></div>`; return; }
     const sum = showSummary(local);
-    const P = plexByShow.get(name);
+    const P = plexByShow.get(srvKey(name)), SV = S.serverFor('tv').name;
     // Ongoing or Ended: from TV Shows > Fetch info (TMDB); unknown until it has been fetched for this show
     const status = S.state.showStatus[name];
     // seasons: Plex's list when we have it (posters, watched counts), else the library's
@@ -96,10 +97,10 @@ export function mount(ctx) {
       <div class="sv-top">
         <a class="sv-back" href="#/tv">‹ TV Shows</a>
         <div class="sv-actions">
-          ${state.fetching ? `<span class="sv-progress"><span style="width:${state.pct}%"></span></span><small>${esc(state.text || 'Getting details from Plex...')}</small>` : ''}
-          ${P ? `<small title="Saved from Plex">Plex details from ${esc(P.fetchedAt)}</small>` : ''}
+          ${state.fetching ? `<span class="sv-progress"><span style="width:${state.pct}%"></span></span><small>${esc(state.text || `Getting details from ${SV}...`)}</small>` : ''}
+          ${P ? `<small title="Saved from ${SV}">${SV} details from ${esc(P.fetchedAt)}</small>` : ''}
           <span class="addcol"><button class="sv-btn" type="button" data-addcol="1">+ Collection</button></span>
-          <button class="sv-btn" type="button" data-refresh="1" ${state.fetching ? 'disabled' : ''} title="Ask Plex again for stills, watched marks, cast and related shows">${P ? 'Refresh from Plex' : 'Get details from Plex'}</button>
+          <button class="sv-btn" type="button" data-refresh="1" ${state.fetching ? 'disabled' : ''} title="Ask ${SV} again for stills, watched marks, cast and related shows">${P ? `Refresh from ${SV}` : `Get details from ${SV}`}</button>
         </div>
       </div>
       ${state.error ? `<div class="sv-error">${esc(state.error)}</div>` : ''}
@@ -116,7 +117,7 @@ export function mount(ctx) {
               <dl>
                 <dt>Status</dt><dd${status ? ` class="st-${status.state === 'Ended' ? 'ended' : 'on'}"` : ''} title="${status ? esc(`TMDB: ${status.tmdb}${status.lastAir ? `, last aired ${status.lastAir}` : ''}`) : 'Not looked up yet: Tools > Fetch info on TV Shows'}">${status ? esc(status.state) : '<small>Unknown</small>'}</dd>
                 <dt>Seasons</dt><dd>${seasons.filter((s) => s.index > 0).length || seasons.length}</dd>
-                <dt>Episodes</dt><dd>${local.length}${P && P.episodes.length !== local.length ? ` <small>(${P.episodes.length} on Plex)</small>` : ''}</dd>
+                <dt>Episodes</dt><dd>${local.length}${P && P.episodes.length !== local.length ? ` <small>(${P.episodes.length} on ${SV})</small>` : ''}</dd>
                 <dt>Watched</dt><dd>${watchedAll} of ${P ? P.episodes.length : local.length}</dd>
                 <dt>First aired</dt><dd>${esc(P && P.firstAired ? P.firstAired : sum.firstAired || '–')}</dd>
                 <dt>Last added</dt><dd>${esc(sum.added ? sum.added.slice(0, 10) : '–')}</dd>
@@ -192,7 +193,7 @@ export function mount(ctx) {
     try {
       const r = await bridge.request('series.open', { show: name, ep: ep ? ep.slice(2) : '', refresh: !!refresh }, 60000);
       if (r && r.loading) { state.fetching = true; state.pct = 0; state.text = ''; }
-      else if (r && r.title !== undefined) { plexByShow.set(name, r); state.fetching = false; }
+      else if (r && r.title !== undefined) { plexByShow.set(srvKey(name), r); state.fetching = false; }
     } catch (e) { state.fetching = false; state.error = e.message; }
     draw();
   };
@@ -218,7 +219,7 @@ export function mount(ctx) {
       if (le) openCard(le, ctx.toast);
     }
   });
-  plexByShow.has(name) ? draw() : (draw(), (eps().length && !S.state.halted ? fetchPlex(false) : null));
+  plexByShow.has(srvKey(name)) ? draw() : (draw(), (eps().length && !S.state.halted ? fetchPlex(false) : null));
   ctx.redraw = draw;
   return () => { document.body.classList.remove('series-open'); window.removeEventListener('resize', onResize); document.removeEventListener('click', outside); if (typeof off === 'function') off(); };
 }

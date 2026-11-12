@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.12.0
+
+**Feature**
+- TV Shows: a new Clear view with each show's clear logo; views now run Posters, Clear, Banners, Grid, Dashboard (Dashboard always last).
+- TV Shows: Fetch info looks up whether each show is Ongoing or Ended (TMDB, your key); the series view shows Status above Seasons and an Ended block after the seasons.
+
+**Bug/Fix**
+- Closing a show now returns to the view it was opened from instead of Posters.
+- Clicking the empty parts of the top bar now also closes the series view.
+
 ## 0.11.0
 
 **Feature**

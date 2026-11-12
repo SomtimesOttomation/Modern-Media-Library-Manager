@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.13.2
+
+**Bug/Fix**
+- The launcher's About page now lists every outside source Fetch info uses (TMDB, OMDb, IMDb ratings file).
+- PlexDoctor's schedule is off by default; turning one on asks you to confirm first.
+
 ## 0.13.1
 
 **Bug/Fix**

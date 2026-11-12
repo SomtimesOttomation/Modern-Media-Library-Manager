@@ -134,6 +134,7 @@ Check ((Cmd 23 'image.data' @{ path = '..\settings.json' }) -match '"ok":false')
 # PlexDoctor: settings, a check-up (scans each scanned tab, then the read-only checks), the report and the alert flag
 Check ((Cmd 70 'settings.set' @{ key = 'doctorFreq'; value = 'fortnightly' }) -match '"ok":false') 'PlexDoctor: an unknown schedule is refused'
 Check ((Cmd 71 'settings.set' @{ key = 'doctorChecks'; value = @('gaps', 'nope', 'unmatched', 'subs') }) -match '"doctorChecks":\["gaps","unmatched","subs"\]') 'PlexDoctor: only known checks are kept'
+Check ((Cmd 82 'settings.set' @{ key = 'clearScale'; value = 160 }) -match '"clearScale":160' -and (Cmd 83 'settings.set' @{ key = 'bannerScale'; value = 300 }) -match '"ok":false') 'each view keeps its own size (50-200%)'
 Check ((Cmd 78 'doctor.status' @{}) -match '"next":""') 'PlexDoctor: no schedule by default (opt-in)'
 [void](Cmd 79 'settings.set' @{ key = 'doctorFreq'; value = 'weekly' })
 Check ((Cmd 80 'doctor.status' @{}) -match '"next":""') 'PlexDoctor: a schedule stays off until its warning is acknowledged'

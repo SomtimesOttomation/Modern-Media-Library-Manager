@@ -244,9 +244,15 @@ frame.addEventListener('mousedown', (e) => {
 });
 frame.addEventListener('dblclick', (e) => { if (e.target.closest('.wgrip')) S.saveSettings({ contentWidth: 0 }); });
 
-// ---- poster size (50% to 200%), each tab its own: Movies posters; TV posters, Clear logos and Banners ----
+// ---- poster size (50% to 200%), each view its own: Movies posters; TV posters, Clear logos, Banners ----
+// (Settings > Artwork > Reset to Defaults puts them all back to 100%.)
 const pop = $('#sizepop'), range = $('#size-range');
-const scaleKey = () => (currentTab() === 'tv' ? 'tvScale' : 'posterScale');
+export const SCALE_KEYS = ['posterScale', 'tvScale', 'clearScale', 'bannerScale'];
+const scaleKey = () => {
+  if (currentTab() !== 'tv') return 'posterScale';
+  const v = S.state.settings.tvView;
+  return v === 'clear' ? 'clearScale' : v === 'banners' ? 'bannerScale' : 'tvScale';
+};
 const SIZED = { movies: ['posters'], tv: ['posters', 'clear', 'banners'] };
 function applyPosterScale(v) {
   document.documentElement.style.setProperty('--poster-scale', String((v || 100) / 100));
@@ -255,7 +261,7 @@ function applyPosterScale(v) {
 function sizeButton() {
   const tab = currentTab(), sized = SIZED[tab].includes(S.state.settings[`${tab}View`] || 'posters') && !location.hash.match(/^#\/tv\/./);
   $('#btn-size').hidden = !sized;
-  $('#btn-size').title = tab === 'tv' ? 'Size of posters, logos and banners' : 'Poster size';
+  $('#btn-size').title = ({ clearScale: 'Clear logo size', bannerScale: 'Banner size' })[scaleKey()] || 'Poster size';
   if (!sized) pop.hidden = true;
   applyPosterScale(S.state.settings[scaleKey()]);
 }

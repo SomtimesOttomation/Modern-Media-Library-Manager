@@ -97,7 +97,7 @@ function Save-HostPlexSettings {
 # The page's own settings (theme, view and sort per tab, grid columns), kept apart from the app's settings.json.
 $script:PageDefaults = [ordered]@{ theme = 'system'; updateCheck = $false; moviesView = 'posters'; tvView = 'posters'; moviesSort = 'added'; tvSort = 'title'; moviesSortRev = $false; tvSortRev = $false
     columns = @(); hideDupes = $false; detectFel = $false; posterScale = 100; tvScale = 100;
-    doctorFreq = 'weekly'; doctorDay = 0; doctorTime = '03:00'; doctorStyle = 'compact'; doctorChecks = @('unreadable', 'unmatched', 'wrongmatch', 'gaps', 'poster', 'dupes', 'av1'); widthPreset = 'full'; customWidth = $false; contentWidth = 0
+    doctorFreq = 'off'; doctorAck = $false; doctorDay = 0; doctorTime = '03:00'; doctorStyle = 'compact'; doctorChecks = @('unreadable', 'unmatched', 'wrongmatch', 'gaps', 'poster', 'dupes', 'av1'); widthPreset = 'full'; customWidth = $false; contentWidth = 0
     artLogo = $false; artBackground = $false; artBanner = $false
     fxLeft = 'auto'; fxRight = 'auto'; fxMotion = 'full'; vsStyle = 'arcade'; cmpTally = $true; cmpInflation = $false; cmpWalkover = $true; cmpImdb = $true }
 function Read-PageSettings {
@@ -134,6 +134,7 @@ function Set-PageSetting {
         'doctorFreq'  { @('off', 'weekly', 'biweekly', 'monthly') -contains [string]$Value }
         'doctorDay'   { $n = 0; if ([int]::TryParse([string]$Value, [ref]$n) -and $n -ge 0 -and $n -le 6) { $Value = $n; $true } else { $false } }
         'doctorTime'  { [string]$Value -match '^([01]\d|2[0-3]):[0-5]\d$' }
+        'doctorAck'   { $Value = [bool]$Value; $true }
         'doctorStyle' { @('compact', 'verbose') -contains [string]$Value }
         'doctorChecks' { $ok = @(Get-MmlmDoctorCheckIds); $Value = @(@($Value) | ForEach-Object { [string]$_ } | Where-Object { $ok -contains $_ } | Select-Object -Unique); $true }
         'tvScale'     { $n = 0; if ([int]::TryParse([string]$Value, [ref]$n) -and $n -ge 50 -and $n -le 200) { $Value = $n; $true } else { $false } }
@@ -868,7 +869,8 @@ function Step-HostDoctor {
     if (-not $script:Doctor -and ($now - $script:DoctorTick).TotalSeconds -ge 30) {
         $script:DoctorTick = $now
         $p = $script:PageSettings
-        if ($p -and [string]$p.doctorFreq -ne 'off') {
+        # a schedule runs only once it has been turned on with its warning acknowledged (DASH-CONTRACT fetching rule 2)
+        if ($p -and [string]$p.doctorFreq -ne 'off' -and [bool]$p.doctorAck) {
             $st = Read-DoctorState
             $slot = Get-MmlmDoctorSlot -Now $now -Freq ([string]$p.doctorFreq) -Day ([int]$p.doctorDay) -Time ([string]$p.doctorTime)
             if (-not $st.lastSlot -or $st.schedule -ne (Get-DoctorScheduleKey)) {
@@ -926,7 +928,7 @@ function Get-DoctorSummary {
 function Get-DoctorStatus {
     $p = $script:PageSettings; $st = Read-DoctorState
     $next = ''
-    if ([string]$p.doctorFreq -ne 'off') {
+    if ([string]$p.doctorFreq -ne 'off' -and [bool]$p.doctorAck) {
         $last = $(if ($st.lastSlot -and $st.schedule -eq (Get-DoctorScheduleKey)) { [datetime]$st.lastSlot } else { $null })
         $next = (Get-MmlmDoctorNext -Now (Get-Date) -Freq ([string]$p.doctorFreq) -Day ([int]$p.doctorDay) -Time ([string]$p.doctorTime) -Last $last).ToString('s')
     }

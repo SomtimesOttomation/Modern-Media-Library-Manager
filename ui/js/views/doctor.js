@@ -81,14 +81,31 @@ export function doctorTab(repaint, overlay) {
         h('div', null, h('b', null, `${plural(last.issues, 'issue')} found`), h('small', null, `${last.important} important, ${last.minor} minor \u00b7 ${fmtWhen(last.at)}`)),
         h('button', { class: 'btn primary', type: 'button', onclick: () => openReport() }, 'View latest report'));
     }
-    nextLine.textContent = (s.doctorFreq || 'weekly') === 'off' ? 'No schedule: check-ups run only when you click Run check-up now.'
-      : `Next: ${fmtWhen(d.next)}. Runs only while MMLM is open; a missed one runs the next time you open it.`;
+    const cur = S.state.settings;
+    const freq = cur.doctorFreq || 'off';
+    if (freq === 'off') nextLine.replaceChildren('No schedule: check-ups run only when you click Run check-up now.');
+    else if (!cur.doctorAck) nextLine.replaceChildren('This schedule is not on yet. ', h('a', { href: '#', onclick: (e) => { e.preventDefault(); askAck(freq); } }, 'Turn it on'));
+    else nextLine.replaceChildren(`Next: ${fmtWhen(d.next)}. Runs only while MMLM is open; a missed one runs the next time you open it.`);
   };
   const load = () => bridge.request('doctor.status').then((st) => { S.state.doctor = { ...(S.state.doctor || {}), ...st }; paintStatus(); }).catch(() => {});
   load();
   const unsub = S.subscribe((t) => { if (t.has('doctor')) { if (!status.isConnected) { unsub?.(); return; } if (!(S.state.doctor || {}).running) load(); else paintStatus(); } });
 
-  const sel = (key, opts, val) => h('select', { onchange: (e) => set(key, key === 'doctorDay' ? +e.target.value : e.target.value) },
+  // A schedule contacts your Plex server on its own, so turning one on asks first (DASH-CONTRACT fetching rule 2).
+  const ackBox = h('div', { class: 'dr-ack', hidden: true });
+  const askAck = (freq) => {
+    ackBox.hidden = false;
+    ackBox.replaceChildren(
+      h('p', null, h('b', null, 'Turn on scheduled check-ups? '), `PlexDoctor will scan your Plex server by itself (${({ weekly: 'once a week', biweekly: 'every 2 weeks', monthly: 'once a month' })[freq]}, at the day and time below) while MMLM is open, then check what it found. It only reads, and it only contacts your own Plex server. You can turn it off here at any time.`),
+      h('div', { class: 'dr-ack-act' },
+        h('button', { class: 'btn', type: 'button', onclick: () => { ackBox.hidden = true; repaint(); } }, 'Cancel'),
+        h('button', { class: 'btn primary', type: 'button', onclick: () => { ackBox.hidden = true; S.saveSettings({ doctorFreq: freq, doctorAck: true }).then(repaint); } }, 'Turn on')));
+  };
+  const sel = (key, opts, val) => h('select', { onchange: (e) => {
+    const v = key === 'doctorDay' ? +e.target.value : e.target.value;
+    if (key === 'doctorFreq' && v !== 'off' && !S.state.settings.doctorAck) { askAck(v); return; }
+    set(key, v);
+  } },
     opts.map(([v, t]) => h('option', { value: String(v), selected: String(v) === String(val) ? true : null }, t)));
   const time = h('input', { type: 'time', value: s.doctorTime || '03:00', onchange: (e) => { if (/^\d\d:\d\d$/.test(e.target.value)) set('doctorTime', e.target.value); } });
   const on = new Set(s.doctorChecks || []);
@@ -103,10 +120,10 @@ export function doctorTab(repaint, overlay) {
     h('div', { class: 'dr-grid' },
       h('span', null, 'Schedule'),
       h('div', { class: 'dr-row' },
-        h('label', null, h('small', null, 'How often'), sel('doctorFreq', [['off', 'Off'], ['weekly', 'Weekly'], ['biweekly', 'Every 2 weeks'], ['monthly', 'Monthly (first of the month)']], s.doctorFreq || 'weekly')),
+        h('label', null, h('small', null, 'How often'), sel('doctorFreq', [['off', 'Off'], ['weekly', 'Weekly'], ['biweekly', 'Every 2 weeks'], ['monthly', 'Monthly (first of the month)']], s.doctorFreq || 'off')),
         h('label', null, h('small', null, 'Day'), sel('doctorDay', DAYS.map((d, i) => [i, d]), s.doctorDay ?? 0)),
         h('label', null, h('small', null, 'Time'), time)),
-      h('span', null), nextLine,
+      h('span', null), h('div', null, nextLine, ackBox),
       h('span', null, 'Run it now'), h('div', null, runBtn),
       h('span', null, 'Report style'),
       h('div', { class: 'seg' }, [['compact', 'Compact'], ['verbose', 'Verbose']].map(([k, t]) => h('button', { type: 'button', class: (s.doctorStyle || 'compact') === k ? 'active' : '', onclick: () => S.saveSettings({ doctorStyle: k }).then(repaint) }, t)))),

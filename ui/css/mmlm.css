@@ -565,3 +565,6 @@ body.dragging { cursor: ew-resize; user-select: none; }
 .dt-x { border: 0; background: none; color: var(--muted); font-size: 18px; cursor: pointer; line-height: 1; }
 .dt-act { display: flex; gap: 8px; justify-content: flex-end; }
 .dt-act .btn:not(.primary) { background: transparent; color: var(--text); border: 1px solid var(--line); }
+.dr-ack { margin-top: 8px; padding: 12px 14px; border-radius: 10px; border: 1px solid color-mix(in srgb, #ffaa3c 45%, var(--line)); background: color-mix(in srgb, #ffaa3c 8%, transparent); }
+.dr-ack p { margin: 0 0 10px; font-size: 13.5px; line-height: 1.5; }
+.dr-ack-act { display: flex; gap: 8px; justify-content: flex-end; }

@@ -17,6 +17,18 @@
       "terms": "https://www.plex.tv/about/privacy-legal/plex-terms-of-service/"
     },
     {
+      "name": "TMDB (Fetch info, with your own key; only when you ask)",
+      "terms": "https://www.themoviedb.org/api-terms-of-use"
+    },
+    {
+      "name": "OMDb (Fetch info, with your own key; only when you ask)",
+      "terms": "https://www.omdbapi.com/legal.htm"
+    },
+    {
+      "name": "IMDb non-commercial datasets (Fetch info ratings file)",
+      "terms": "https://developer.imdb.com/non-commercial-datasets/"
+    },
+    {
       "name": "GitHub releases (update check)",
       "terms": "https://docs.github.com/en/site-policy/github-terms/github-terms-of-service"
     }

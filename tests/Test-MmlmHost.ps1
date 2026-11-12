@@ -24,6 +24,7 @@ function Cmd($id, $cmd, $a = @{}) { Invoke-DashCommand -Message ([pscustomobject
 function Wait-Scan { $all = ''; for ($k = 0; $k -lt 300; $k++) { $all += (@(Receive-DashEvents) -join ''); if ($all -match '"running":false') { return $all }; Start-Sleep -Milliseconds 100 }; $all }
 # dash.json as DashLauncher checks it (a bad one stops the whole module from loading)
 $dj = Get-Content (Join-Path $root 'dash.json') -Raw | ConvertFrom-Json
+Check (@($dj.dataSources | Where-Object { $_.name -match 'TMDB|OMDb|IMDb' }).Count -eq 3) 'dash.json: every outside source Fetch info uses is listed'
 Check (@($dj.dataSources | Where-Object { -not $_.name -or ([string]$_.name).Length -gt 80 -or [string]$_.terms -notmatch '^https://' }).Count -eq 0) 'dash.json: each data source has a name of 1-80 characters and an https terms link'
 Check ([string]$dj.name -and [string]$dj.title -and [int]$dj.contract -eq 1) 'dash.json: name, title and contract'
 $i = Initialize-Dash -Context $ctx
@@ -133,8 +134,12 @@ Check ((Cmd 23 'image.data' @{ path = '..\settings.json' }) -match '"ok":false')
 # PlexDoctor: settings, a check-up (scans each scanned tab, then the read-only checks), the report and the alert flag
 Check ((Cmd 70 'settings.set' @{ key = 'doctorFreq'; value = 'fortnightly' }) -match '"ok":false') 'PlexDoctor: an unknown schedule is refused'
 Check ((Cmd 71 'settings.set' @{ key = 'doctorChecks'; value = @('gaps', 'nope', 'unmatched', 'subs') }) -match '"doctorChecks":\["gaps","unmatched","subs"\]') 'PlexDoctor: only known checks are kept'
+Check ((Cmd 78 'doctor.status' @{}) -match '"next":""') 'PlexDoctor: no schedule by default (opt-in)'
+[void](Cmd 79 'settings.set' @{ key = 'doctorFreq'; value = 'weekly' })
+Check ((Cmd 80 'doctor.status' @{}) -match '"next":""') 'PlexDoctor: a schedule stays off until its warning is acknowledged'
+[void](Cmd 81 'settings.set' @{ key = 'doctorAck'; value = $true })
 $dsj = Cmd 72 'doctor.status' @{}
-Check ($dsj -match '"next":"\d{4}-\d\d-\d\dT03:00:00"' -and $dsj -match '"last":null') 'PlexDoctor: the next run is shown before any report'
+Check ($dsj -match '"next":"\d{4}-\d\d-\d\dT03:00:00"' -and $dsj -match '"last":null') 'PlexDoctor: once acknowledged, the next run is shown'
 Check ((Cmd 73 'doctor.run' @{}) -match '"ok":true') 'PlexDoctor: Run check-up now starts'
 Check ((Cmd 74 'doctor.run' @{}) -match 'already running') 'PlexDoctor: one check-up at a time'
 $ev = ''; for ($k = 0; $k -lt 600 -and $ev -notmatch '"event":"doctor","data":\{"running":false,"done":true'; $k++) { $ev += (@(Receive-DashEvents) -join ''); Start-Sleep -Milliseconds 100 }

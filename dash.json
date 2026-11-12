@@ -13,7 +13,7 @@
   "standalone": "Start-MMLM.bat",
   "dataSources": [
     {
-      "name": "Your own Plex Media Server (when you scan, and for PlexDoctor check-ups when scheduled)",
+      "name": "Your own Plex Media Server (scans and PlexDoctor check-ups)",
       "terms": "https://www.plex.tv/about/privacy-legal/plex-terms-of-service/"
     },
     {

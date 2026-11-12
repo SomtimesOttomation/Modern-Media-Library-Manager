@@ -605,3 +605,4 @@ body.dragging { cursor: ew-resize; user-select: none; }
 .setup-msg.bad { color: var(--live); }
 .setup-msg.good { color: var(--good); }
 @media (max-width: 520px) { .setup-tiles { grid-template-columns: 1fr; } .setup-art { max-width: 200px; } }
+.dr-grid > .seg { justify-self: start; }   /* Report style: as wide as its two buttons, not the whole row */

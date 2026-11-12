@@ -22,6 +22,10 @@ $fail = 0
 function Check([bool]$Ok, [string]$Text) { if ($Ok) { "  ok    $Text" } else { $script:fail++; "  FAIL  $Text" } }
 function Cmd($id, $cmd, $a = @{}) { Invoke-DashCommand -Message ([pscustomobject]@{ id = $id; cmd = $cmd; args = [pscustomobject]$a }); $posted[$posted.Count - 1] }
 function Wait-Scan { $all = ''; for ($k = 0; $k -lt 300; $k++) { $all += (@(Receive-DashEvents) -join ''); if ($all -match '"running":false') { return $all }; Start-Sleep -Milliseconds 100 }; $all }
+# dash.json as DashLauncher checks it (a bad one stops the whole module from loading)
+$dj = Get-Content (Join-Path $root 'dash.json') -Raw | ConvertFrom-Json
+Check (@($dj.dataSources | Where-Object { -not $_.name -or ([string]$_.name).Length -gt 80 -or [string]$_.terms -notmatch '^https://' }).Count -eq 0) 'dash.json: each data source has a name of 1-80 characters and an https terms link'
+Check ([string]$dj.name -and [string]$dj.title -and [int]$dj.contract -eq 1) 'dash.json: name, title and contract'
 $i = Initialize-Dash -Context $ctx
 Check $i.Ok 'Initialize-Dash'
 Suspend-DashWorker

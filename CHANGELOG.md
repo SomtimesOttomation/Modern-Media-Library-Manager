@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.15.1
+
+**Bug/Fix**
+- Settings > PlexDoctor: the Compact / Verbose buttons no longer stretch across the whole row.
+- The PlexDoctor alert follows the light / dark theme, so its Later button is readable in dark mode.
+
 ## 0.15.0
 
 **Feature**

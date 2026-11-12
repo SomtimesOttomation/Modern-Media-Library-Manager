@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.13.0
+
+**Feature**
+- PlexDoctor (Settings > PlexDoctor): a read-only check-up of your Plex library, weekly, every 2 weeks or monthly (or Run check-up now). Finds unreadable files, unmatched or likely wrong matches, gaps in a season, missing posters, duplicates, AV1 files the Shield can't play and (optional) missing English subtitles. Compact or Verbose reports; a toast when it finds issues, a green check when it doesn't.
+- Poster size works per tab, and in TV Shows also sizes the Clear and Banners views.
+
 ## 0.12.0
 
 **Feature**

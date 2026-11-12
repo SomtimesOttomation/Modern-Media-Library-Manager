@@ -7,6 +7,7 @@ export function attach(fn) { emit = fn; }
 const qs = new URLSearchParams(location.search);
 const settings = { theme: qs.get('theme') || 'system', updateCheck: false, moviesView: qs.get('view') || 'posters', tvView: qs.get('view') || 'posters', moviesSort: 'added', tvSort: 'title', columns: [], hideDupes: false, tvScale: 100, clearScale: 100, bannerScale: 100, doctorFreq: 'off', doctorAck: false, doctorDay: 0, doctorTime: '03:00', doctorStyle: 'compact', doctorChecks: ['unreadable', 'unmatched', 'wrongmatch', 'gaps', 'poster', 'dupes', 'av1'], cmpInflation: false, artLogo: false, artBackground: false, artBanner: false, fxLeft: 'auto', fxRight: 'auto', fxMotion: 'full', vsStyle: 'arcade', cmpTally: true, cmpWalkover: true, cmpImdb: true };
 const plex = { url: 'http://plex-server:32400', hasToken: true, jellyfin: { url: '', hasKey: false }, use: { movies: 'plex', tv: 'plex' } };
+if (qs.has('fresh')) { plex.url = ''; plex.hasToken = false; }
 const traffic = { requests: 0, bytes: 0, errors: 0 };
 let halted = false, scanTimer = 0;
 const empty = qs.has('empty');

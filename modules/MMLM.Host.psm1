@@ -45,7 +45,7 @@ $script:Series = $null
 $script:Tool = $null
 
 # the data modules, by full path (an already loaded copy is reused)
-foreach ($m0 in @('MMLM.Library.psm1', 'MMLM.Plex.psm1', 'MMLM.Server.psm1', 'MMLM.Fetch.psm1', 'MMLM.Doctor.psm1')) { Import-Module (Join-Path $PSScriptRoot $m0) -DisableNameChecking }
+foreach ($m0 in @('MMLM.Library.psm1', 'MMLM.Plex.psm1', 'MMLM.Jellyfin.psm1', 'MMLM.Server.psm1', 'MMLM.Fetch.psm1', 'MMLM.Doctor.psm1')) { Import-Module (Join-Path $PSScriptRoot $m0) -DisableNameChecking }
 
 function Write-HostLog {
     # failures go to %LOCALAPPDATA%\<app>\Logs\host.log instead of disappearing (kept under 1 MB)
@@ -68,19 +68,31 @@ function Send-HostEventNow { param([string]$Name, $Data) Send-Page (ConvertTo-Pa
 function Push-HostEvent { param([string]$Name, $Data) if ($script:Out) { $script:Out.Enqueue((ConvertTo-PageJson ([ordered]@{ event = $Name; data = $Data }))) } }
 
 function Get-HostModuleFiles {
-    @('MMLM.Library.psm1', 'MMLM.Plex.psm1', 'MMLM.Server.psm1', 'MMLM.Fetch.psm1', 'MMLM.Doctor.psm1') | ForEach-Object { Join-Path (Join-Path $script:Root 'modules') $_ }
+    @('MMLM.Library.psm1', 'MMLM.Plex.psm1', 'MMLM.Jellyfin.psm1', 'MMLM.Server.psm1', 'MMLM.Fetch.psm1', 'MMLM.Doctor.psm1') | ForEach-Object { Join-Path (Join-Path $script:Root 'modules') $_ }
 }
 
 function Read-HostSettings {
     # The same settings file the app writes (%LOCALAPPDATA%\Modern-Media-Library-Manager\settings.json); read only here.
     $p = Join-Path $script:AppData 'settings.json'
-    $s = @{ PlexUrl = ''; PlexTokenProtected = '' }
+    # server keys: Plex (shared with the window app), Jellyfin, and which server each library comes from
+    $s = @{ PlexUrl = ''; PlexTokenProtected = ''; JellyfinUrl = ''; JellyfinKeyProtected = ''; MoviesServer = 'plex'; TvServer = 'plex' }
     if (Test-Path -LiteralPath $p) {
-        try { $j = [IO.File]::ReadAllText($p) | ConvertFrom-Json; foreach ($k in 'PlexUrl', 'PlexTokenProtected') { if ($j.$k) { $s[$k] = [string]$j.$k } } } catch { Write-HostLog 'settings' $_ }
+        try { $j = [IO.File]::ReadAllText($p) | ConvertFrom-Json; foreach ($k in @($s.Keys)) { if ($j.PSObject.Properties[$k] -and $j.$k) { $s[$k] = [string]$j.$k } } } catch { Write-HostLog 'settings' $_ }
     }
     $s
 }
 
+function Save-HostServerSettings {
+    # Writes only the given server keys into the app's settings.json; every other key there stays as it was.
+    param([hashtable]$Values)
+    $p = Join-Path $script:AppData 'settings.json'
+    $o = [ordered]@{}
+    if (Test-Path -LiteralPath $p) {
+        try { $j = [IO.File]::ReadAllText($p) | ConvertFrom-Json; foreach ($pr in $j.PSObject.Properties) { $o[$pr.Name] = $pr.Value } } catch { Write-HostLog 'settings read' $_ }
+    }
+    foreach ($k in $Values.Keys) { $o[$k] = $Values[$k] }
+    [IO.File]::WriteAllText($p, (ConvertTo-Json -InputObject $o -Depth 6), (New-Object Text.UTF8Encoding($false)))
+}
 function Save-HostPlexSettings {
     # Writes only PlexUrl / PlexTokenProtected into the app's settings.json; every other key there stays as it was.
     param([string]$Url, [string]$TokenProtected, [switch]$KeepToken)
@@ -155,8 +167,11 @@ function Set-PageSetting {
 }
 
 function Get-PlexInfo {
+    # the page's view of the servers (no secrets): Plex, Jellyfin, and which one each library comes from
     $set = Read-HostSettings
-    @{ url = [string]$set.PlexUrl; hasToken = [bool]$set.PlexTokenProtected }
+    @{ url = [string]$set.PlexUrl; hasToken = [bool]$set.PlexTokenProtected
+        jellyfin = @{ url = [string]$set.JellyfinUrl; hasKey = [bool]$set.JellyfinKeyProtected }
+        use = @{ movies = [string]$set.MoviesServer; tv = [string]$set.TvServer } }
 }
 
 function Get-SnapshotFile { param([string]$Tab) Join-Path (Join-Path $script:AppData 'Library') ($(if ($Tab -eq 'tv') { 'tv.mmls' } else { 'movies.mmls' })) }
@@ -215,7 +230,8 @@ function Export-PageLibrary {
         $names.Add($k[0]); $defs.Add([ordered]@{ n = $k[0]; t = 'string'; g = 'Library'; s = $false })
         foreach ($r in $Recs) {
             $u = ''
-            if ([string]$r.PlexThumb -match '^/library/metadata/(\d+)(/|$)') { $leaf = '{0}-{1}.{2}' -f $k[1], $Matches[1], $k[2]; if ($have.Contains($leaf)) { $u = 'art/' + $leaf + '?v=' + $ver[$leaf] } }
+            $aid = Get-MmlmArtworkFileId ([string]$r.PlexThumb)
+            if ($aid) { $leaf = '{0}-{1}.{2}' -f $k[1], $aid, $k[2]; if ($have.Contains($leaf)) { $u = 'art/' + $leaf + '?v=' + $ver[$leaf] } }
             $r.PSObject.Properties.Remove($k[0]); $r.PSObject.Properties.Add((New-Object Management.Automation.PSNoteProperty($k[0], $u)))
         }
     }
@@ -352,21 +368,24 @@ function Get-LibraryState {
 }
 
 function Get-HostServer {
-    # The media server from Settings, as MMLM.Server describes one (kind, address, decrypted token). Every job that talks
-    # to the server gets it from here. Throws a plain message when something is missing.
+    # The media server a library comes from (Settings > Servers), as MMLM.Server describes one: kind, address and the
+    # decrypted token / API key. Every job that talks to a server gets it from here. Throws a plain message when
+    # something is missing. -Kind picks a server directly (Settings > Servers > Test).
+    param([ValidateSet('movies', 'tv')][string]$Tab = 'movies', [string]$Kind)
     $set = Read-HostSettings
-    $kind = $(if ($set.PSObject.Properties['ServerKind'] -and [string]$set.ServerKind) { [string]$set.ServerKind } else { 'plex' })
-    $token = ''
-    try { $token = Unprotect-MmlmSecret $set.PlexTokenProtected } catch { Write-HostLog 'token' $_ }
+    if (-not $Kind) { $Kind = $(if ($Tab -eq 'tv') { [string]$set.TvServer } else { [string]$set.MoviesServer }) }
+    if (-not $Kind) { $Kind = 'plex' }
+    $secret = ''
+    try { $secret = Unprotect-MmlmSecret $(if ($Kind -eq 'jellyfin') { $set.JellyfinKeyProtected } else { $set.PlexTokenProtected }) } catch { Write-HostLog 'token' $_ }
     # test hook for tests\Test-MmlmHost.ps1 only: honoured only when the host was started with Debug on
-    if ($script:Ctx.Debug -and $env:MMLM_HOST_TEST_TOKEN) { $token = $env:MMLM_HOST_TEST_TOKEN }
-    New-MmlmServer -Kind $kind -BaseUrl ([string]$set.PlexUrl) -Token $token
+    if ($script:Ctx.Debug -and $env:MMLM_HOST_TEST_TOKEN) { $secret = $env:MMLM_HOST_TEST_TOKEN }
+    New-MmlmServer -Kind $Kind -BaseUrl $(if ($Kind -eq 'jellyfin') { [string]$set.JellyfinUrl } else { [string]$set.PlexUrl }) -Token $secret
 }
 function Start-HostScan {
     param([ValidateSet('movies', 'tv')][string]$Tab, [bool]$Rebuild = $false)
     if ($script:ScanPs -and -not $script:Sync.Done) { throw 'A scan is already running.' }
     if ($script:Traffic.Halted) { throw 'Traffic is paused. Resume it first.' }
-    $server = Get-HostServer
+    $server = Get-HostServer -Tab $Tab
     Stop-HostScan -Wait 0
     $script:Sync = [hashtable]::Synchronized(@{ Text = 'Starting...'; Value = 0; Max = 0; Cancel = $false; Done = $false; Error = $null; PhaseLo = 0.0; PhaseHi = 1.0; Count = 0; New = 0; Cancelled = $false })
     $ctx = New-WorkerContext $script:Sync
@@ -531,6 +550,34 @@ $script:SeriesScript = {
     finally { $S.Done = $true }
 }
 
+# Settings > Servers > Test runs in the background: the host's own calls never wait on the network.
+$script:ServerTest = $null
+$script:ServerTestScript = {
+    param($ModuleFiles, $Ctx, $Server)
+    foreach ($m in $ModuleFiles) { Import-Module $m -DisableNameChecking }
+    Set-MmlmContext -Values $Ctx; Set-MmlmServerContext -Values $Ctx
+    try { @{ ok = $true; info = (Test-MmlmServer $Server) } } catch { @{ ok = $false; error = $_.Exception.Message } }
+}
+function Start-HostServerTest {
+    param([string]$Kind)
+    if ($script:ServerTest) { throw 'A test is already running.' }
+    $server = Get-HostServer -Kind $Kind
+    $sync = [hashtable]::Synchronized(@{ Text = ''; Value = 0; Max = 0; Cancel = $false; Done = $false; PhaseLo = 0.0; PhaseHi = 1.0 })
+    $ps = [powershell]::Create()
+    [void]$ps.AddScript($script:ServerTestScript).AddArgument(@(Get-HostModuleFiles)).AddArgument((New-WorkerContext $sync)).AddArgument($server)
+    $script:ServerTest = @{ Ps = $ps; Async = $ps.BeginInvoke(); Kind = $Kind }
+}
+function Get-ServerTestEvents {
+    $x = $script:ServerTest
+    if (-not $x -or -not $x.Async.IsCompleted) { return }
+    $script:ServerTest = $null
+    $res = $null
+    try { $res = @($x.Ps.EndInvoke($x.Async)) | Select-Object -Last 1 } catch { $res = @{ ok = $false; error = $_.Exception.Message } }
+    finally { $x.Ps.Dispose() }
+    if ($null -eq $res) { $res = @{ ok = $false; error = 'No answer.' } }
+    Push-HostEvent 'servertest' ([ordered]@{ kind = $x.Kind; ok = [bool]$res.ok; info = $res.info; error = [string]$res.error })
+}
+
 function Get-SeriesIndex {
     # show name -> Plex show key, learnt on the first open (Library\series-index.json)
     $p = Join-Path (Split-Path (Get-SnapshotFile 'tv')) 'series-index.json'
@@ -553,7 +600,7 @@ function Start-HostSeries {
     if ($script:Traffic.Halted) { throw 'Traffic is paused. Resume it first.' }
     if (-not $EpKey -and -not $key) { throw 'This show was not scanned from Plex, so there is nothing more to fetch.' }
     $server = $null
-    try { $server = Get-HostServer } catch { throw 'Add your Plex server and token in Settings first.' }
+    try { $server = Get-HostServer -Tab 'tv' } catch { throw 'Add your server in Settings > Servers first.' }
     $sync = [hashtable]::Synchronized(@{ Text = 'Starting...'; Pct = 0; Cancel = $false; Done = $false; Error = $null; Cancelled = $false; ShowKey = ''; Value = 0; Max = 0; PhaseLo = 0.0; PhaseHi = 1.0 })
     $job = @{ Server = $server; EpKey = $EpKey; ShowKey = $key; CacheDir = $script:CacheDir }
     $ps = [powershell]::Create()
@@ -624,10 +671,14 @@ $script:ToolScript = {
             }
             'artwork' {
                 # Settings > Artwork was ticked: fetch it now for every scanned tab instead of waiting for the next scan
-                $all = New-Object System.Collections.Generic.List[object]
-                foreach ($snap in @($Job.Snapshots)) { if (Test-Path -LiteralPath $snap) { foreach ($r in [Mmlm.Native.Snapshot]::Load($snap)) { $all.Add($r) } } }
-                $res = Sync-MmlmServerArtwork -Server $Job.Server -Recs $all.ToArray() -Kinds @($Job.ArtKinds) -Folder (Join-Path $Job.CacheDir 'art') -Force:([bool]$Job.Force)
-                $S.Summary = $(if ($res.Stopped) { 'Artwork stopped: Plex did not answer three times in a row. Try again later.' } elseif ($Job.Force) { ('Artwork refreshed from Plex: {0} picture{1}.' -f $res.Saved, $(if ($res.Saved -eq 1) { '' } else { 's' })) } else { ('Artwork: {0} new picture{1}.' -f $res.Saved, $(if ($res.Saved -eq 1) { '' } else { 's' })) })
+                $res = @{ Saved = 0; Failed = 0; Stopped = $false }
+                foreach ($t0 in 'movies', 'tv') {
+                    $snap = $Job.Snapshots[$(if ($t0 -eq 'tv') { 1 } else { 0 })]
+                    if ($res.Stopped -or -not $Job.Servers.ContainsKey($t0) -or -not (Test-Path -LiteralPath $snap)) { continue }
+                    $part = Sync-MmlmServerArtwork -Server $Job.Servers[$t0] -Recs @([Mmlm.Native.Snapshot]::Load($snap)) -Kinds @($Job.ArtKinds) -Folder (Join-Path $Job.CacheDir 'art') -Force:([bool]$Job.Force)
+                    $res.Saved += $part.Saved; $res.Failed += $part.Failed; $res.Stopped = $part.Stopped
+                }
+                $S.Summary = $(if ($res.Stopped) { 'Artwork stopped: the server did not answer three times in a row. Try again later.' } elseif ($Job.Force) { ('Artwork refreshed from your server: {0} picture{1}.' -f $res.Saved, $(if ($res.Saved -eq 1) { '' } else { 's' })) } else { ('Artwork: {0} new picture{1}.' -f $res.Saved, $(if ($res.Saved -eq 1) { '' } else { 's' })) })
                 if ($res.Stopped) { $S.Error = $S.Summary }
                 $S.Library = ($res.Saved -gt 0 -or [bool]$Job.Force)
             }
@@ -754,7 +805,10 @@ function Start-HostTool {
         $job.Force = [bool]$a.force          # Settings > Artwork > Refresh artwork: everything again from Plex
         if ($job.ArtKinds.Count -eq 0) { throw 'Tick an artwork option first.' }
         $job.Snapshots = @((Get-SnapshotFile 'movies'), (Get-SnapshotFile 'tv'))
-        $job.Server = Get-HostServer
+        # each library from its own server (Settings > Servers); a library with no server set up is skipped
+        $job.Servers = @{}
+        foreach ($t0 in 'movies', 'tv') { try { $job.Servers[$t0] = Get-HostServer -Tab $t0 } catch { } }
+        if ($job.Servers.Count -eq 0) { throw 'Add your server in Settings > Servers first.' }
     }
     if ($kind -eq 'fetch') {
         $k = Read-HostKeys
@@ -1117,6 +1171,29 @@ $script:Commands = [ordered]@{
             $tok = ([string]$a.token).Trim()
             if ($tok) { Save-HostPlexSettings -Url $url -TokenProtected (Protect-MmlmSecret $tok) } else { Save-HostPlexSettings -Url $url -KeepToken }
             ConvertTo-PageJson (Get-PlexInfo) } }
+    'jellyfin.set'   = @{ Fetch = $false; Run = {
+            # Jellyfin address and API key (the key is stored encrypted for this Windows user, like the Plex token)
+            param($a)
+            $url = ([string]$a.url).Trim().TrimEnd('/')
+            if ($url -and $url -notmatch '^https?://[^\s/]+(:\d+)?(/[^\s]*)?$') { throw 'The Jellyfin address looks like http://server:8096' }
+            $v = @{ JellyfinUrl = $url }
+            $key = ([string]$a.key).Trim()
+            if ($key) { $v.JellyfinKeyProtected = Protect-MmlmSecret $key }
+            Save-HostServerSettings $v
+            ConvertTo-PageJson (Get-PlexInfo) } }
+    'server.use'     = @{ Fetch = $false; Run = {
+            # which server a library comes from. The next scan of that library reads everything from the new server.
+            param($a)
+            $tab = $(if ([string]$a.tab -eq 'tv') { 'tv' } else { 'movies' })
+            $kind = [string]$a.kind
+            if (@(Get-MmlmServerKinds) -notcontains $kind) { throw 'Unknown server.' }
+            Save-HostServerSettings @{ ($(if ($tab -eq 'tv') { 'TvServer' } else { 'MoviesServer' })) = $kind }
+            ConvertTo-PageJson (Get-PlexInfo) } }
+    'server.test'    = @{ Fetch = $true; Run = {
+            # Settings > Servers > Test: asks the server for its name and libraries in the background (counted as
+            # traffic); the answer comes as a 'servertest' event
+            param($a)
+            Start-HostServerTest -Kind ([string]$a.kind); 'true' } }
     'series.open'    = @{ Fetch = $false; Run = {
             # the saved copy when there is one (no network); otherwise a Plex fetch starts and 'series' events follow
             param($a)
@@ -1241,6 +1318,7 @@ function Receive-DashEvents {
     }
     try { Get-UpdateEvents; Watch-DropFolder } catch { Write-HostLog 'updates' $_ }
     try { Step-HostDoctor } catch { Write-HostLog 'doctor' $_; $script:Doctor = $null }
+    try { Get-ServerTestEvents } catch { Write-HostLog 'server test' $_; $script:ServerTest = $null }
     try { Get-SeriesEvents } catch { Write-HostLog 'series' $_ }
     try { Get-ToolEvents } catch { Write-HostLog 'tools' $_ }
     # one drain for every event source; whatever is over the cap waits for the next call (callers wrap the result in @())

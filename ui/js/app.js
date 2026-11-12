@@ -11,6 +11,7 @@ import { initDoctor } from './views/doctor.js';
 import { openTraffic } from './views/traffic.js';
 import { openUpdate } from './views/update.js';
 import { openAdvanced } from './views/advanced.js';
+import { needsSetup, openSetup } from './views/setup.js';
 import { parse } from './search.js';
 
 const $ = (s) => document.querySelector(s);
@@ -178,11 +179,12 @@ function versionChip() {
   b.classList.toggle('has-update', S.updateReady());
   b.title = u.phase === 'available' ? `Version ${u.info?.latest} is available` : u.phase === 'staged' ? 'Update downloaded: click to install' : 'Check for updates';
 }
-// Refresh = scan the open library from Plex (what "refresh" means for a library). Only when asked.
+// Refresh = scan the open library from its server (what "refresh" means for a library). Only when asked.
 async function scanNow() {
   const b = $('#btn-refresh');
   if (S.state.scan.running) { toast('A scan is already running.'); return; }
-  if (!S.state.plex.url || !S.state.plex.hasToken) { toast('Add your Plex server and token in Settings first.'); openSettings('plex'); return; }
+  const srv = S.serverFor(currentTab());
+  if (!srv.ready) { toast(`Add your ${srv.name} server in Settings > Servers first.`); openSettings('plex'); return; }
   b.classList.add('spin');
   try { await S.startScan(currentTab()); } catch (e) { toast(e.message); b.classList.remove('spin'); }
 }
@@ -303,6 +305,7 @@ S.init().then(() => {
   themeIcon(); applyWidth(); route(); versionChip(); syncBar();
   for (const t of S.TABS) S.loadLibrary(t);               // both libraries load once, from the saved scan (no network)
   initDoctor();                                            // PlexDoctor's alert (a check-up that found issues)
+  if (needsSetup()) openSetup();                           // first launch: pick Jellyfin or Plex and connect
   const n = S.state.update.note;
   if (n) toast(n.ok ? `Updated to v${n.to}.` : `The update to v${n.to} did not work (${n.reason || 'unknown reason'}). v${n.from} was restored.`);
 }).catch((e) => {

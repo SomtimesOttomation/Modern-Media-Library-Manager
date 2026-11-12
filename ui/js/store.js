@@ -214,6 +214,14 @@ export async function saveSettings(patch) {
     try { state.settings = { ...state.settings, ...(await bridge.request('settings.set', { key, value })) }; } catch (e) { console.warn(e.message); }
   }
 }
+// Which server a library comes from (Settings > Servers), and whether it is set up enough to scan.
+export function serverFor(tab) {
+  const p = state.plex || {}, kind = (p.use && p.use[tab]) || 'plex';
+  if (kind === 'jellyfin') return { kind, name: 'Jellyfin', ready: !!(p.jellyfin && p.jellyfin.url && p.jellyfin.hasKey) };
+  return { kind: 'plex', name: 'Plex', ready: !!(p.url && p.hasToken) };
+}
+export async function useServer(tab, kind) { state.plex = await bridge.request('server.use', { tab, kind }); notify('plex'); }
+export async function saveJellyfin(url, key) { state.plex = await bridge.request('jellyfin.set', { url, key }); notify('plex'); }
 export async function savePlex(url, token) {
   state.plex = await bridge.request('plex.set', { url, token });
   notify('plex');

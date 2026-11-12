@@ -118,7 +118,7 @@ $before = (Get-Item -LiteralPath (Join-Path $art 'art-101.jpg')).LastWriteTimeUt
 Start-Sleep -Milliseconds 1100
 Check ((Cmd 67 'tools.start' @{ kind = 'artwork'; tab = 'movies'; force = $true }) -match '"ok":true') 'Refresh artwork starts'
 $te = Wait-Tool
-Check ($te -match 'refreshed from Plex' -and (Get-Item -LiteralPath (Join-Path $art 'art-101.jpg')).LastWriteTimeUtc -gt $before -and (Test-Path -LiteralPath (Join-Path $art 'clogo-102.none'))) 'Refresh artwork fetches saved pictures again'
+Check ($te -match 'refreshed from your server' -and (Get-Item -LiteralPath (Join-Path $art 'art-101.jpg')).LastWriteTimeUtc -gt $before -and (Test-Path -LiteralPath (Join-Path $art 'clogo-102.none'))) 'Refresh artwork fetches saved pictures again'
 foreach ($k in 'artBackground', 'artLogo', 'artBanner') { [void](Cmd 65 'settings.set' @{ key = $k; value = $false }) }
 $sr = Cmd 20 'series.open' @{ show = 'Show A'; ep = '1001' }
 Check ($sr -match '"loading":true') 'opening a show fetches it from Plex'

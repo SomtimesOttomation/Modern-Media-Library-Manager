@@ -10,16 +10,18 @@
 #>
 Set-StrictMode -Version 2.0
 # each server kind's module, loaded here so this layer can reach it wherever it is imported (host or worker)
-foreach ($m0 in @('MMLM.Library.psm1', 'MMLM.Plex.psm1')) { Import-Module (Join-Path $PSScriptRoot $m0) -DisableNameChecking }
+foreach ($m0 in @('MMLM.Library.psm1', 'MMLM.Plex.psm1', 'MMLM.Jellyfin.psm1')) { Import-Module (Join-Path $PSScriptRoot $m0) -DisableNameChecking }
 
 $script:ServerKinds = [ordered]@{
-    plex = @{ Name = 'Plex' }
+    plex     = @{ Name = 'Plex' }
+    jellyfin = @{ Name = 'Jellyfin' }
 }
 
 function Set-MmlmServerContext {
     # Hands the shared context (traffic counters, progress, settings) to every server kind's module.
     param([hashtable]$Values)
     Set-MmlmPlexContext -Values $Values
+    Set-MmlmJellyfinContext -Values $Values
 }
 function Get-MmlmServerKinds { @($script:ServerKinds.Keys) }
 function Get-MmlmServerName {
@@ -33,7 +35,7 @@ function New-MmlmServer {
     if (-not $script:ServerKinds.Contains($Kind)) { throw ('Unknown media server kind: {0}.' -f $Kind) }
     $name = Get-MmlmServerName $Kind
     if (-not $BaseUrl) { throw ('No {0} server address is set yet. Add it in Settings.' -f $name) }
-    if (-not $Token) { throw ('No {0} token is saved yet. Add it in Settings.' -f $name) }
+    if (-not $Token) { throw ('No {0} {1} is saved yet. Add it in Settings.' -f $name, $(if ($Kind -eq 'jellyfin') { 'API key' } else { 'token' })) }
     @{ Kind = $Kind; Name = $name; BaseUrl = $BaseUrl; Token = $Token }
 }
 function Assert-MmlmServer {
@@ -50,7 +52,8 @@ function Invoke-MmlmServerScan {
     param($Server, [bool]$Movies, [bool]$Shows, [bool]$Rebuild, [bool]$DetectFel, $Prior)
     Assert-MmlmServer $Server
     switch ([string]$Server.Kind) {
-        'plex' { Invoke-MmlmPlexScan -BaseUrl $Server.BaseUrl -Token $Server.Token -Movies $Movies -Shows $Shows -Rebuild $Rebuild -DetectFel $DetectFel -Prior $Prior }
+        'plex'     { Invoke-MmlmPlexScan -BaseUrl $Server.BaseUrl -Token $Server.Token -Movies $Movies -Shows $Shows -Rebuild $Rebuild -DetectFel $DetectFel -Prior $Prior }
+        'jellyfin' { Invoke-MmlmJellyfinScan -BaseUrl $Server.BaseUrl -Token $Server.Token -Movies $Movies -Shows $Shows -Rebuild $Rebuild -DetectFel $DetectFel -Prior $Prior }
     }
 }
 
@@ -59,15 +62,23 @@ function Save-MmlmServerArtwork {
     param($Server, $Record, [string]$Kind, [string]$Folder, [switch]$Retry, [switch]$Force)
     Assert-MmlmServer $Server
     switch ([string]$Server.Kind) {
-        'plex' { Save-MmlmPlexArtwork -BaseUrl $Server.BaseUrl -Token $Server.Token -Thumb ([string]$Record.PlexThumb) -Kind $Kind -Folder $Folder -Retry:$Retry -Force:$Force }
+        'plex'     { Save-MmlmPlexArtwork -BaseUrl $Server.BaseUrl -Token $Server.Token -Thumb ([string]$Record.PlexThumb) -Kind $Kind -Folder $Folder -Retry:$Retry -Force:$Force }
+        'jellyfin' { Save-MmlmJellyfinArtwork -BaseUrl $Server.BaseUrl -Token $Server.Token -Thumb ([string]$Record.PlexThumb) -Kind $Kind -Folder $Folder -Retry:$Retry -Force:$Force }
     }
 }
 function Get-MmlmServerArtworkKey {
     # What identifies a title's pictures on the server (an episode shares its show's), so each is fetched once.
     param($Server, $Record)
     switch ([string]$Server.Kind) {
-        'plex' { [string]$Record.PlexThumb }
+        default { [string]$Record.PlexThumb }
     }
+}
+function Get-MmlmArtworkFileId {
+    # The id in a title's artwork file names (art-<id>.jpg): Plex's number, or 'jf' + Jellyfin's item id. From the
+    # record's thumb alone, so the page export needs no server.
+    param([string]$Thumb)
+    if ($Thumb -match '^/library/metadata/(\d+)(/|$)') { return $Matches[1] }
+    Get-MmlmJellyfinArtworkId $Thumb
 }
 
 function Sync-MmlmServerArtwork {
@@ -101,13 +112,23 @@ function Sync-MmlmServerArtwork {
     $res
 }
 
+function Test-MmlmServer {
+    # Settings > Servers > Test: the server's name, version and its movie / TV libraries.
+    param($Server)
+    Assert-MmlmServer $Server
+    switch ([string]$Server.Kind) {
+        'plex'     { [ordered]@{ name = 'Plex'; version = ''; libraries = @(Get-MmlmPlexSections -BaseUrl $Server.BaseUrl -Token $Server.Token | ForEach-Object { [ordered]@{ name = [string]$_.Title; type = [string]$_.Type } }) } }
+        'jellyfin' { Get-MmlmJellyfinInfo -BaseUrl $Server.BaseUrl -Token $Server.Token }
+    }
+}
 function Get-MmlmServerSeries {
     # One show's page (seasons, episodes with stills and watched marks, cast, related shows), pictures saved under
     # $ImageFolder. Returns @{ Key = <the show's key on the server>; Data = <the page's JSON object> }.
     param($Server, [string]$ShowKey, [string]$EpKey, [string]$ImageFolder, $Sync)
     Assert-MmlmServer $Server
     switch ([string]$Server.Kind) {
-        'plex' { Get-MmlmPlexSeries -BaseUrl $Server.BaseUrl -Token $Server.Token -ShowKey $ShowKey -EpKey $EpKey -ImageFolder $ImageFolder -Sync $Sync }
+        'plex'     { Get-MmlmPlexSeries -BaseUrl $Server.BaseUrl -Token $Server.Token -ShowKey $ShowKey -EpKey $EpKey -ImageFolder $ImageFolder -Sync $Sync }
+        'jellyfin' { throw 'The full series view (episode pictures, cast, related shows) for Jellyfin comes in a later update. The posters and episode list from the scan are all here.' }
     }
 }
 
@@ -122,6 +143,8 @@ Export-ModuleMember -Function @(
     'Invoke-MmlmServerScan',
     'Save-MmlmServerArtwork',
     'Get-MmlmServerArtworkKey',
+    'Get-MmlmArtworkFileId',
+    'Test-MmlmServer',
     'Sync-MmlmServerArtwork',
     'Get-MmlmServerSeries'
 )

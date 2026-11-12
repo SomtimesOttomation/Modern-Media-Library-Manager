@@ -17,6 +17,10 @@
       "terms": "https://www.plex.tv/about/privacy-legal/plex-terms-of-service/"
     },
     {
+      "name": "Your own Jellyfin server (scans)",
+      "terms": "https://jellyfin.org/docs/general/about/"
+    },
+    {
       "name": "TMDB (Fetch info, with your own key; only when you ask)",
       "terms": "https://www.themoviedb.org/api-terms-of-use"
     },

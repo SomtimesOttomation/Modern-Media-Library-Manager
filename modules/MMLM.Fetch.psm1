@@ -153,6 +153,54 @@ function Find-MmlmTmdbMovieId {
     return ''
 }
 
+function Invoke-MmlmShowStatusFetch {
+    # TV Shows > Fetch info: whether each show is still running, from TMDB (your key). One request per show, using the show's
+    # TMDB id from Plex, or a title + year search when Plex has none. Saved in $StorePath (show name -> status), which the
+    # page reads; shows already known as ended are skipped unless -Overwrite (an ended show does not come back often).
+    param([object[]]$Records, [int[]]$Indexes, [string]$TmdbKey, [string]$StorePath, [bool]$Overwrite)
+    $headers = @{}; $keyQ = ''
+    if ($TmdbKey.Length -gt 60) { $headers['Authorization'] = 'Bearer ' + $TmdbKey } else { $keyQ = '&api_key=' + [Uri]::EscapeDataString($TmdbKey) }
+    $store = [ordered]@{}
+    if (Test-Path -LiteralPath $StorePath) {
+        try { $o = Get-Content -LiteralPath $StorePath -Raw -Encoding UTF8 | ConvertFrom-Json; foreach ($p in $o.PSObject.Properties) { $store[$p.Name] = $p.Value } } catch { }
+    }
+    $shows = [ordered]@{}
+    foreach ($i in $Indexes) {
+        $r = $Records[$i]; $name = [string]$r.Show
+        if (-not $name -or $shows.Contains($name)) { continue }
+        $shows[$name] = @{ Tmdb = [string]$r.TMDBID; Year = [int]$r.Year }
+    }
+    $done = 0; $ended = 0; $going = 0; $miss = 0; $n = 0
+    foreach ($name in @($shows.Keys)) {
+        if (Test-MmlmScanCancelled) { break }
+        $n++
+        Set-MmlmProgress -Text ('Show status {0} of {1}: {2}' -f $n, $shows.Count, $name) -Value $n -Max $shows.Count
+        $old = $store[$name]
+        if (-not $Overwrite -and $null -ne $old -and [string]$old.state -eq 'Ended') { continue }
+        $id = $shows[$name].Tmdb
+        if (-not $id) {
+            $q = 'https://api.themoviedb.org/3/search/tv?query=' + [Uri]::EscapeDataString(($name -replace '\s*\(\d{4}\)\s*$', '')) + '&include_adult=false'
+            $f = Invoke-MmlmJsonGet -Url ($q + $keyQ) -Headers $headers
+            Start-Sleep -Milliseconds 250
+            $want = Get-MmlmTitleKey $name
+            $hit = @($f.results) | Where-Object { (Get-MmlmTitleKey ([string]$_.name)) -eq $want -or (Get-MmlmTitleKey ([string]$_.original_name)) -eq $want } | Select-Object -First 1
+            if ($hit) { $id = [string]$hit.id }
+        }
+        if (-not $id) { $miss++; continue }
+        $d = Invoke-MmlmJsonGet -Url ('https://api.themoviedb.org/3/tv/' + $id + '?language=en-US' + $keyQ) -Headers $headers
+        Start-Sleep -Milliseconds 250
+        if (-not $d -or -not [string]$d.status) { $miss++; continue }
+        $st = [string]$d.status                                   # Returning Series, In Production, Planned, Pilot, Ended, Canceled
+        $state = $(if ($st -eq 'Ended' -or $st -eq 'Canceled') { 'Ended' } else { 'Ongoing' })
+        if ($state -eq 'Ended') { $ended++ } else { $going++ }
+        $store[$name] = [ordered]@{ state = $state; tmdb = $st; lastAir = [string]$d.last_air_date; tmdbId = $id; at = (Get-Date).ToString('yyyy-MM-dd') }
+        $done++
+        if (($done % 20) -eq 0) { $store | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $StorePath -Encoding UTF8 }
+    }
+    $store | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $StorePath -Encoding UTF8
+    ('Show status: {0} looked up ({1} ongoing, {2} ended){3}.' -f $done, $going, $ended, $(if ($miss) { ", $miss not found on TMDB" } else { '' }))
+}
+
 function Invoke-MmlmMetadataScrape {
     # Fills Year, Genre, certification, rating, studio, director, Rotten Tomatoes critic score and box office for the given titles.
     param([object[]]$Records, [int[]]$Indexes, [string]$TmdbKey, [string]$OmdbKey, [bool]$Overwrite, [string]$DataFolder, [string]$StorePath)
@@ -304,5 +352,6 @@ Export-ModuleMember -Function @(
     'Add-MmlmFetchDetail',
     'Get-MmlmTitleKey',
     'Find-MmlmTmdbMovieId',
-    'Invoke-MmlmMetadataScrape'
+    'Invoke-MmlmMetadataScrape',
+    'Invoke-MmlmShowStatusFetch'
 )

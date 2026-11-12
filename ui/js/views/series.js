@@ -77,6 +77,8 @@ export function mount(ctx) {
     if (!local.length) { root.innerHTML = `<div class="state"><h2>${esc(name)}</h2><p>This show is not in your library (any more).</p><p><a class="btn" href="#/tv">Back to TV Shows</a></p></div>`; return; }
     const sum = showSummary(local);
     const P = plexByShow.get(name);
+    // Ongoing or Ended: from TV Shows > Fetch info (TMDB); unknown until it has been fetched for this show
+    const status = S.state.showStatus[name];
     // seasons: Plex's list when we have it (posters, watched counts), else the library's
     const seasons = P ? P.seasons.slice().sort((a, b) => (a.index === 0) - (b.index === 0) || a.index - b.index)
       : sum.seasons.map(([n, list]) => ({ index: n, title: n === 0 ? 'Specials' : `Season ${n}`, episodes: list.length, poster: '' }));
@@ -107,11 +109,12 @@ export function mount(ctx) {
           ${logoOrTitle(local.find((e) => e.Logo) || first, P ? P.title || name : name, 'h1')}
           <h2>${cur ? esc(cur.title || (cur.index === 0 ? 'Specials' : 'Season ' + cur.index)) : ''}</h2>
           <div class="sv-meta">${starHtml(P ? P.rating || P.audienceRating : first.Rating)}<span>${[years, P ? P.rated : first.MPAARating, P ? P.studio : first.Studio].filter(Boolean).map(esc).join(' · ')}</span></div>
-          <div class="sv-strip"><button class="edge l" type="button" data-scroll="seasons" data-dir="-1" aria-label="Earlier seasons" hidden>\u2039</button><div class="sv-seasons hrow" data-row="seasons" role="tablist">${seasons.map((s) => `<button type="button" role="tab" data-season="${s.index}" class="${s.index === state.season ? 'on' : ''}" aria-selected="${s.index === state.season}"><b>${esc(s.index === 0 ? 'Specials' : 'Season ' + s.index)}</b><small>${s.episodes} episode${s.episodes === 1 ? '' : 's'}${P && s.watched ? ` · ${s.watched} watched` : ''}</small></button>`).join('')}</div><button class="edge r" type="button" data-scroll="seasons" data-dir="1" aria-label="Later seasons" hidden>\u203a</button></div>
+          <div class="sv-strip"><button class="edge l" type="button" data-scroll="seasons" data-dir="-1" aria-label="Earlier seasons" hidden>\u2039</button><div class="sv-seasons hrow" data-row="seasons" role="tablist">${seasons.map((s) => `<button type="button" role="tab" data-season="${s.index}" class="${s.index === state.season ? 'on' : ''}" aria-selected="${s.index === state.season}"><b>${esc(s.index === 0 ? 'Specials' : 'Season ' + s.index)}</b><small>${s.episodes} episode${s.episodes === 1 ? '' : 's'}${P && s.watched ? ` · ${s.watched} watched` : ''}</small></button>`).join('')}${status?.state === 'Ended' ? `<span class="sv-ended" title="${esc(status.tmdb === 'Canceled' ? 'Cancelled' : 'Ended')}${status.lastAir ? ' · last aired ' + esc(status.lastAir) : ''}"><b>Ended</b><small>${status.tmdb === 'Canceled' ? 'cancelled' : 'no more seasons'}</small></span>` : ''}</div><button class="edge r" type="button" data-scroll="seasons" data-dir="1" aria-label="Later seasons" hidden>\u203a</button></div>
           <div class="sv-row">
             <div class="sv-info">
               <h4>Show</h4>
               <dl>
+                <dt>Status</dt><dd${status ? ` class="st-${status.state === 'Ended' ? 'ended' : 'on'}"` : ''} title="${status ? esc(`TMDB: ${status.tmdb}${status.lastAir ? `, last aired ${status.lastAir}` : ''}`) : 'Not looked up yet: Tools > Fetch info on TV Shows'}">${status ? esc(status.state) : '<small>Unknown</small>'}</dd>
                 <dt>Seasons</dt><dd>${seasons.filter((s) => s.index > 0).length || seasons.length}</dd>
                 <dt>Episodes</dt><dd>${local.length}${P && P.episodes.length !== local.length ? ` <small>(${P.episodes.length} on Plex)</small>` : ''}</dd>
                 <dt>Watched</dt><dd>${watchedAll} of ${P ? P.episodes.length : local.length}</dd>
@@ -171,12 +174,13 @@ export function mount(ctx) {
   };
   const onResize = () => arrowsInit();
   window.addEventListener('resize', onResize);
-  // A click beside the card (not on it, the bar or a dialog) closes the series view: back to the posters.
+  // A click beside the card (not on it or a dialog) closes the series view, back to the view it was opened from (Posters,
+  // Clear, Banners, Grid). The empty parts of the top bar count as beside it; its buttons, search and links do not.
   const outside = (e) => {
     if (e.button !== 0 || !root.isConnected) return;
-    if (e.target.closest('.series, #chrome, #overlay-root, #toasts, #sizepop, .wgrip')) return;
+    if (e.target.closest('.series, #overlay-root, #toasts, #sizepop, .wgrip')) return;
+    if (e.target.closest('#chrome') && e.target.closest('#navpill, button, a, input, select, label, .haltbar, .syncbar, [role="button"]')) return;
     if (!e.target.closest('#frame, #app') && e.target !== document.body && e.target !== document.documentElement) return;
-    S.saveSettings({ tvView: 'posters' });
     location.hash = '#/tv';
   };
   document.addEventListener('click', outside);

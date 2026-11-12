@@ -164,6 +164,7 @@ export function mount(ctx) {
         const fits = row.scrollWidth <= row.clientWidth + 2;
         const atL = row.scrollLeft <= 2, atR = row.scrollLeft + row.clientWidth >= row.scrollWidth - 2;
         const grp = root.querySelector(`[data-arrows="${k}"]`); if (grp) grp.hidden = fits;
+        row.classList.toggle('scrolls', !fits);
         btns.forEach((b) => {
           const left = b.dataset.dir === '-1';
           if (b.classList.contains('edge')) b.hidden = fits || (left ? atL : atR);
@@ -171,7 +172,11 @@ export function mount(ctx) {
         });
       };
       row.onscroll = set; set();
+      dragScroll(row);
     });
+    // the season being shown starts in view (a show opened at season 10 of 12 shows season 10, not 1 to 4)
+    const on = root.querySelector('.sv-seasons button.on');
+    if (on) { const r = on.parentElement; if (on.offsetLeft < r.scrollLeft || on.offsetLeft + on.offsetWidth > r.scrollLeft + r.clientWidth) r.scrollLeft = on.offsetLeft - (r.clientWidth - on.offsetWidth) / 2; }
   };
   const onResize = () => arrowsInit();
   window.addEventListener('resize', onResize);
@@ -222,4 +227,36 @@ export function mount(ctx) {
   plexByShow.has(srvKey(name)) ? draw() : (draw(), (eps().length && !S.state.halted ? fetchPlex(false) : null));
   ctx.redraw = draw;
   return () => { document.body.classList.remove('series-open'); window.removeEventListener('resize', onResize); document.removeEventListener('click', outside); if (typeof off === 'function') off(); };
+}
+
+// Side-scrolling rows (seasons, cast, related shows): the mouse wheel scrolls them sideways while there is more to see
+// that way, and click-and-drag scrolls them. A drag of more than a few pixels does not count as a click on what is under it.
+function dragScroll(row) {
+  if (row.dataset.drag) return;
+  row.dataset.drag = '1';
+  row.addEventListener('wheel', (e) => {
+    if (e.ctrlKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;           // zoom, or a trackpad already going sideways
+    const max = row.scrollWidth - row.clientWidth;
+    if (max <= 2) return;
+    const d = e.deltaMode === 1 ? e.deltaY * 32 : e.deltaY;
+    if ((d < 0 && row.scrollLeft <= 0) || (d > 0 && row.scrollLeft >= max - 1)) return;   // at the end: let the page scroll
+    e.preventDefault();
+    row.scrollLeft += d;
+  }, { passive: false });
+  let start = null, moved = false;
+  row.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || e.pointerType === 'touch' || row.scrollWidth <= row.clientWidth + 2) return;
+    start = { x: e.clientX, left: row.scrollLeft, id: e.pointerId }; moved = false;
+  });
+  row.addEventListener('pointermove', (e) => {
+    if (!start || e.pointerId !== start.id) return;
+    const dx = e.clientX - start.x;
+    if (!moved && Math.abs(dx) < 5) return;
+    if (!moved) { moved = true; row.setPointerCapture(e.pointerId); row.classList.add('dragging'); }
+    row.scrollLeft = start.left - dx;
+  });
+  const end = () => { if (!start) return; start = null; row.classList.remove('dragging'); };
+  row.addEventListener('pointerup', end); row.addEventListener('pointercancel', end);
+  row.addEventListener('click', (e) => { if (moved) { e.stopPropagation(); e.preventDefault(); moved = false; } }, true);
+  row.addEventListener('dragstart', (e) => e.preventDefault());                  // no ghost image when dragging a picture
 }

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.13.1
+
+**Bug/Fix**
+- DashLauncher refused to load the module after v0.13.0: a data source name in dash.json was over 80 characters. Shortened, and the tests now check dash.json the way the launcher does.
+
 ## 0.13.0
 
 **Feature**

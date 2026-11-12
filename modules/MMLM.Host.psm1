@@ -45,7 +45,7 @@ $script:Series = $null
 $script:Tool = $null
 
 # the data modules, by full path (an already loaded copy is reused)
-foreach ($m0 in @('MMLM.Library.psm1', 'MMLM.Plex.psm1', 'MMLM.Fetch.psm1', 'MMLM.Doctor.psm1')) { Import-Module (Join-Path $PSScriptRoot $m0) -DisableNameChecking }
+foreach ($m0 in @('MMLM.Library.psm1', 'MMLM.Plex.psm1', 'MMLM.Server.psm1', 'MMLM.Fetch.psm1', 'MMLM.Doctor.psm1')) { Import-Module (Join-Path $PSScriptRoot $m0) -DisableNameChecking }
 
 function Write-HostLog {
     # failures go to %LOCALAPPDATA%\<app>\Logs\host.log instead of disappearing (kept under 1 MB)
@@ -68,7 +68,7 @@ function Send-HostEventNow { param([string]$Name, $Data) Send-Page (ConvertTo-Pa
 function Push-HostEvent { param([string]$Name, $Data) if ($script:Out) { $script:Out.Enqueue((ConvertTo-PageJson ([ordered]@{ event = $Name; data = $Data }))) } }
 
 function Get-HostModuleFiles {
-    @('MMLM.Library.psm1', 'MMLM.Plex.psm1', 'MMLM.Fetch.psm1', 'MMLM.Doctor.psm1') | ForEach-Object { Join-Path (Join-Path $script:Root 'modules') $_ }
+    @('MMLM.Library.psm1', 'MMLM.Plex.psm1', 'MMLM.Server.psm1', 'MMLM.Fetch.psm1', 'MMLM.Doctor.psm1') | ForEach-Object { Join-Path (Join-Path $script:Root 'modules') $_ }
 }
 
 function Read-HostSettings {
@@ -179,7 +179,7 @@ function Get-SnapshotCount {
 $script:ScanScript = @'
 param($Modules, $Ctx, $Job)
 foreach ($m in $Modules) { Import-Module $m -DisableNameChecking }
-Set-MmlmContext -Values $Ctx; Set-MmlmPlexContext -Values $Ctx; Set-MmlmFetchContext -Values $Ctx
+Set-MmlmContext -Values $Ctx; Set-MmlmServerContext -Values $Ctx; Set-MmlmFetchContext -Values $Ctx
 $S = $Ctx.Sync
 
 function Export-PageLibrary {
@@ -255,7 +255,7 @@ try {
         foreach ($r in [Mmlm.Native.Snapshot]::Load($Job.Snapshot)) { if ($r.PlexKey) { $prior[[string]$r.PlexKey] = $r } }
     }
     $use = $(if ($Job.Rebuild) { @{} } else { $prior })
-    $recs = @(Invoke-MmlmPlexScan -BaseUrl $Job.BaseUrl -Token $Job.Token -Movies (-not $tv) -Shows $tv -Rebuild ([bool]$Job.Rebuild) -DetectFel ([bool]$Job.DetectFel) -Prior $use)
+    $recs = @(Invoke-MmlmServerScan -Server $Job.Server -Movies (-not $tv) -Shows $tv -Rebuild ([bool]$Job.Rebuild) -DetectFel ([bool]$Job.DetectFel) -Prior $use)
     if ($S.Cancel) { $S.Cancelled = $true; return }
     $new = @($recs | Where-Object { -not $prior.ContainsKey([string]$_.PlexKey) })
     Set-MmlmProgress -Text 'Saving...'
@@ -265,7 +265,7 @@ try {
     [Mmlm.Native.Snapshot]::Save([object[]]$recs, $Job.Snapshot, ('{0}|{1}' -f $recs.Count, (Get-Date).ToString('yyyy-MM-dd HH:mm')))
     if (@($Job.ArtKinds).Count -gt 0) {          # Settings > Artwork: fetched like posters, from your Plex server only
         Set-MmlmScanPhase -Lo 0.0 -Hi 1.0
-        try { [void](Sync-MmlmArtwork -Recs $recs -Kinds @($Job.ArtKinds) -Folder (Join-Path $Job.CacheDir 'art') -BaseUrl $Job.BaseUrl -Token $Job.Token -Retry:([bool]$Job.Rebuild)) } catch { }
+        try { [void](Sync-MmlmServerArtwork -Server $Job.Server -Recs $recs -Kinds @($Job.ArtKinds) -Folder (Join-Path $Job.CacheDir 'art') -Retry:([bool]$Job.Rebuild)) } catch { }
     }
     Export-PageLibrary -Recs $recs -Tab $Job.Tab
     # Today-page card: the six most recently added titles (episodes collapse to their show), posters copied into the cache dir
@@ -351,22 +351,27 @@ function Get-LibraryState {
     'stale'
 }
 
+function Get-HostServer {
+    # The media server from Settings, as MMLM.Server describes one (kind, address, decrypted token). Every job that talks
+    # to the server gets it from here. Throws a plain message when something is missing.
+    $set = Read-HostSettings
+    $kind = $(if ($set.PSObject.Properties['ServerKind'] -and [string]$set.ServerKind) { [string]$set.ServerKind } else { 'plex' })
+    $token = ''
+    try { $token = Unprotect-MmlmSecret $set.PlexTokenProtected } catch { Write-HostLog 'token' $_ }
+    # test hook for tests\Test-MmlmHost.ps1 only: honoured only when the host was started with Debug on
+    if ($script:Ctx.Debug -and $env:MMLM_HOST_TEST_TOKEN) { $token = $env:MMLM_HOST_TEST_TOKEN }
+    New-MmlmServer -Kind $kind -BaseUrl ([string]$set.PlexUrl) -Token $token
+}
 function Start-HostScan {
     param([ValidateSet('movies', 'tv')][string]$Tab, [bool]$Rebuild = $false)
     if ($script:ScanPs -and -not $script:Sync.Done) { throw 'A scan is already running.' }
     if ($script:Traffic.Halted) { throw 'Traffic is paused. Resume it first.' }
-    $set = Read-HostSettings
-    if (-not $set.PlexUrl) { throw 'No Plex server address is set yet. Add it in Settings.' }
-    $token = ''
-    try { $token = Unprotect-MmlmPlexToken $set.PlexTokenProtected } catch { Write-HostLog 'token' $_ }
-    # test hook for tests\Test-MmlmHost.ps1 only: honoured only when the host was started with Debug on
-    if ($script:Ctx.Debug -and $env:MMLM_HOST_TEST_TOKEN) { $token = $env:MMLM_HOST_TEST_TOKEN }
-    if (-not $token) { throw 'No Plex token is saved yet. Add it in Settings.' }
+    $server = Get-HostServer
     Stop-HostScan -Wait 0
     $script:Sync = [hashtable]::Synchronized(@{ Text = 'Starting...'; Value = 0; Max = 0; Cancel = $false; Done = $false; Error = $null; PhaseLo = 0.0; PhaseHi = 1.0; Count = 0; New = 0; Cancelled = $false })
     $ctx = New-WorkerContext $script:Sync
     foreach ($d in $ctx.CacheFolder, $ctx.ThumbFolder) { if (-not (Test-Path -LiteralPath $d)) { New-Item -Path $d -ItemType Directory -Force | Out-Null } }
-    $job = @{ Kind = 'scan'; Tab = $Tab; Rebuild = $Rebuild; DetectFel = [bool]$script:PageSettings.detectFel; ArtKinds = @(Get-ArtKinds); BaseUrl = $set.PlexUrl; Token = $token; Snapshot = (Get-SnapshotFile $Tab); CacheDir = $script:CacheDir; Hidden = $script:HiddenFields; MetaStore = $script:MetaStore }
+    $job = @{ Kind = 'scan'; Tab = $Tab; Rebuild = $Rebuild; DetectFel = [bool]$script:PageSettings.detectFel; ArtKinds = @(Get-ArtKinds); Server = $server; Snapshot = (Get-SnapshotFile $Tab); CacheDir = $script:CacheDir; Hidden = $script:HiddenFields; MetaStore = $script:MetaStore }
     $ps = [powershell]::Create()
     [void]$ps.AddScript($script:ScanScript).AddArgument(@(Get-HostModuleFiles)).AddArgument($ctx).AddArgument($job)
     $script:ScanPs = $ps
@@ -513,70 +518,14 @@ function Watch-DropFolder {
 $script:SeriesScript = {
     param($ModuleFiles, $Ctx, $Job)
     foreach ($m in $ModuleFiles) { Import-Module $m -DisableNameChecking }
-    Set-MmlmContext -Values $Ctx; Set-MmlmPlexContext -Values $Ctx
+    Set-MmlmContext -Values $Ctx; Set-MmlmServerContext -Values $Ctx
     $S = $Ctx.Sync
-    $u = $Job.BaseUrl; $t = $Job.Token
-    $tag = { param($n, $c) @($n.SelectNodes($c) | ForEach-Object { $_.GetAttribute('tag') } | Where-Object { $_ }) }
-    $attr = { param($n, $a) [string]$n.GetAttribute($a) }
-    $int = { param($x) $v = 0; [void][int]::TryParse([string]$x, [ref]$v); $v }
     try {
-        $S.Text = 'Finding the show on Plex...'
-        $showKey = [string]$Job.ShowKey
-        if (-not $showKey) {
-            $ep = (Get-MmlmPlexXml -BaseUrl $u -Path ('/library/metadata/' + $Job.EpKey) -Token $t).MediaContainer.SelectSingleNode('Video')
-            if ($null -eq $ep) { throw 'Plex no longer has this episode. Scan TV Shows again.' }
-            $showKey = $ep.GetAttribute('grandparentRatingKey')
-        }
-        $S.Text = 'Reading the show...'
-        $sx = (Get-MmlmPlexXml -BaseUrl $u -Path ('/library/metadata/' + $showKey) -Query @{ includeRelated = 1 } -Token $t).MediaContainer
-        $show = $sx.SelectSingleNode('Directory')
-        if ($null -eq $show) { throw 'Plex did not return the show.' }
-        $seasons = @((Get-MmlmPlexXml -BaseUrl $u -Path ('/library/metadata/' + $showKey + '/children') -Token $t).MediaContainer.SelectNodes('Directory') | Where-Object { $_.GetAttribute('type') -eq 'season' })
-        $S.Text = 'Reading the episodes...'
-        $eps = @((Get-MmlmPlexXml -BaseUrl $u -Path ('/library/metadata/' + $showKey + '/allLeaves') -Token $t).MediaContainer.SelectNodes('Video'))
-        $img = Join-Path $Job.CacheDir 'series\img'
-        if (-not (Test-Path -LiteralPath $img)) { New-Item -ItemType Directory -Path $img -Force | Out-Null }
-        $pic = { param($p, $w, $hgt) $f = Save-MmlmPlexImage -BaseUrl $u -Token $t -ThumbPath $p -Width $w -Height $hgt -Folder $img; if ($f) { 'series/img/' + $f } else { '' } }
-        # cast and related shows from the show page
-        $cast = @(foreach ($r in @($show.SelectNodes('Role') | Select-Object -First 30)) { [ordered]@{ name = & $attr $r 'tag'; role = & $attr $r 'role'; thumb = & $attr $r 'thumb' } })
-        $related = New-Object System.Collections.Generic.List[object]
-        foreach ($hub in @($sx.SelectNodes('Hub') + $show.SelectNodes('Related/Hub'))) {
-            foreach ($d in @($hub.SelectNodes('Directory'))) {
-                if ($related.Count -ge 24 -or (& $attr $d 'type') -ne 'show' -or (& $attr $d 'ratingKey') -eq $showKey) { continue }
-                if (@($related | Where-Object { $_.key -eq (& $attr $d 'ratingKey') }).Count) { continue }
-                $related.Add([ordered]@{ key = & $attr $d 'ratingKey'; title = & $attr $d 'title'; year = & $int (& $attr $d 'year'); seasons = & $int (& $attr $d 'childCount')
-                    unwatched = [Math]::Max(0, (& $int (& $attr $d 'leafCount')) - (& $int (& $attr $d 'viewedLeafCount'))); thumb = & $attr $d 'thumb' })
-            }
-        }
-        # images: posters first (they show at the top), then the episode stills, then faces
-        $total = 1 + $seasons.Count + $eps.Count + $cast.Count + $related.Count; $n = 0
-        $step = { $script:n++; $S.Pct = [int](100 * $script:n / [Math]::Max(1, $total)) }
-        $S.Text = 'Fetching pictures...'
-        $data = [ordered]@{
-            key = $showKey; title = & $attr $show 'title'; year = & $int (& $attr $show 'year'); summary = & $attr $show 'summary'; studio = & $attr $show 'studio'
-            rated = & $attr $show 'contentRating'; rating = & $attr $show 'rating'; audienceRating = & $attr $show 'audienceRating'; genres = @(& $tag $show 'Genre')
-            firstAired = & $attr $show 'originallyAvailableAt'; poster = (& $pic (& $attr $show 'thumb') 300 450); fetchedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm')
-        }
-        & $step
-        $data.seasons = @(foreach ($se in $seasons) {
-            if ($S.Cancel) { break }
-            $o = [ordered]@{ key = & $attr $se 'ratingKey'; index = & $int (& $attr $se 'index'); title = & $attr $se 'title'; episodes = & $int (& $attr $se 'leafCount')
-                watched = & $int (& $attr $se 'viewedLeafCount'); poster = (& $pic (& $attr $se 'thumb') 300 450) }
-            & $step; $o })
-        $data.episodes = @(foreach ($e in $eps) {
-            if ($S.Cancel) { break }
-            $o = [ordered]@{ key = & $attr $e 'ratingKey'; season = & $int (& $attr $e 'parentIndex'); index = & $int (& $attr $e 'index'); title = & $attr $e 'title'
-                summary = & $attr $e 'summary'; aired = & $attr $e 'originallyAvailableAt'; minutes = [int]((& $int (& $attr $e 'duration')) / 60000)
-                watched = ((& $int (& $attr $e 'viewCount')) -gt 0); progress = $(if ((& $int (& $attr $e 'duration')) -gt 0) { [int](100 * (& $int (& $attr $e 'viewOffset')) / (& $int (& $attr $e 'duration'))) } else { 0 })
-                thumb = (& $pic (& $attr $e 'thumb') 400 225) }
-            & $step; $o })
-        $data.cast = @(foreach ($c in $cast) { if ($S.Cancel) { break }; $c.photo = (& $pic $c.thumb 200 200); $c.Remove('thumb'); & $step; $c })
-        $data.related = @(foreach ($r in $related) { if ($S.Cancel) { break }; $r.poster = (& $pic $r.thumb 200 300); $r.Remove('thumb'); & $step; $r })
-        if ($S.Cancel) { $S.Cancelled = $true; return }
-        $dir = Join-Path $Job.CacheDir 'series'
-        $file = Join-Path $dir ($showKey + '.json')
-        [IO.File]::WriteAllText($file, (ConvertTo-Json -InputObject $data -Depth 6 -Compress), (New-Object Text.UTF8Encoding($false)))
-        $S.ShowKey = $showKey
+        $res = Get-MmlmServerSeries -Server $Job.Server -ShowKey ([string]$Job.ShowKey) -EpKey ([string]$Job.EpKey) -ImageFolder (Join-Path $Job.CacheDir 'series\img') -Sync $S
+        if ($S.Cancel -or $null -eq $res) { $S.Cancelled = $true; return }
+        $file = Join-Path (Join-Path $Job.CacheDir 'series') ($res.Key + '.json')
+        [IO.File]::WriteAllText($file, (ConvertTo-Json -InputObject $res.Data -Depth 6 -Compress), (New-Object Text.UTF8Encoding($false)))
+        $S.ShowKey = $res.Key
     }
     catch { $S.Error = $_.Exception.Message }
     finally { $S.Done = $true }
@@ -603,13 +552,10 @@ function Start-HostSeries {
     }
     if ($script:Traffic.Halted) { throw 'Traffic is paused. Resume it first.' }
     if (-not $EpKey -and -not $key) { throw 'This show was not scanned from Plex, so there is nothing more to fetch.' }
-    $set = Read-HostSettings
-    $token = ''
-    try { $token = Unprotect-MmlmPlexToken $set.PlexTokenProtected } catch { Write-HostLog 'token' $_ }
-    if ($script:Ctx.Debug -and $env:MMLM_HOST_TEST_TOKEN) { $token = $env:MMLM_HOST_TEST_TOKEN }
-    if (-not $set.PlexUrl -or -not $token) { throw 'Add your Plex server and token in Settings first.' }
+    $server = $null
+    try { $server = Get-HostServer } catch { throw 'Add your Plex server and token in Settings first.' }
     $sync = [hashtable]::Synchronized(@{ Text = 'Starting...'; Pct = 0; Cancel = $false; Done = $false; Error = $null; Cancelled = $false; ShowKey = ''; Value = 0; Max = 0; PhaseLo = 0.0; PhaseHi = 1.0 })
-    $job = @{ BaseUrl = $set.PlexUrl; Token = $token; EpKey = $EpKey; ShowKey = $key; CacheDir = $script:CacheDir }
+    $job = @{ Server = $server; EpKey = $EpKey; ShowKey = $key; CacheDir = $script:CacheDir }
     $ps = [powershell]::Create()
     [void]$ps.AddScript($script:SeriesScript).AddArgument(@(Get-HostModuleFiles)).AddArgument((New-WorkerContext $sync)).AddArgument($job)
     $script:Series = @{ Ps = $ps; Async = $ps.BeginInvoke(); Sync = $sync; Show = $Show; Last = '' }
@@ -644,7 +590,7 @@ function Get-SeriesEvents {
 $script:ToolScript = {
     param($ModuleFiles, $Ctx, $Job)
     foreach ($m in $ModuleFiles) { Import-Module $m -DisableNameChecking }
-    Set-MmlmContext -Values $Ctx; Set-MmlmPlexContext -Values $Ctx; Set-MmlmFetchContext -Values $Ctx
+    Set-MmlmContext -Values $Ctx; Set-MmlmServerContext -Values $Ctx; Set-MmlmFetchContext -Values $Ctx
     $S = $Ctx.Sync
     try {
         Initialize-MmlmNative
@@ -680,7 +626,7 @@ $script:ToolScript = {
                 # Settings > Artwork was ticked: fetch it now for every scanned tab instead of waiting for the next scan
                 $all = New-Object System.Collections.Generic.List[object]
                 foreach ($snap in @($Job.Snapshots)) { if (Test-Path -LiteralPath $snap) { foreach ($r in [Mmlm.Native.Snapshot]::Load($snap)) { $all.Add($r) } } }
-                $res = Sync-MmlmArtwork -Recs $all.ToArray() -Kinds @($Job.ArtKinds) -Folder (Join-Path $Job.CacheDir 'art') -BaseUrl $Job.BaseUrl -Token $Job.Token -Force:([bool]$Job.Force)
+                $res = Sync-MmlmServerArtwork -Server $Job.Server -Recs $all.ToArray() -Kinds @($Job.ArtKinds) -Folder (Join-Path $Job.CacheDir 'art') -Force:([bool]$Job.Force)
                 $S.Summary = $(if ($res.Stopped) { 'Artwork stopped: Plex did not answer three times in a row. Try again later.' } elseif ($Job.Force) { ('Artwork refreshed from Plex: {0} picture{1}.' -f $res.Saved, $(if ($res.Saved -eq 1) { '' } else { 's' })) } else { ('Artwork: {0} new picture{1}.' -f $res.Saved, $(if ($res.Saved -eq 1) { '' } else { 's' })) })
                 if ($res.Stopped) { $S.Error = $S.Summary }
                 $S.Library = ($res.Saved -gt 0 -or [bool]$Job.Force)
@@ -769,8 +715,8 @@ function Read-HostKeys {
     if (Test-Path -LiteralPath $p) {
         try {
             $j = [IO.File]::ReadAllText($p) | ConvertFrom-Json
-            if ($j.TmdbKeyProtected) { $k.Tmdb = Unprotect-MmlmPlexToken ([string]$j.TmdbKeyProtected) }
-            if ($j.OmdbKeyProtected) { $k.Omdb = Unprotect-MmlmPlexToken ([string]$j.OmdbKeyProtected) }
+            if ($j.TmdbKeyProtected) { $k.Tmdb = Unprotect-MmlmSecret ([string]$j.TmdbKeyProtected) }
+            if ($j.OmdbKeyProtected) { $k.Omdb = Unprotect-MmlmSecret ([string]$j.OmdbKeyProtected) }
         } catch { Write-HostLog 'keys' $_ }
     }
     $k
@@ -781,8 +727,8 @@ function Save-HostKeys {
     $p = Join-Path $script:AppData 'settings.json'
     $o = [ordered]@{}
     if (Test-Path -LiteralPath $p) { try { foreach ($pr in ([IO.File]::ReadAllText($p) | ConvertFrom-Json).PSObject.Properties) { $o[$pr.Name] = $pr.Value } } catch { Write-HostLog 'settings read' $_ } }
-    if ($null -ne $Tmdb) { $o['TmdbKeyProtected'] = $(if ($Tmdb) { Protect-MmlmPlexToken $Tmdb } else { '' }) }
-    if ($null -ne $Omdb) { $o['OmdbKeyProtected'] = $(if ($Omdb) { Protect-MmlmPlexToken $Omdb } else { '' }) }
+    if ($null -ne $Tmdb) { $o['TmdbKeyProtected'] = $(if ($Tmdb) { Protect-MmlmSecret $Tmdb } else { '' }) }
+    if ($null -ne $Omdb) { $o['OmdbKeyProtected'] = $(if ($Omdb) { Protect-MmlmSecret $Omdb } else { '' }) }
     [IO.File]::WriteAllText($p, (ConvertTo-Json -InputObject $o -Depth 6), (New-Object Text.UTF8Encoding($false)))
 }
 function Start-HostTool {
@@ -808,13 +754,7 @@ function Start-HostTool {
         $job.Force = [bool]$a.force          # Settings > Artwork > Refresh artwork: everything again from Plex
         if ($job.ArtKinds.Count -eq 0) { throw 'Tick an artwork option first.' }
         $job.Snapshots = @((Get-SnapshotFile 'movies'), (Get-SnapshotFile 'tv'))
-        $set = Read-HostSettings
-        if (-not $set.PlexUrl) { throw 'No Plex server address is set yet. Add it in Settings.' }
-        $token = ''
-        try { $token = Unprotect-MmlmPlexToken $set.PlexTokenProtected } catch { Write-HostLog 'token' $_ }
-        if ($script:Ctx.Debug -and $env:MMLM_HOST_TEST_TOKEN) { $token = $env:MMLM_HOST_TEST_TOKEN }
-        if (-not $token) { throw 'No Plex token is saved yet. Add it in Settings.' }
-        $job.BaseUrl = $set.PlexUrl; $job.Token = $token
+        $job.Server = Get-HostServer
     }
     if ($kind -eq 'fetch') {
         $k = Read-HostKeys
@@ -1067,7 +1007,7 @@ function Initialize-Dash {
     $script:Out = New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]'
     $script:Fields = Get-HostFields
     $v = @{ AppRoot = $script:Root; AppData = $script:AppData; AppVersion = $script:Version; Traffic = $script:Traffic; Fields = $script:Fields }
-    Set-MmlmContext -Values $v; Set-MmlmPlexContext -Values $v; Set-MmlmFetchContext -Values $v
+    Set-MmlmContext -Values $v; Set-MmlmServerContext -Values $v; Set-MmlmFetchContext -Values $v
     $script:Badge = 0
     $script:Started = Get-Date
     $script:Exports = @{}
@@ -1175,7 +1115,7 @@ $script:Commands = [ordered]@{
             $url = ([string]$a.url).Trim().TrimEnd('/')
             if ($url -and $url -notmatch '^https?://[^\s/]+(:\d+)?$') { throw 'The Plex address looks like http://server:32400' }
             $tok = ([string]$a.token).Trim()
-            if ($tok) { Save-HostPlexSettings -Url $url -TokenProtected (Protect-MmlmPlexToken $tok) } else { Save-HostPlexSettings -Url $url -KeepToken }
+            if ($tok) { Save-HostPlexSettings -Url $url -TokenProtected (Protect-MmlmSecret $tok) } else { Save-HostPlexSettings -Url $url -KeepToken }
             ConvertTo-PageJson (Get-PlexInfo) } }
     'series.open'    = @{ Fetch = $false; Run = {
             # the saved copy when there is one (no network); otherwise a Plex fetch starts and 'series' events follow

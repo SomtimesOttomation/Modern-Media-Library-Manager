@@ -45,7 +45,7 @@ $script:Series = $null
 $script:Tool = $null
 
 # the data modules, by full path (an already loaded copy is reused)
-foreach ($m0 in @('MMLM.Library.psm1', 'MMLM.Plex.psm1', 'MMLM.Fetch.psm1')) { Import-Module (Join-Path $PSScriptRoot $m0) -DisableNameChecking }
+foreach ($m0 in @('MMLM.Library.psm1', 'MMLM.Plex.psm1', 'MMLM.Fetch.psm1', 'MMLM.Doctor.psm1')) { Import-Module (Join-Path $PSScriptRoot $m0) -DisableNameChecking }
 
 function Write-HostLog {
     # failures go to %LOCALAPPDATA%\<app>\Logs\host.log instead of disappearing (kept under 1 MB)
@@ -68,7 +68,7 @@ function Send-HostEventNow { param([string]$Name, $Data) Send-Page (ConvertTo-Pa
 function Push-HostEvent { param([string]$Name, $Data) if ($script:Out) { $script:Out.Enqueue((ConvertTo-PageJson ([ordered]@{ event = $Name; data = $Data }))) } }
 
 function Get-HostModuleFiles {
-    @('MMLM.Library.psm1', 'MMLM.Plex.psm1', 'MMLM.Fetch.psm1') | ForEach-Object { Join-Path (Join-Path $script:Root 'modules') $_ }
+    @('MMLM.Library.psm1', 'MMLM.Plex.psm1', 'MMLM.Fetch.psm1', 'MMLM.Doctor.psm1') | ForEach-Object { Join-Path (Join-Path $script:Root 'modules') $_ }
 }
 
 function Read-HostSettings {
@@ -96,7 +96,8 @@ function Save-HostPlexSettings {
 
 # The page's own settings (theme, view and sort per tab, grid columns), kept apart from the app's settings.json.
 $script:PageDefaults = [ordered]@{ theme = 'system'; updateCheck = $false; moviesView = 'posters'; tvView = 'posters'; moviesSort = 'added'; tvSort = 'title'; moviesSortRev = $false; tvSortRev = $false
-    columns = @(); hideDupes = $false; detectFel = $false; posterScale = 100; widthPreset = 'full'; customWidth = $false; contentWidth = 0
+    columns = @(); hideDupes = $false; detectFel = $false; posterScale = 100; tvScale = 100;
+    doctorFreq = 'weekly'; doctorDay = 0; doctorTime = '03:00'; doctorStyle = 'compact'; doctorChecks = @('unreadable', 'unmatched', 'wrongmatch', 'gaps', 'poster', 'dupes', 'av1'); widthPreset = 'full'; customWidth = $false; contentWidth = 0
     artLogo = $false; artBackground = $false; artBanner = $false
     fxLeft = 'auto'; fxRight = 'auto'; fxMotion = 'full'; vsStyle = 'arcade'; cmpTally = $true; cmpInflation = $false; cmpWalkover = $true; cmpImdb = $true }
 function Read-PageSettings {
@@ -130,6 +131,12 @@ function Set-PageSetting {
         'fxRight'     { $fx -contains [string]$Value }
         'fxMotion'    { @('still', 'calm', 'full') -contains [string]$Value }
         'vsStyle'     { @('arcade', 'plain', 'off') -contains [string]$Value }
+        'doctorFreq'  { @('off', 'weekly', 'biweekly', 'monthly') -contains [string]$Value }
+        'doctorDay'   { $n = 0; if ([int]::TryParse([string]$Value, [ref]$n) -and $n -ge 0 -and $n -le 6) { $Value = $n; $true } else { $false } }
+        'doctorTime'  { [string]$Value -match '^([01]\d|2[0-3]):[0-5]\d$' }
+        'doctorStyle' { @('compact', 'verbose') -contains [string]$Value }
+        'doctorChecks' { $ok = @(Get-MmlmDoctorCheckIds); $Value = @(@($Value) | ForEach-Object { [string]$_ } | Where-Object { $ok -contains $_ } | Select-Object -Unique); $true }
+        'tvScale'     { $n = 0; if ([int]::TryParse([string]$Value, [ref]$n) -and $n -ge 50 -and $n -le 200) { $Value = $n; $true } else { $false } }
         'posterScale' { $n = 0; if ([int]::TryParse([string]$Value, [ref]$n) -and $n -ge 50 -and $n -le 200) { $Value = $n; $true } else { $false } }
         'contentWidth' { $n = 0; if ([int]::TryParse([string]$Value, [ref]$n) -and $n -ge 0 -and $n -le 20000) { $Value = $n; $true } else { $false } }
         'widthPreset' { @('full', '16:9', '21:9', '32:9') -contains [string]$Value }
@@ -651,6 +658,22 @@ $script:ToolScript = {
         $outDir = $(if ($outDir) { Join-Path $outDir 'Modern Media Library Manager' } else { Join-Path $Ctx.AppData 'Exports' })
         $safe = (([string]$Job.Name) -replace '[^A-Za-z0-9 ._()-]', '').Trim(); if (-not $safe) { $safe = 'Library' }
         switch ($Job.Kind) {
+            'doctor' {
+                # PlexDoctor: a read-only check-up of what the last scans saw; the report goes to AppData\PlexDoctor\reports
+                $mv = @(); $ep = @()
+                if (Test-Path -LiteralPath $Job.Snapshots[0]) { $mv = @([Mmlm.Native.Snapshot]::Load($Job.Snapshots[0])) }
+                if (Test-Path -LiteralPath $Job.Snapshots[1]) { $ep = @([Mmlm.Native.Snapshot]::Load($Job.Snapshots[1])) }
+                if (-not (Test-Path -LiteralPath $Job.ReportDir)) { New-Item -ItemType Directory -Force -Path $Job.ReportDir | Out-Null }
+                $old = @(Get-ChildItem -LiteralPath $Job.ReportDir -Filter 'report-*.json' -File | Sort-Object Name)
+                $prev = $null
+                if ($old.Count) { try { $prev = [IO.File]::ReadAllText($old[-1].FullName) | ConvertFrom-Json } catch { } }
+                $rep = Invoke-MmlmDoctor -Movies $mv -Episodes $ep -Checks @($Job.Checks) -Previous $prev -Late $Job.Late -Notes @($Job.Notes)
+                $file = Join-Path $Job.ReportDir ('report-{0}.json' -f (Get-Date).ToString('yyyyMMdd-HHmmss'))
+                [IO.File]::WriteAllText($file, ($rep | ConvertTo-Json -Depth 6), (New-Object Text.UTF8Encoding $false))
+                foreach ($f in @($old | Select-Object -SkipLast 9)) { Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue }   # keep the last 10
+                $S.Path = $file
+                $S.Summary = $(if ($rep.issues.Count) { ('PlexDoctor found {0} issue{1}.' -f $rep.issues.Count, $(if ($rep.issues.Count -eq 1) { '' } else { 's' })) } else { 'PlexDoctor: no issues found.' })
+            }
             'artwork' {
                 # Settings > Artwork was ticked: fetch it now for every scanned tab instead of waiting for the next scan
                 $all = New-Object System.Collections.Generic.List[object]
@@ -763,14 +786,21 @@ function Save-HostKeys {
 function Start-HostTool {
     param($A)
     $kind = [string]$A.kind
-    if (@('fetch', 'fel', 'csv', 'html', 'artwork') -notcontains $kind) { throw 'Unknown tool.' }
+    if (@('fetch', 'fel', 'csv', 'html', 'artwork', 'doctor') -notcontains $kind) { throw 'Unknown tool.' }
     if ($script:Tool -and -not $script:Tool.Sync.Done) { throw 'Another tool is still running. Wait for it or cancel it.' }
     $tab = $(if ([string]$A.tab -eq 'tv') { 'tv' } else { 'movies' })
+    if ($kind -eq 'doctor' -and -not (Test-Path -LiteralPath (Get-SnapshotFile 'movies')) -and (Test-Path -LiteralPath (Get-SnapshotFile 'tv'))) { $tab = 'tv' }
     if ($kind -ne 'artwork' -and -not (Test-Path -LiteralPath (Get-SnapshotFile $tab))) { throw 'Scan this tab first.' }
     if (@('fetch', 'fel', 'artwork') -contains $kind -and $script:Traffic.Halted) { throw 'Traffic is paused. Resume it first.' }
     $job = @{ Kind = $kind; Tab = $tab; Snapshot = (Get-SnapshotFile $tab); CacheDir = $script:CacheDir; Hidden = $script:HiddenFields; MetaStore = $script:MetaStore
         Rids = @(@($A.rids) | ForEach-Object { [string]$_ } | Where-Object { $_ -match '^(p|h):' }); Columns = @(@($A.columns) | ForEach-Object { [string]$_ })
         Name = [string]$A.name; Library = $(if ($tab -eq 'tv') { 'TV Shows' } else { 'Movies' }); Overwrite = [bool]$A.overwrite; DataFolder = (Join-Path $script:AppData 'datasets') }
+    if ($kind -eq 'doctor') {
+        $job.Snapshots = @((Get-SnapshotFile 'movies'), (Get-SnapshotFile 'tv'))
+        $job.Checks = @($script:PageSettings.doctorChecks)
+        $job.ReportDir = Join-Path $script:AppData 'PlexDoctor\reports'
+        $job.Late = [string]$A.late; $job.Notes = @($A.notes)
+    }
     if ($kind -eq 'artwork') {
         $job.ArtKinds = @(Get-ArtKinds)
         $job.Force = [bool]$a.force          # Settings > Artwork > Refresh artwork: everything again from Plex
@@ -797,6 +827,112 @@ function Start-HostTool {
     $script:Tool = @{ Ps = $ps; Async = $ps.BeginInvoke(); Sync = $sync; Kind = $kind; Tab = $tab; Last = '' }
     $true
 }
+# ---------------------------------------------------------------- PlexDoctor (Settings > PlexDoctor)
+# A check-up: a scan of each library that has been scanned before (so it sees what Plex has now), then the read-only
+# checks (MMLM.Doctor) as a tool run. On a schedule (only while MMLM is open; a missed one runs when it is next opened)
+# or from Run check-up now. State and the last 10 reports live in AppData\PlexDoctor.
+$script:Doctor = $null
+$script:DoctorTick = [datetime]::MinValue
+$script:LastScanResult = $null
+function Get-DoctorDir { Join-Path $script:AppData 'PlexDoctor' }
+function Read-DoctorState {
+    $p = Join-Path (Get-DoctorDir) 'state.json'
+    $o = [ordered]@{ lastSlot = ''; lastRun = ''; unseen = $false; schedule = '' }
+    if (Test-Path -LiteralPath $p) { try { $j = [IO.File]::ReadAllText($p) | ConvertFrom-Json; foreach ($k in @($o.Keys)) { if ($null -ne $j.$k) { $o[$k] = $j.$k } } } catch { Write-HostLog 'doctor state' $_ } }
+    $o
+}
+function Save-DoctorState {
+    param($State)
+    $d = Get-DoctorDir; if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
+    [IO.File]::WriteAllText((Join-Path $d 'state.json'), ($State | ConvertTo-Json), (New-Object Text.UTF8Encoding $false))
+}
+function Get-DoctorScheduleKey { $p = $script:PageSettings; '{0}|{1}|{2}' -f $p.doctorFreq, $p.doctorDay, $p.doctorTime }
+function Get-LatestDoctorReport {
+    $d = Join-Path (Get-DoctorDir) 'reports'
+    if (-not (Test-Path -LiteralPath $d)) { return $null }
+    $f = @(Get-ChildItem -LiteralPath $d -Filter 'report-*.json' -File | Sort-Object Name | Select-Object -Last 1)
+    if ($f.Count) { $f[0].FullName } else { $null }
+}
+function Start-HostDoctor {
+    param([string]$Late = '', [switch]$Manual)
+    if ($script:Doctor) { throw 'A check-up is already running.' }
+    $have = @(@('movies', 'tv') | Where-Object { Test-Path -LiteralPath (Get-SnapshotFile $_) })
+    if ($have.Count -eq 0) { throw 'Scan Movies or TV Shows first: PlexDoctor checks what the scans saw.' }
+    $script:Doctor = @{ Queue = [System.Collections.Generic.List[string]]$have; Scanning = ''; Late = $Late; Notes = (New-Object System.Collections.Generic.List[string]); Manual = [bool]$Manual; Checking = $false }
+    Push-HostEvent 'doctor' ([ordered]@{ running = $true; text = 'Starting the check-up...' })
+    $true
+}
+function Step-HostDoctor {
+    # every poll: the schedule (twice a minute), then the next step of a running check-up
+    $now = Get-Date
+    if (-not $script:Doctor -and ($now - $script:DoctorTick).TotalSeconds -ge 30) {
+        $script:DoctorTick = $now
+        $p = $script:PageSettings
+        if ($p -and [string]$p.doctorFreq -ne 'off') {
+            $st = Read-DoctorState
+            $slot = Get-MmlmDoctorSlot -Now $now -Freq ([string]$p.doctorFreq) -Day ([int]$p.doctorDay) -Time ([string]$p.doctorTime)
+            if (-not $st.lastSlot -or $st.schedule -ne (Get-DoctorScheduleKey)) {
+                # first time, or the schedule was changed: start counting from now (no surprise run)
+                $st.lastSlot = $slot.ToString('s'); $st.schedule = (Get-DoctorScheduleKey); Save-DoctorState $st
+            }
+            elseif (-not $script:Traffic.Halted -and (Test-MmlmDoctorDue -Now $now -Freq ([string]$p.doctorFreq) -Day ([int]$p.doctorDay) -Time ([string]$p.doctorTime) -Last ([datetime]$st.lastSlot))) {
+                $late = $(if (($now - $slot).TotalMinutes -gt 15) { 'Ran late: missed ' + $slot.ToString('dddd MMM d, h:mm tt') } else { '' })
+                $st.lastSlot = $slot.ToString('s'); Save-DoctorState $st
+                try { [void](Start-HostDoctor -Late $late) } catch { Write-HostLog 'doctor schedule' $_ }
+            }
+        }
+    }
+    $d = $script:Doctor
+    if (-not $d -or $d.Checking) { return }
+    if ($script:ScanPs -and -not $script:Sync.Done) { return }                   # a scan is running (ours or yours): wait
+    if ($d.Scanning) {
+        $res = $script:LastScanResult
+        if ($res -and $res.Tab -eq $d.Scanning -and ($res.Error -or $res.Cancelled)) { $d.Notes.Add(('{0} could not be scanned ({1}); checked the last scan instead.' -f $(if ($d.Scanning -eq 'tv') { 'TV Shows' } else { 'Movies' }), $(if ($res.Error) { $res.Error } else { 'cancelled' }))) }
+        $d.Scanning = ''
+    }
+    if ($d.Queue.Count) {
+        $tab = $d.Queue[0]; $d.Queue.RemoveAt(0)
+        if ($script:Traffic.Halted) { $d.Notes.Add('Traffic was paused, so nothing was scanned; checked the last scans.'); $d.Queue.Clear(); return }
+        try { $script:LastScanResult = $null; [void](Start-HostScan -Tab $tab); $d.Scanning = $tab }
+        catch { $d.Notes.Add(('{0} could not be scanned ({1}); checked the last scan instead.' -f $(if ($tab -eq 'tv') { 'TV Shows' } else { 'Movies' }), $_.Exception.Message)) }
+        return
+    }
+    if ($script:Tool -and -not $script:Tool.Sync.Done) { return }                # another tool is running: wait
+    $d.Checking = $true
+    try { [void](Start-HostTool @{ kind = 'doctor'; late = $d.Late; notes = @($d.Notes) }) }
+    catch { $script:Doctor = $null; Push-HostEvent 'doctor' ([ordered]@{ running = $false; done = $true; error = $_.Exception.Message }) }
+}
+function Complete-HostDoctor {
+    param($Err, [bool]$Cancelled)
+    $script:Doctor = $null
+    $sum = Get-DoctorSummary
+    $st = Read-DoctorState
+    $st.lastRun = (Get-Date).ToString('s')
+    $st.unseen = [bool]($sum -and $sum.issues -gt 0 -and -not $Err -and -not $Cancelled)
+    Save-DoctorState $st
+    Push-HostEvent 'doctor' ([ordered]@{ running = $false; done = $true; error = $Err; cancelled = $Cancelled; summary = $sum })
+}
+function Get-DoctorSummary {
+    $f = Get-LatestDoctorReport
+    if (-not $f) { return $null }
+    try { $r = [IO.File]::ReadAllText($f) | ConvertFrom-Json } catch { return $null }
+    $byCheck = [ordered]@{}
+    $short = @{ unreadable = @('unreadable file', 'unreadable files'); unmatched = @('not matched', 'not matched') }
+    foreach ($i in @($r.issues)) { if ($i.sev -eq 'important') { $n = [string]$i.check; if (-not $byCheck.Contains($n)) { $byCheck[$n] = 0 }; $byCheck[$n]++ } }
+    [ordered]@{ at = [string]$r.at; late = [string]$r.late; issues = @($r.issues).Count; important = [int]$r.important; minor = [int]$r.minor
+        importantText = (@($byCheck.Keys | ForEach-Object { $w = $short[$_]; '{0} {1}' -f $byCheck[$_], $(if ($w) { $w[[int]($byCheck[$_] -ne 1)] } else { [string]$r.names.$_ }) }) -join ', ')
+        counts = $r.counts; newCount = [int]$r.newCount; fixedCount = [int]$r.fixedCount; compared = [bool]$r.compared }
+}
+function Get-DoctorStatus {
+    $p = $script:PageSettings; $st = Read-DoctorState
+    $next = ''
+    if ([string]$p.doctorFreq -ne 'off') {
+        $last = $(if ($st.lastSlot -and $st.schedule -eq (Get-DoctorScheduleKey)) { [datetime]$st.lastSlot } else { $null })
+        $next = (Get-MmlmDoctorNext -Now (Get-Date) -Freq ([string]$p.doctorFreq) -Day ([int]$p.doctorDay) -Time ([string]$p.doctorTime) -Last $last).ToString('s')
+    }
+    ConvertTo-PageJson ([ordered]@{ running = [bool]$script:Doctor; next = $next; unseen = [bool]$st.unseen; last = (Get-DoctorSummary); checks = @(foreach ($k in Get-MmlmDoctorCheckIds) { $k }) })
+}
+
 function Get-ToolEvents {
     $x = $script:Tool
     if (-not $x) { return }
@@ -804,7 +940,8 @@ function Get-ToolEvents {
     if ($s.Done) {
         $script:Tool = $null
         try { $x.Ps.Dispose() } catch { Write-HostLog 'tool dispose' $_ }
-        Push-HostEvent 'tool' ([ordered]@{ kind = $x.Kind; tab = $x.Tab; running = $false; error = $s.Error; summary = [string]$s.Summary; path = [string]$s.Path; cancelled = [bool]$s.Cancel })
+        Push-HostEvent 'tool' ([ordered]@{ kind = $x.Kind; tab = $x.Tab; running = $false; error = $s.Error; summary = [string]$s.Summary; path = $(if ($x.Kind -eq 'doctor') { '' } else { [string]$s.Path }); cancelled = [bool]$s.Cancel })
+        if ($x.Kind -eq 'doctor') { Complete-HostDoctor -Err $s.Error -Cancelled ([bool]$s.Cancel) }
         if ($s.Library -and -not $s.Error) { foreach ($t in $(if ($x.Kind -eq 'artwork') { @('movies', 'tv') } else { @($x.Tab) })) { Push-HostEvent 'library' @{ tab = $t; ready = $true; error = $null } } }
         return
     }
@@ -1046,6 +1183,14 @@ $script:Commands = [ordered]@{
             # show name -> { state: Ongoing|Ended, tmdb, lastAir }, saved by TV Shows > Fetch info (no network here)
             $p = Join-Path $script:AppData 'Library\show-status.json'
             if (Test-Path -LiteralPath $p) { [IO.File]::ReadAllText($p) } else { '{}' } } }
+    'doctor.status'  = @{ Fetch = $false; Run = { Get-DoctorStatus } }
+    'doctor.run'     = @{ Fetch = $false; Run = { [void](Start-HostDoctor -Manual); 'true' } }
+    'doctor.report'  = @{ Fetch = $false; Run = {
+            # the latest report (no network); reading it marks the issue alert as seen
+            $f = Get-LatestDoctorReport
+            $st = Read-DoctorState; if ($st.unseen) { $st.unseen = $false; Save-DoctorState $st }
+            if ($f) { [IO.File]::ReadAllText($f) } else { 'null' } } }
+    'doctor.seen'    = @{ Fetch = $false; Run = { $st = Read-DoctorState; $st.unseen = $false; Save-DoctorState $st; 'true' } }
     'image.data'     = @{ Fetch = $false; Run = {
             # a cached picture as a data: URL, so the page can read its colours (series view background)
             param($a)
@@ -1135,6 +1280,7 @@ function Receive-DashEvents {
             $data = @{ running = $false; tab = $script:ScanTab; count = [int]$s.Count; new = [int]$s.New; cancelled = [bool]($s.Cancelled -or $s.Cancel); error = $s.Error }
             if (-not $data.cancelled -and -not $s.Error -and -not $script:Visible) { $script:Badge += [int]$s.New }
             Push-HostEvent 'scan' $data
+            $script:LastScanResult = @{ Tab = $script:ScanTab; Error = $s.Error; Cancelled = $data.cancelled }
             if (-not $data.cancelled -and -not $s.Error) { Push-HostEvent 'library' @{ tab = $script:ScanTab; ready = $true; error = $null } }
             Stop-HostScan
         }
@@ -1151,6 +1297,7 @@ function Receive-DashEvents {
         Push-HostEvent 'library' @{ tab = $tab; ready = (-not $x.Sync.Error); error = $x.Sync.Error }
     }
     try { Get-UpdateEvents; Watch-DropFolder } catch { Write-HostLog 'updates' $_ }
+    try { Step-HostDoctor } catch { Write-HostLog 'doctor' $_; $script:Doctor = $null }
     try { Get-SeriesEvents } catch { Write-HostLog 'series' $_ }
     try { Get-ToolEvents } catch { Write-HostLog 'tools' $_ }
     # one drain for every event source; whatever is over the cap waits for the next call (callers wrap the result in @())

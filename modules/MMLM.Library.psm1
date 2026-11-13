@@ -36,6 +36,42 @@ function Initialize-MmlmNative {
     }
 }
 
+function Initialize-MmlmScanNative {
+    # The compiled helper for server scans (src\Mmlm.Scan.cs: several downloads at once, fast record building).
+    # Returns $true when it is ready. It never throws: when it cannot be compiled or loaded on this machine, scans
+    # simply use the plain PowerShell path, which gives the same results more slowly.
+    if ('Mmlm.Scan.Http' -as [type]) { return $true }
+    if ($script:ScanNativeFailed) { return $false }
+    if (-not $script:AppRoot -or -not $script:AppData) { return $false }      # no context yet (not remembered as a failure)
+    try {
+        $srcFile = Join-Path $script:AppRoot 'src\Mmlm.Scan.cs'
+        $code = [IO.File]::ReadAllText($srcFile)
+        $dir = Join-Path $script:AppData 'Helper'
+        if (-not (Test-Path -LiteralPath $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
+        $name = 'Mmlm.Scan-{0}-{1}.dll' -f $script:AppVersion, (Get-MmlmStringHash ($code + '|' + $PSVersionTable.PSVersion.Major)).Substring(0, 8)
+        $dll = Join-Path $dir $name
+        foreach ($old in @(Get-ChildItem -LiteralPath $dir -Filter 'Mmlm.Scan-*.dll' -File -ErrorAction SilentlyContinue)) {
+            if ($old.Name -ne $name) { Remove-Item -LiteralPath $old.FullName -Force -ErrorAction SilentlyContinue }
+        }
+        # Windows PowerShell needs the assemblies named; PowerShell 7 references everything by default
+        $ref = @{}
+        if ($PSVersionTable.PSVersion.Major -le 5) { $ref = @{ ReferencedAssemblies = @('System', 'System.Core', 'System.Xml', [psobject].Assembly.Location) } }
+        try {
+            if (-not (Test-Path -LiteralPath $dll)) { Add-Type -TypeDefinition $code -Language CSharp -OutputAssembly $dll -OutputType Library -IgnoreWarnings -WarningAction SilentlyContinue -ErrorAction Stop @ref }
+            if (-not ('Mmlm.Scan.Http' -as [type])) { Add-Type -Path $dll -ErrorAction Stop }
+        }
+        catch {
+            Remove-Item -LiteralPath $dll -Force -ErrorAction SilentlyContinue        # a half-written file must not be reused
+            if (-not ('Mmlm.Scan.Http' -as [type])) { Add-Type -TypeDefinition $code -Language CSharp -IgnoreWarnings -WarningAction SilentlyContinue -ErrorAction Stop @ref }
+        }
+    }
+    catch { $script:ScanNativeError = [string]$_.Exception.Message }
+    if ('Mmlm.Scan.Http' -as [type]) { return $true }
+    $script:ScanNativeFailed = $true
+    $false
+}
+function Get-MmlmScanNativeError { [string]$script:ScanNativeError }
+
 function Add-MmlmTraffic {
     # Counts one request to a data source (Plex, TMDB, OMDb, IMDb) for the window's / launcher's traffic counter.
     param([long]$Bytes = 0, [switch]$Failed)
@@ -57,6 +93,16 @@ function Set-MmlmProgress {
     if ($null -eq $script:Sync) { return }
     if ($Text) { $script:Sync.Text = $Text }
     if ($Max -gt 0 -and $Value -ge 0) { $script:Sync.Value = $Value; $script:Sync.Max = $Max }
+}
+
+function Add-MmlmScanTime {
+    # Adds seconds to a named stage of the running scan (shown in Settings > Servers > Last scan timings).
+    param([string]$Stage, [double]$Seconds, [int]$Count = 0)
+    if ($null -eq $script:Sync) { return }
+    if (-not $script:Sync.ContainsKey('Times') -or $null -eq $script:Sync.Times) { $script:Sync.Times = [ordered]@{} }
+    $t = $script:Sync.Times
+    if (-not $t.Contains($Stage)) { $t[$Stage] = @{ Seconds = 0.0; Count = 0 } }
+    $t[$Stage].Seconds += $Seconds; $t[$Stage].Count += $Count
 }
 
 function ConvertTo-MmlmSafeInt {
@@ -1004,6 +1050,9 @@ catch { $Shared.Error = $_.Exception.Message; $WStat.State = 'Error' }
 }
 
 Export-ModuleMember -Function @(
+    'Add-MmlmScanTime',
+    'Initialize-MmlmScanNative',
+    'Get-MmlmScanNativeError',
     'Set-MmlmContext',
     'ConvertTo-MmlmSafeInt',
     'ConvertTo-MmlmSafeDouble',

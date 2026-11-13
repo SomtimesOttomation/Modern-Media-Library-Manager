@@ -7,3 +7,5 @@ lib/tmdb-logo.png
 *.log
 Thumbs.db
 desktop.ini
+# screenshots the page test leaves behind
+/e2e-*.png

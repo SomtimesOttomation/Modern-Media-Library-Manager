@@ -45,7 +45,7 @@ $script:Series = $null
 $script:Tool = $null
 
 # the data modules, by full path (an already loaded copy is reused)
-foreach ($m0 in @('MMLM.Library.psm1', 'MMLM.Plex.psm1', 'MMLM.Jellyfin.psm1', 'MMLM.Server.psm1', 'MMLM.Fetch.psm1', 'MMLM.Doctor.psm1')) { Import-Module (Join-Path $PSScriptRoot $m0) -DisableNameChecking }
+foreach ($m0 in @('MMLM.Library.psm1', 'MMLM.Plex.psm1', 'MMLM.Jellyfin.psm1', 'MMLM.Server.psm1', 'MMLM.Fetch.psm1', 'MMLM.Doctor.psm1', 'MMLM.MediaInfo.psm1')) { Import-Module (Join-Path $PSScriptRoot $m0) -DisableNameChecking }
 
 function Write-HostLog {
     # failures go to %LOCALAPPDATA%\<app>\Logs\host.log instead of disappearing (kept under 1 MB)
@@ -123,7 +123,7 @@ function Read-PageSettings {
 function Set-PageSetting {
     param([string]$Key, $Value)
     $views = @('posters', 'grid', 'dashboard', 'compare')
-    $fx = @('auto', 'fire', 'lightning', 'specter', 'poster', 'off')
+    $fx = @('auto', 'fire', 'water', 'specter', 'lightning', 'nature', 'poster', 'off')
     $ok = switch ($Key) {
         'theme'       { @('system', 'light', 'dark') -contains [string]$Value }
         'updateCheck' { $Value = [bool]$Value; $true }
@@ -139,6 +139,12 @@ function Set-PageSetting {
         'cmpWalkover' { $Value = [bool]$Value; $true }
         'cmpImdb'     { $Value = [bool]$Value; $true }
         'cmpInflation' { $Value = [bool]$Value; $true }
+        'cmpFun'      { $Value = [bool]$Value; $true }
+        'fxTune'      { $Value = [string]$Value; $Value -eq '' -or ($Value.Length -le 1500 -and $Value -match '^\{[\[\]\{\}",:a-z0-9 ]*\}$') }
+        'vsColors'    { $Value = @(@($Value) | ForEach-Object { [string]$_ }); $Value.Count -eq 3 -and @($Value | Where-Object { $_ -notmatch '^#[0-9a-fA-F]{6}$' }).Count -eq 0 }
+        { $_ -in @('cmpMetrics', 'cmpInfo') } { $Value = @(@($Value) | ForEach-Object { [string]$_ } | Where-Object { $_ -match '^[a-z]{1,12}$' } | Select-Object -Unique -First 16); $true }
+        'miPath'      { $Value = ([string]$Value).Trim(); $Value.Length -le 400 -and ($Value -eq '' -or $Value -match '(?i)mediainfo[^\\/]*$') }
+        { $_ -in @('miFrom', 'miTo') } { $Value = ([string]$Value).Trim(); $Value.Length -le 400 }
         'fxLeft'      { $fx -contains [string]$Value }
         'fxRight'     { $fx -contains [string]$Value }
         'fxMotion'    { @('still', 'calm', 'full') -contains [string]$Value }
@@ -232,7 +238,8 @@ function Export-PageLibrary {
             $u = ''
             $aid = Get-MmlmArtworkFileId ([string]$r.PlexThumb)
             if ($aid) { $leaf = '{0}-{1}.{2}' -f $k[1], $aid, $k[2]; if ($have.Contains($leaf)) { $u = 'art/' + $leaf + '?v=' + $ver[$leaf] } }
-            $r.PSObject.Properties.Remove($k[0]); $r.PSObject.Properties.Add((New-Object Management.Automation.PSNoteProperty($k[0], $u)))
+            $pr = $r.PSObject.Properties[$k[0]]
+            if ($null -ne $pr) { $pr.Value = $u } else { $r.PSObject.Properties.Add((New-Object Management.Automation.PSNoteProperty($k[0], $u))) }
         }
     }
     # collection ids: Plex titles keep "p:<key>"; a local file gets "h:<hash of its path>", and the path behind each hash is
@@ -252,6 +259,8 @@ function Export-PageLibrary {
     Move-Item -LiteralPath ($file + '.tmp') -Destination $file
 }
 
+$swAll = [Diagnostics.Stopwatch]::StartNew(); $swS = [Diagnostics.Stopwatch]::StartNew()
+function Mark { param([string]$Stage, [int]$Count = 0) Add-MmlmScanTime $Stage $swS.Elapsed.TotalSeconds $Count; $swS.Restart() }
 try {
     Initialize-MmlmNative
     $tv = ($Job.Tab -eq 'tv')
@@ -270,20 +279,37 @@ try {
         Set-MmlmProgress -Text 'Loading the last scan...'
         foreach ($r in [Mmlm.Native.Snapshot]::Load($Job.Snapshot)) { if ($r.PlexKey) { $prior[[string]$r.PlexKey] = $r } }
     }
+    # a scan that was cancelled or cut off left a checkpoint: what it had read is reused like the last scan's titles
+    # (but those titles still count as new for the badge, so $known is only the last finished scan)
+    $known = @{}; foreach ($k in $prior.Keys) { $known[$k] = $true }
+    $partial = [string]$Job.Snapshot + '.partial'
+    if ($Job.Rebuild) { Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue }
+    elseif (Test-Path -LiteralPath $partial) {
+        try { foreach ($r in [Mmlm.Native.Snapshot]::Load($partial)) { $k = [string]$r.PlexKey; if ($k -and -not $prior.ContainsKey($k)) { $prior[$k] = $r } } } catch { }
+    }
+    $dir0 = Split-Path -Parent $Job.Snapshot
+    if (-not (Test-Path -LiteralPath $dir0)) { New-Item -Path $dir0 -ItemType Directory -Force | Out-Null }
+    Set-MmlmServerContext -Values @{ ScanCheckpoint = { param($Records) [Mmlm.Native.Snapshot]::Save([object[]]@($Records), $partial, 'partial') }.GetNewClosure() }
     $use = $(if ($Job.Rebuild) { @{} } else { $prior })
+    Mark 'load-prior' $prior.Count
     $recs = @(Invoke-MmlmServerScan -Server $Job.Server -Movies (-not $tv) -Shows $tv -Rebuild ([bool]$Job.Rebuild) -DetectFel ([bool]$Job.DetectFel) -Prior $use)
+    Mark 'scan-total' $recs.Count
     if ($S.Cancel) { $S.Cancelled = $true; return }
-    $new = @($recs | Where-Object { -not $prior.ContainsKey([string]$_.PlexKey) })
+    $new = @($recs | Where-Object { -not $known.ContainsKey([string]$_.PlexKey) })
     Set-MmlmProgress -Text 'Saving...'
     $dir = Split-Path -Parent $Job.Snapshot
     if (-not (Test-Path -LiteralPath $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
     try { Merge-MmlmMetaStore -Records $recs -Path $Job.MetaStore } catch { }          # fetched scores (Metacritic, RT, box office) and hand edits
     [Mmlm.Native.Snapshot]::Save([object[]]$recs, $Job.Snapshot, ('{0}|{1}' -f $recs.Count, (Get-Date).ToString('yyyy-MM-dd HH:mm')))
+    Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue      # the full library is saved: the checkpoint is done with
+    Mark 'save-snapshot' $recs.Count
     if (@($Job.ArtKinds).Count -gt 0) {          # Settings > Artwork: fetched like posters, from your Plex server only
         Set-MmlmScanPhase -Lo 0.0 -Hi 1.0
         try { [void](Sync-MmlmServerArtwork -Server $Job.Server -Recs $recs -Kinds @($Job.ArtKinds) -Folder (Join-Path $Job.CacheDir 'art') -Retry:([bool]$Job.Rebuild)) } catch { }
     }
+    Mark 'artwork'
     Export-PageLibrary -Recs $recs -Tab $Job.Tab
+    Mark 'export-page' $recs.Count
     # Today-page card: the six most recently added titles (episodes collapse to their show), posters copied into the cache dir
     $thumbs = Join-Path $Job.CacheDir 'thumbs'
     if (-not (Test-Path -LiteralPath $thumbs)) { New-Item -Path $thumbs -ItemType Directory -Force | Out-Null }
@@ -304,10 +330,24 @@ try {
     }
     $card = @{ title = $(if ($tv) { 'Recently added TV' } else { 'Recently added movies' }); items = $items.ToArray(); updatedAt = (Get-Date).ToString('o') }
     [IO.File]::WriteAllText((Join-Path $Job.CacheDir ('summary-' + $Job.Tab + '.json')), (ConvertTo-Json -InputObject $card -Depth 5 -Compress), (New-Object Text.UTF8Encoding($false)))
+    Mark 'card'
     $S.Count = $recs.Count; $S.New = $new.Count
 }
 catch { $S.Error = $_.Exception.Message }
-finally { $S.Done = $true }
+finally {
+    if ($Job.Kind -eq 'scan') {
+        # how long each stage took: Settings > Servers > Copy timings (to see where a slow scan spends its time)
+        try {
+            $state = $(if ($S.Error) { 'failed' } elseif ($S.Cancel) { 'cancelled' } else { 'finished' })
+            $lines = New-Object System.Collections.Generic.List[string]
+            $lines.Add(('{0}  {1}  server={2}  items={3}  new={4}  {5}  total={6:0.0}s  rebuild={7}  PowerShell {8}  MMLM {9}' -f (Get-Date).ToString('yyyy-MM-dd HH:mm'), $Job.Tab, [string]$Job.Server.Kind, [int]$S.Count, [int]$S.New, $state, $swAll.Elapsed.TotalSeconds, [bool]$Job.Rebuild, $PSVersionTable.PSVersion, [string]$Ctx.AppVersion))
+            $lines.Add('scan helper: ' + $(if ('Mmlm.Scan.Http' -as [type]) { 'compiled' } else { 'not available (one request at a time). ' + (Get-MmlmScanNativeError) }))
+            if ($S.Times) { foreach ($k in @($S.Times.Keys)) { $lines.Add(('{0,-14} {1,9:0.00} s {2,8}' -f $k, [double]$S.Times[$k].Seconds, [int]$S.Times[$k].Count)) } }
+            [IO.File]::WriteAllLines((Join-Path $Job.CacheDir ('scan-timing-' + $Job.Tab + '.txt')), $lines.ToArray(), (New-Object Text.UTF8Encoding($false)))
+        } catch { }
+    }
+    $S.Done = $true
+}
 '@
 
 function New-WorkerContext {
@@ -316,6 +356,7 @@ function New-WorkerContext {
         Sync = $Sync; Traffic = $script:Traffic; AppRoot = $script:Root; AppData = $script:AppData; AppVersion = $script:Version
         CacheFolder = (Join-Path $script:AppData 'Cache'); ThumbFolder = (Join-Path $script:AppData 'Thumbs'); LibFolder = (Join-Path $script:Root 'lib')
         CacheVersion = 4; Culture = [Globalization.CultureInfo]::InvariantCulture; PlexTimeoutMs = 30000; PlexClientId = 'mmlm-' + $env:COMPUTERNAME
+        NoItemCache = $true          # server scans: no cache file per title; the scan is checkpointed instead (see ScanScript)
         Fields = $script:Fields; TypeMap = @{ string = [string]; int = [int]; long = [long]; double = [double]; bool = [bool] }
         InformFolder = (Join-Path $script:AppData 'Inform')
     }
@@ -576,6 +617,77 @@ function Get-ServerTestEvents {
     finally { $x.Ps.Dispose() }
     if ($null -eq $res) { $res = @{ ok = $false; error = 'No answer.' } }
     Push-HostEvent 'servertest' ([ordered]@{ kind = $x.Kind; ok = [bool]$res.ok; info = $res.info; error = [string]$res.error })
+}
+
+# ---- MediaInfo brightness (Compare: max / average brightness of movies) --------------------------------------------------
+# The MediaInfo command-line program already on this PC reads MaxCLL / MaxFALL from the files; nothing is downloaded.
+# Runs in the background; 'mediainfo' events report progress and the end.
+$script:MediaInfoScript = @'
+param($ModFile, $Cli, $Titles, $StoreFile, $From, $To, [bool]$Force, $Sync)
+try {
+    Import-Module $ModFile -DisableNameChecking
+    $r = Update-MmlmBrightness -Cli $Cli -Titles $Titles -StoreFile $StoreFile -MapFrom $From -MapTo $To -Force:$Force -Sync $Sync
+    $Sync.Result = $r
+}
+catch { $Sync.Error = $_.Exception.Message }
+finally { $Sync.Done = $true }
+'@
+function Get-MediaInfoStoreFile { Join-Path (Join-Path $script:AppData 'Library') 'mediainfo-movies.json' }
+function Get-MovieRidMap {
+    # rid -> the file's path on the server, for every movie in the last scan (paths never go to the page)
+    $o = @{}
+    $f = Get-SnapshotFile 'movies'
+    if (-not (Test-Path -LiteralPath $f)) { return $o }
+    Initialize-MmlmNative
+    foreach ($r in [Mmlm.Native.Snapshot]::Load($f)) {
+        $fp = [string]$r.FullPath
+        if (-not $fp) { continue }
+        $rid = $(if ([string]$r.PlexKey) { 'p:' + [string]$r.PlexKey } else { 'h:' + (Get-MmlmStringHash $fp).Substring(0, 16) })
+        if (-not $o.ContainsKey($rid)) { $o[$rid] = $fp }
+    }
+    $o
+}
+function Start-HostMediaInfo {
+    param($A)
+    if ($script:MediaInfo) { throw 'MediaInfo is already reading files.' }
+    $cli = Find-MmlmMediaInfoCli -Custom ([string]$A.path) -AppRoot $script:Root
+    if (-not $cli) { throw 'MediaInfo was not found. Install the MediaInfo command-line version (for example: winget install MediaArea.MediaInfo), or set its location in Settings > Compare.' }
+    $map = Get-MovieRidMap
+    $want = @(@($A.rids) | ForEach-Object { [string]$_ } | Where-Object { $_ })
+    $keys = $(if ($want.Count -gt 0) { $want } else { @($map.Keys | Sort-Object) })
+    $titles = @(foreach ($k in $keys) { if ($map.ContainsKey($k)) { @{ Key = $k; Path = $map[$k] } } })
+    if ($titles.Count -eq 0) { throw 'No movie files to read. Scan Movies first.' }
+    $sync = [hashtable]::Synchronized(@{ Text = 'MediaInfo: starting'; Value = 0; Max = $titles.Count; Cancel = $false; Done = $false; Error = $null; Result = $null })
+    $ps = [powershell]::Create()
+    [void]$ps.AddScript($script:MediaInfoScript).AddArgument((Join-Path (Join-Path $script:Root 'modules') 'MMLM.MediaInfo.psm1')).AddArgument($cli).AddArgument($titles).AddArgument((Get-MediaInfoStoreFile)).AddArgument([string]$A.from).AddArgument([string]$A.to).AddArgument([bool]$A.force).AddArgument($sync)
+    $script:MediaInfo = @{ Ps = $ps; Async = $ps.BeginInvoke(); Sync = $sync; Whole = ($want.Count -eq 0); Last = '' }
+}
+function Get-MediaInfoEvents {
+    $x = $script:MediaInfo
+    if (-not $x) { return }
+    $s = $x.Sync
+    if ($s.Done) {
+        $script:MediaInfo = $null
+        try { $x.Ps.EndInvoke($x.Async) | Out-Null } catch { } finally { $x.Ps.Dispose() }
+        $r = $s.Result
+        if ($x.Whole) { try { [IO.File]::WriteAllText((Get-MediaInfoStoreFile) + '.lastrun', (Get-Date).ToString('yyyy-MM-dd HH:mm')) } catch { } }
+        Push-HostEvent 'mediainfo' ([ordered]@{ running = $false; whole = [bool]$x.Whole; cancelled = [bool]$s.Cancel; error = [string]$s.Error
+            read = $(if ($r) { [int]$r.Read } else { 0 }); skipped = $(if ($r) { [int]$r.Skipped } else { 0 }); unreachable = $(if ($r) { [int]$r.Unreachable } else { 0 }); failed = $(if ($r) { [int]$r.Failed } else { 0 }) })
+        return
+    }
+    $d = [ordered]@{ running = $true; whole = [bool]$x.Whole; text = [string]$s.Text; pct = $(if ($s.Max -gt 0) { [int](100 * $s.Value / $s.Max) } else { 0 }) }
+    $j = ConvertTo-PageJson $d
+    if ($j -ne $x.Last) { $x.Last = $j; Push-HostEvent 'mediainfo' $d }
+}
+function Get-HostMediaInfoStatus {
+    param($A)
+    $cli = Find-MmlmMediaInfoCli -Custom ([string]$A.path) -AppRoot $script:Root
+    $store = Read-MmlmBrightnessStore (Get-MediaInfoStoreFile)
+    $read = 0; $unreach = 0; $failed = 0
+    foreach ($v in $store.Values) { if ($v.err -eq 'unreachable') { $unreach++ } elseif ($v.err) { $failed++ } else { $read++ } }
+    $lr = (Get-MediaInfoStoreFile) + '.lastrun'
+    [ordered]@{ found = [bool]$cli; version = $(if ($cli) { Get-MmlmMediaInfoVersion $cli } else { '' }); movies = (Get-SnapshotCount 'movies')
+        read = $read; unreachable = $unreach; failed = $failed; lastRun = $(if (Test-Path -LiteralPath $lr) { [IO.File]::ReadAllText($lr).Trim() } else { '' }); running = [bool]$script:MediaInfo }
 }
 
 function Get-SeriesIndex {
@@ -1192,6 +1304,19 @@ $script:Commands = [ordered]@{
             if (@(Get-MmlmServerKinds) -notcontains $kind) { throw 'Unknown server.' }
             Save-HostServerSettings @{ ($(if ($tab -eq 'tv') { 'TvServer' } else { 'MoviesServer' })) = $kind }
             ConvertTo-PageJson (Get-PlexInfo) } }
+    'mediainfo.status' = @{ Fetch = $false; Run = { param($a) ConvertTo-Json -InputObject (Get-HostMediaInfoStatus $a) -Compress } }
+    'mediainfo.values' = @{ Fetch = $false; Run = {
+            # rid -> [max brightness, average brightness] in cd/m2, for titles MediaInfo has read
+            param($a)
+            $o = [ordered]@{}
+            $st = Read-MmlmBrightnessStore (Get-MediaInfoStoreFile)
+            foreach ($k in $st.Keys) { $v = $st[$k]; $o[$k] = @([int]$v.cll, [int]$v.fall, $(if ($v.err) { 1 } else { 0 })) }
+            ConvertTo-Json -InputObject $o -Compress -Depth 3 } }
+    'mediainfo.read'   = @{ Fetch = $false; Run = {
+            # reads files on this PC or the network (no third party); 'mediainfo' events follow
+            param($a)
+            Start-HostMediaInfo $a; 'true' } }
+    'mediainfo.cancel' = @{ Fetch = $false; Run = { param($a) if ($script:MediaInfo) { $script:MediaInfo.Sync.Cancel = $true }; 'true' } }
     'server.test'    = @{ Fetch = $true; Run = {
             # Settings > Servers > Test: asks the server for its name and libraries in the background (counted as
             # traffic); the answer comes as a 'servertest' event
@@ -1244,6 +1369,11 @@ $script:Commands = [ordered]@{
             [IO.File]::WriteAllText($p + '.tmp', $json, (New-Object Text.UTF8Encoding($false)))
             Move-Item -LiteralPath ($p + '.tmp') -Destination $p -Force
             $json } }
+    'scan.timing' = @{ Fetch = $false; Run = { param($a)
+            # the last scan's stage timings, as text, for each library
+            $o = [ordered]@{}
+            foreach ($t in 'movies', 'tv') { $f = Join-Path $script:CacheDir ('scan-timing-' + $t + '.txt'); $o[$t] = $(if (Test-Path -LiteralPath $f) { [IO.File]::ReadAllText($f) } else { '' }) }
+            ConvertTo-Json -InputObject $o -Compress } }
     'collections.get' = @{ Fetch = $false; Run = { param($a) ConvertTo-Json -InputObject (Get-PageCollections) -Depth 6 -Compress } }
     'collections.save' = @{ Fetch = $false; Run = { param($a) Save-PageCollections $a.collections; ConvertTo-Json -InputObject (Get-PageCollections) -Depth 6 -Compress } }
     'open.url'       = @{ Fetch = $false; Run = { param($a) Open-HostUrl ([string]$a.url); 'true' } }
@@ -1322,6 +1452,7 @@ function Receive-DashEvents {
     try { Get-UpdateEvents; Watch-DropFolder } catch { Write-HostLog 'updates' $_ }
     try { Step-HostDoctor } catch { Write-HostLog 'doctor' $_; $script:Doctor = $null }
     try { Get-ServerTestEvents } catch { Write-HostLog 'server test' $_; $script:ServerTest = $null }
+    try { Get-MediaInfoEvents } catch { Write-HostLog 'mediainfo' $_; $script:MediaInfo = $null }
     try { Get-SeriesEvents } catch { Write-HostLog 'series' $_ }
     try { Get-ToolEvents } catch { Write-HostLog 'tools' $_ }
     # one drain for every event source; whatever is over the cap waits for the next call (callers wrap the result in @())

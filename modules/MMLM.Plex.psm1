@@ -24,6 +24,7 @@ function New-MmlmPlexRequest {
     $req.Timeout          = $script:PlexTimeoutMs
     $req.ReadWriteTimeout = $script:PlexTimeoutMs
     $req.Accept           = $Accept
+    $req.AutomaticDecompression = [Net.DecompressionMethods]::GZip -bor [Net.DecompressionMethods]::Deflate   # XML shrinks about tenfold
     $req.Headers.Add('X-Plex-Token', $Token)                       # header, not query string, so it never lands in a URL log
     $req.Headers.Add('X-Plex-Client-Identifier', $script:PlexClientId)
     $req.Headers.Add('X-Plex-Product', 'Modern Media Library Manager')
@@ -86,26 +87,134 @@ function Get-MmlmPlexSections {
     }
 }
 
+function Get-MmlmPlexParallel {
+    # How many requests a scan sends at once: 4 unless the context says otherwise, never more than 6 (a Plex server is
+    # often a small NAS), and 1 means one at a time as before.
+    $n = 4
+    if ($script:PlexParallel) { $n = [int]$script:PlexParallel }
+    [Math]::Max(1, [Math]::Min(6, $n))
+}
+
+function Get-MmlmPlexMany {
+    # Several GETs at once (Mmlm.Scan.Http), results in the order asked. Each result has Status (200 = fine, 0 = not
+    # reached), Text or Data, Bytes and Error. Counted for the traffic counter like single requests; a refused token or
+    # an unreachable server throws the same messages. Without the compiled helper the requests go one at a time.
+    param([string]$BaseUrl, [string]$Token, [object[]]$Requests, [int]$Parallel = 0, [switch]$Binary, [string]$Accept = 'application/xml')
+    if (-not $Requests -or $Requests.Count -eq 0) { return , @() }
+    if ($Parallel -le 0) { $Parallel = Get-MmlmPlexParallel }
+    Assert-MmlmTrafficAllowed
+    $results = $null
+    if ($Parallel -gt 1) {
+        if (Initialize-MmlmScanNative) {
+            # Windows allows 2 connections per server by default; lift it for new connections and for this server's existing one
+            try {
+                if ([Net.ServicePointManager]::DefaultConnectionLimit -lt 8) { [Net.ServicePointManager]::DefaultConnectionLimit = 8 }
+                $sp = [Net.ServicePointManager]::FindServicePoint([Uri]$BaseUrl)
+                if ($sp -and $sp.ConnectionLimit -lt 8) { $sp.ConnectionLimit = 8 }
+            } catch { }
+            $urls = New-Object 'System.Collections.Generic.List[string]'
+            foreach ($r in $Requests) {
+                $parts = @()
+                $q = $r.Query
+                if ($q) { foreach ($k in $q.Keys) { $parts += ('{0}={1}' -f [Uri]::EscapeDataString([string]$k), [Uri]::EscapeDataString([string]$q[$k])) } }
+                $url = $BaseUrl.TrimEnd('/') + [string]$r.Path
+                if ($parts.Count -gt 0) { $url += '?' + ($parts -join '&') }
+                $urls.Add($url)
+            }
+            $names = [string[]]@('X-Plex-Token', 'X-Plex-Client-Identifier', 'X-Plex-Product')
+            $vals  = [string[]]@($Token, [string]$script:PlexClientId, 'Modern Media Library Manager')
+            $results = [Mmlm.Scan.Http]::GetMany($urls.ToArray(), $names, $vals, $Accept, [int]$script:PlexTimeoutMs, $Parallel, [bool]$Binary)
+        }
+    }
+    if ($null -eq $results) {
+        $list = New-Object System.Collections.Generic.List[object]
+        foreach ($r in $Requests) {
+            $o = [pscustomobject]@{ Url = [string]$r.Path; Status = 0; Text = $null; Data = $null; Bytes = [long]0; Error = $null }
+            $resp = $null
+            try {
+                $q = $r.Query; if (-not $q) { $q = @{} }
+                $req = New-MmlmPlexRequest -BaseUrl $BaseUrl -Path ([string]$r.Path) -Query $q -Token $Token -Accept $Accept
+                $resp = $req.GetResponse()
+                $o.Status = [int]$resp.StatusCode
+                $ms = New-Object IO.MemoryStream
+                try {
+                    $resp.GetResponseStream().CopyTo($ms)
+                    $o.Bytes = $ms.Length
+                    if ($Binary) { $o.Data = $ms.ToArray() } else { $o.Text = [Text.Encoding]::UTF8.GetString($ms.ToArray()) }
+                }
+                finally { $ms.Dispose() }
+            }
+            catch {
+                $we = $_.Exception; if ($we.InnerException -is [Net.WebException]) { $we = $we.InnerException }
+                try { if ($we.Response) { $o.Status = [int]$we.Response.StatusCode } } catch { }
+                $o.Error = $we.Message
+            }
+            finally { if ($resp) { $resp.Close() } }
+            $list.Add($o)
+        }
+        $results = $list.ToArray()
+    }
+    $reached = $false; $firstError = ''
+    foreach ($r in $results) {
+        if ([int]$r.Status -eq 200) { Add-MmlmTraffic -Bytes ([long]$r.Bytes) } else { Add-MmlmTraffic -Failed }
+        if ([int]$r.Status -ne 0) { $reached = $true } elseif (-not $firstError) { $firstError = [string]$r.Error }
+    }
+    foreach ($r in $results) { if ([int]$r.Status -eq 401) { throw 'Plex rejected the token (401 Unauthorized).' } }
+    if (-not $reached) { throw ("Could not reach Plex at {0}: {1}" -f $BaseUrl, $firstError) }
+    , $results
+}
+
+function ConvertTo-MmlmPlexStub {
+    param($Node, $Section)
+    [pscustomobject]@{ Key = $Node.GetAttribute('ratingKey'); Updated = $Node.GetAttribute('updatedAt'); Section = $Section.Title; Kind = $Section.Type; ShowKey = $Node.GetAttribute('grandparentRatingKey') }
+}
+
 function Get-MmlmPlexStubs {
-    # One light-weight entry (ratingKey + updatedAt) per movie / episode in a library section.
+    # One light-weight entry (ratingKey + updatedAt, and the show's key for an episode) per movie / episode in a library
+    # section. The first page says how many there are; the rest are asked for several pages at a time.
     param([string]$BaseUrl, [string]$Token, $Section)
     $stubs = New-Object System.Collections.Generic.List[object]
-    $start = 0; $total = [int]::MaxValue
+    $size = 1000
+    $path = '/library/sections/' + $Section.Key + '/all'
+    $query = { param($from) $q = @{ 'X-Plex-Container-Start' = $from; 'X-Plex-Container-Size' = $size }; if ($Section.Type -eq 'show') { $q['type'] = 4 }; $q }   # 4 = episodes
+    $progress = { param($n, $total) Set-MmlmProgress -Text ("Listing {0}: {1} of {2}" -f $Section.Title, [math]::Min($n, $total), $total) -Value ([math]::Min($n, $total)) -Max $total }
+
+    if (Test-MmlmScanCancelled) { return $stubs }
+    $doc   = Get-MmlmPlexXml -BaseUrl $BaseUrl -Path $path -Query (& $query 0) -Token $Token
+    $t     = $doc.DocumentElement.GetAttribute('totalSize')
+    $nodes = @($doc.SelectNodes('/MediaContainer/Video'))
+    foreach ($n in $nodes) { $stubs.Add((ConvertTo-MmlmPlexStub $n $Section)) }
+    if ($nodes.Count -eq 0 -or -not $t) { return $stubs }                 # empty, or no paging info: one page is all there is
+    $total = [int]$t
+    & $progress $stubs.Count $total
+    $step = $nodes.Count                                                  # what the server really gives per page (it may cap the size asked for)
+    $par = Get-MmlmPlexParallel
+
+    # the remaining pages, a few at a time, kept in order
+    $start = $stubs.Count
+    $fast = ($par -gt 1 -and $step -gt 0)
+    while ($fast -and $start -lt $total) {
+        if (Test-MmlmScanCancelled) { return $stubs }
+        $offs = @(); for ($o = $start; $o -lt $total -and $offs.Count -lt $par; $o += $step) { $offs += $o }
+        $res = Get-MmlmPlexMany -BaseUrl $BaseUrl -Token $Token -Requests @($offs | ForEach-Object { @{ Path = $path; Query = (& $query $_) } }) -Parallel $par
+        for ($i = 0; $i -lt $offs.Count; $i++) {
+            $page = @()
+            if ([int]$res[$i].Status -eq 200) { try { $d = New-Object Xml.XmlDocument; $d.LoadXml([string]$res[$i].Text); $page = @($d.SelectNodes('/MediaContainer/Video')) } catch { $page = @() } }
+            $want = [Math]::Min($step, $total - $offs[$i])
+            if ($page.Count -ne $want) { $fast = $false; break }          # a failed or short page: carry on one page at a time from here
+            foreach ($n in $page) { $stubs.Add((ConvertTo-MmlmPlexStub $n $Section)) }
+            $start = $offs[$i] + $page.Count
+        }
+        & $progress $start $total
+    }
     while ($start -lt $total) {
         if (Test-MmlmScanCancelled) { break }
-        $q = @{ 'X-Plex-Container-Start' = $start; 'X-Plex-Container-Size' = 200 }
-        if ($Section.Type -eq 'show') { $q['type'] = 4 }                 # 4 = episodes
-        $doc   = Get-MmlmPlexXml -BaseUrl $BaseUrl -Path ('/library/sections/' + $Section.Key + '/all') -Query $q -Token $Token
-        $t     = $doc.DocumentElement.GetAttribute('totalSize')
-        if ($t) { $total = [int]$t }
+        $doc   = Get-MmlmPlexXml -BaseUrl $BaseUrl -Path $path -Query (& $query $start) -Token $Token
         $nodes = @($doc.SelectNodes('/MediaContainer/Video'))
         if ($nodes.Count -eq 0) { break }
-        foreach ($n in $nodes) {
-            $stubs.Add([pscustomobject]@{ Key = $n.GetAttribute('ratingKey'); Updated = $n.GetAttribute('updatedAt'); Section = $Section.Title; Kind = $Section.Type })
-        }
+        foreach ($n in $nodes) { $stubs.Add((ConvertTo-MmlmPlexStub $n $Section)) }
         $start += $nodes.Count
-        if (-not $t) { break }                                           # no paging info: one page is all there is
-        Set-MmlmProgress -Text ("Listing {0}: {1} of {2}" -f $Section.Title, [math]::Min($start, $total), $total) -Value ([math]::Min($start, $total)) -Max $total
+        & $progress $start $total
     }
     $stubs
 }
@@ -146,11 +255,17 @@ function Get-MmlmPlexShowNode {
     , $node
 }
 
+function Get-MmlmPlexPosterFile {
+    # where a title's small poster is kept (one file per distinct picture on this server)
+    param([string]$BaseUrl, [string]$ThumbPath)
+    Join-Path $script:ThumbFolder ('plex-' + (Get-MmlmStringHash ($BaseUrl.ToLowerInvariant() + '|' + $ThumbPath)) + '.jpg')
+}
+
 function Save-MmlmPlexPoster {
     # Downloads a small (240x360) poster through Plex's own image resizer and keeps it in the thumbnail folder.
     param([string]$BaseUrl, [string]$Token, [string]$ThumbPath)
     if ([string]::IsNullOrWhiteSpace($ThumbPath)) { return '' }
-    $dest = Join-Path $script:ThumbFolder ('plex-' + (Get-MmlmStringHash ($BaseUrl.ToLowerInvariant() + '|' + $ThumbPath)) + '.jpg')
+    $dest = Get-MmlmPlexPosterFile -BaseUrl $BaseUrl -ThumbPath $ThumbPath
     if ((Test-Path -LiteralPath $dest) -and ((Get-Item -LiteralPath $dest).Length -gt 0)) { return $dest }
 
     $resp = $null
@@ -644,6 +759,8 @@ function Invoke-MmlmPlexScan {
     param([string]$BaseUrl, [string]$Token, [bool]$Movies, [bool]$Shows, [bool]$Rebuild, [bool]$DetectFel, [hashtable]$Prior = @{})
 
     Set-MmlmProgress -Text 'Connecting to Plex...'
+    $sw = [Diagnostics.Stopwatch]::StartNew(); $req0 = $(if ($script:Traffic) { [int]$script:Traffic.Requests } else { 0 })
+    $tConvert = 0.0; $tCache = 0.0; $tShows = 0.0; $nShows = 0; $tFel = 0.0
     $sections = @(Get-MmlmPlexSections -BaseUrl $BaseUrl -Token $Token | Where-Object {
         ($_.Type -eq 'movie' -and $Movies) -or ($_.Type -eq 'show' -and $Shows) })
     if ($sections.Count -eq 0) { throw 'This Plex server has no movie / TV libraries matching your selection.' }
@@ -655,11 +772,15 @@ function Invoke-MmlmPlexScan {
         foreach ($s in @(Get-MmlmPlexStubs -BaseUrl $BaseUrl -Token $Token -Section $sec)) { $stubs.Add($s) }
     }
     $script:Sync.Total = $stubs.Count
+    Add-MmlmScanTime 'list' $sw.Elapsed.TotalSeconds $stubs.Count; $sw.Restart()
     if ($stubs.Count -eq 0) { return @() }
 
     # 2) reuse cached records whose Plex 'updatedAt' has not changed ------------------------
     $byKey = @{}
     $todo  = New-Object System.Collections.Generic.List[object]
+    # one cache file per title is only kept for callers that do not hand in the last scan (-Prior); the page's scans
+    # set NoItemCache and are checkpointed by the host instead (55,000 small files are slow to write and to check)
+    $useItemCache = -not [bool]$script:NoItemCache
     Set-MmlmScanPhase -Lo 0.05 -Hi 0.10
     $chk = 0
     foreach ($s in $stubs) {
@@ -671,6 +792,7 @@ function Invoke-MmlmPlexScan {
         # unchanged since the last scan (same Plex 'updatedAt'): reuse the record we already have
         $p0 = $Prior[[string]$s.Key]
         if ($null -ne $p0 -and [string]$p0.PlexUpdated -eq [string]$s.Updated) { $byKey[$s.Key] = $p0; continue }
+        if (-not $useItemCache) { $todo.Add($s); continue }
         $ck = Join-Path $script:CacheFolder ((Get-MmlmStringHash ('plex|{0}|{1}|{2}|{3}|rt2' -f $BaseUrl.ToLowerInvariant(), $s.Key, $s.Updated, $script:CacheVersion)) + '.json')
         $s | Add-Member -NotePropertyName CacheFile -NotePropertyValue $ck -Force
         if ($Rebuild) { Remove-Item -LiteralPath $ck -Force -ErrorAction SilentlyContinue }
@@ -681,38 +803,161 @@ function Invoke-MmlmPlexScan {
         if ($hit) { $byKey[$s.Key] = $hit } else { $todo.Add($s) }
     }
 
-    # 3) fetch full details for the rest, in batches ----------------------------------------
+    Add-MmlmScanTime 'compare' $sw.Elapsed.TotalSeconds $stubs.Count; $sw.Restart()
+
+    # 3) fetch full details for the rest: shows first, then titles in batches, several requests at a time ----------
     $showCache = @{}
+    $par = Get-MmlmPlexParallel
+    $batchSize = 100
+    $tFetch = 0.0
     $done = $stubs.Count - $todo.Count
     $postLo = if ($todo.Count -gt 0) { 0.8 } else { 0.10 }       # the overall bar: details 0-80 %, posters 80-100 % (all of it when everything was cached)
     Set-MmlmScanPhase -Lo 0.10 -Hi $postLo
-    for ($i = 0; $i -lt $todo.Count; $i += 25) {
-        if (Test-MmlmScanCancelled) { break }
-        $batch = @($todo.GetRange($i, [Math]::Min(25, $todo.Count - $i)))      # (Select-Object -Skip re-walks the whole list every time, which crawls on tens of thousands of episodes)
-        Set-MmlmProgress -Text ("Reading Plex metadata: {0} of {1}" -f ($done + 1), $stubs.Count) -Value $done -Max $stubs.Count
-        $map = Get-MmlmPlexMetadataMap -BaseUrl $BaseUrl -Token $Token -Keys @($batch | ForEach-Object { $_.Key })
-        foreach ($s in $batch) {
-            $v = $map[$s.Key]
-            if ($null -eq $v) { $done++; continue }
-            $showNode = $null
-            if ($v.GetAttribute('type') -eq 'episode') {
-                $showNode = Get-MmlmPlexShowNode -BaseUrl $BaseUrl -Token $Token -ShowKey $v.GetAttribute('grandparentRatingKey') -Cache $showCache
+
+    # each show's own details (genres, cast, ids) once, in batches, before its episodes are read
+    $showKeys = New-Object 'System.Collections.Generic.List[string]'; $seenShow = @{}
+    foreach ($s in $todo) { $sk = [string]$s.ShowKey; if ($sk -and -not $seenShow.ContainsKey($sk)) { $seenShow[$sk] = $true; $showKeys.Add($sk) } }
+    if ($showKeys.Count -gt 0) {
+        $t0 = $sw.Elapsed.TotalSeconds
+        Set-MmlmProgress -Text ("Reading {0} shows from Plex..." -f $showKeys.Count)
+        $reqs = New-Object System.Collections.Generic.List[object]
+        for ($i = 0; $i -lt $showKeys.Count; $i += $batchSize) { $reqs.Add(@{ Path = '/library/metadata/' + (($showKeys.GetRange($i, [Math]::Min($batchSize, $showKeys.Count - $i))) -join ','); Query = @{ includeGuids = 1 } }) }
+        for ($w = 0; $w -lt $reqs.Count; $w += $par) {
+            if (Test-MmlmScanCancelled) { break }
+            $res = Get-MmlmPlexMany -BaseUrl $BaseUrl -Token $Token -Requests @($reqs.GetRange($w, [Math]::Min($par, $reqs.Count - $w))) -Parallel $par
+            foreach ($r in $res) {
+                if ([int]$r.Status -ne 200) { continue }                 # a show still missing is asked for by itself when its first episode comes up
+                try { $d = New-Object Xml.XmlDocument; $d.LoadXml([string]$r.Text); foreach ($n in $d.SelectNodes('/MediaContainer/Directory')) { $showCache[$n.GetAttribute('ratingKey')] = $n } } catch { }
             }
-            try {
-                $rec = ConvertFrom-MmlmPlexVideo -Video $v -LibraryName $s.Section -Show $showNode
-                $byKey[$s.Key] = $rec
-                [IO.File]::WriteAllText($s.CacheFile, ($rec | ConvertTo-Json -Depth 3), (New-Object Text.UTF8Encoding($false)))
-            }
-            catch { Write-Warning "Skipped Plex item $($s.Key): $_" }
-            $done++
+        }
+        $tShows += $sw.Elapsed.TotalSeconds - $t0; $nShows += $showCache.Count
+    }
+
+    $fresh = 0; $lastCheckpoint = 0; $tCheckpoint = 0.0
+    # the compiled record builder (src\Mmlm.Scan.cs) when it is available; the PowerShell one otherwise, and for any
+    # title the compiled one cannot handle
+    $native = $false; $nNative = 0; $nFallback = 0
+    if ($script:NativeConvert -ne $false -and $script:Fields -and (Initialize-MmlmScanNative) -and ('Mmlm.Scan.PlexConvert' -as [type])) {
+        $native = $true
+        $fNames = [string[]]@($script:Fields | ForEach-Object { [string]$_.Name })
+        $fTypes = [string[]]@($script:Fields | ForEach-Object { [string]$_.Type })
+        $titleCase = (Get-Culture).TextInfo
+    }
+    $checkpointEvery = 5000; if ($script:ScanCheckpointEvery) { $checkpointEvery = [int]$script:ScanCheckpointEvery }
+    $checkpoint = {
+        # the host saves what has been read so far, so a first scan that is cancelled or cut off carries on from here
+        if ($script:ScanCheckpoint -and $fresh -gt $lastCheckpoint) {
+            $t0 = $sw.Elapsed.TotalSeconds
+            try { & $script:ScanCheckpoint @($byKey.Values) } catch { }
+            $tCheckpoint += $sw.Elapsed.TotalSeconds - $t0
         }
     }
+    $batches = New-Object System.Collections.Generic.List[object]
+    for ($i = 0; $i -lt $todo.Count; $i += $batchSize) { $batches.Add(@($todo.GetRange($i, [Math]::Min($batchSize, $todo.Count - $i)))) }      # (GetRange: Select-Object -Skip re-walks the whole list every time)
+    for ($w = 0; $w -lt $batches.Count; $w += $par) {
+        if (Test-MmlmScanCancelled) { . $checkpoint; break }
+        if (($fresh - $lastCheckpoint) -ge $checkpointEvery) { . $checkpoint; $lastCheckpoint = $fresh }
+        Set-MmlmProgress -Text ("Reading Plex metadata: {0} of {1}" -f ($done + 1), $stubs.Count) -Value $done -Max $stubs.Count
+        $wave = @($batches.GetRange($w, [Math]::Min($par, $batches.Count - $w)))
+        $t0 = $sw.Elapsed.TotalSeconds
+        $res = Get-MmlmPlexMany -BaseUrl $BaseUrl -Token $Token -Parallel $par -Requests @($wave | ForEach-Object { @{ Path = '/library/metadata/' + ((@($_) | ForEach-Object { $_.Key }) -join ','); Query = @{ includeGuids = 1 } } })
+        $tFetch += $sw.Elapsed.TotalSeconds - $t0
+        for ($b = 0; $b -lt $wave.Count; $b++) {
+            $batch = @($wave[$b])
+            $map = @{}
+            $t0 = $sw.Elapsed.TotalSeconds
+            if ([int]$res[$b].Status -eq 200) {
+                try { $d = New-Object Xml.XmlDocument; $d.LoadXml([string]$res[$b].Text); foreach ($v in $d.SelectNodes('/MediaContainer/Video')) { $map[$v.GetAttribute('ratingKey')] = $v } } catch { $map = @{} }
+            }
+            $missing = @($batch | Where-Object { -not $map.ContainsKey($_.Key) } | ForEach-Object { $_.Key })
+            if ($missing.Count -gt 0) {                                  # a failed batch, or a title the batch left out: ask again (singly if need be)
+                $m2 = Get-MmlmPlexMetadataMap -BaseUrl $BaseUrl -Token $Token -Keys $missing
+                foreach ($k in @($m2.Keys)) { $map[$k] = $m2[$k] }
+            }
+            $tFetch += $sw.Elapsed.TotalSeconds - $t0
+            if ($b -gt 0) { Set-MmlmProgress -Text ("Reading Plex metadata: {0} of {1}" -f ($done + 1), $stubs.Count) -Value $done -Max $stubs.Count }
+            foreach ($s in $batch) {
+                $v = $map[$s.Key]
+                if ($null -eq $v) { $done++; continue }
+                $showNode = $null
+                if ($v.GetAttribute('type') -eq 'episode') {
+                    $t0 = $sw.Elapsed.TotalSeconds; $had = $showCache.ContainsKey($v.GetAttribute('grandparentRatingKey'))
+                    $showNode = Get-MmlmPlexShowNode -BaseUrl $BaseUrl -Token $Token -ShowKey $v.GetAttribute('grandparentRatingKey') -Cache $showCache
+                    if (-not $had) { $tShows += $sw.Elapsed.TotalSeconds - $t0; $nShows++ }
+                }
+                try {
+                    $t0 = $sw.Elapsed.TotalSeconds
+                    $rec = $null
+                    if ($native) {
+                        try { $rec = [Mmlm.Scan.PlexConvert]::ToRecord($v, $showNode, [string]$s.Section, $fNames, $fTypes, $script:Culture, $titleCase); $nNative++ }
+                        catch { $rec = $null; $nFallback++ }
+                    }
+                    if ($null -eq $rec) { $rec = ConvertFrom-MmlmPlexVideo -Video $v -LibraryName $s.Section -Show $showNode }
+                    $byKey[$s.Key] = $rec
+                    $t1 = $sw.Elapsed.TotalSeconds; $tConvert += $t1 - $t0
+                    if ($useItemCache) {
+                        [IO.File]::WriteAllText($s.CacheFile, ($rec | ConvertTo-Json -Depth 3), (New-Object Text.UTF8Encoding($false)))
+                        $tCache += $sw.Elapsed.TotalSeconds - $t1
+                    }
+                    else {
+                        $rec.PSObject.Properties.Add((New-Object Management.Automation.PSNoteProperty('PlexUpdated', [string]$s.Updated)))      # so a checkpoint can be resumed from
+                        $fresh++
+                    }
+                }
+                catch { Write-Warning "Skipped Plex item $($s.Key): $_" }
+                $done++
+            }
+        }
+    }
+    $t3 = $sw.Elapsed.TotalSeconds; $sw.Restart()
+    Add-MmlmScanTime 'fetch' $tFetch $todo.Count
+    Add-MmlmScanTime 'other' ([Math]::Max(0.0, $t3 - $tFetch - $tConvert - $tCache - $tShows - $tCheckpoint))
+    if ($tCheckpoint -gt 0) { Add-MmlmScanTime 'checkpoint' $tCheckpoint }
+    if ($nNative -gt 0) { Add-MmlmScanTime 'convert-fast' 0 $nNative }
+    if ($nFallback -gt 0) { Add-MmlmScanTime 'convert-retry' 0 $nFallback }
+    Add-MmlmScanTime 'convert' $tConvert $todo.Count; Add-MmlmScanTime 'cache-write' $tCache $todo.Count; Add-MmlmScanTime 'shows' $tShows $nShows
 
     # 4) posters + optional FEL/MEL probe, then put everything back in library order ----------
     $out = New-Object System.Collections.Generic.List[object]
     $posterSeen = @{}
     $n = 0
     Set-MmlmScanPhase -Lo $postLo -Hi 1.0
+
+    # posters that are not on disk yet, several at a time (one per distinct picture: an episode shares its show's)
+    $posterTried = @{}
+    if ($par -gt 1) {
+        $wantThumb = New-Object 'System.Collections.Generic.List[string]'; $wantDest = @{}; $seenThumb = @{}
+        foreach ($s in $stubs) {
+            $rec = $byKey[$s.Key]
+            if ($null -eq $rec) { continue }
+            $th = [string]$rec.PlexThumb
+            if (-not $th -or $seenThumb.ContainsKey($th)) { continue }
+            $seenThumb[$th] = $true
+            if ($rec.PosterPath -and (Test-Path -LiteralPath $rec.PosterPath)) { continue }
+            $dest = Get-MmlmPlexPosterFile -BaseUrl $BaseUrl -ThumbPath $th
+            if ((Test-Path -LiteralPath $dest) -and ((Get-Item -LiteralPath $dest).Length -gt 0)) { continue }
+            $wantThumb.Add($th); $wantDest[$th] = $dest
+        }
+        $empty = 0
+        for ($w = 0; $w -lt $wantThumb.Count; $w += $par) {
+            if (Test-MmlmScanCancelled) { break }
+            $wave = @($wantThumb.GetRange($w, [Math]::Min($par, $wantThumb.Count - $w)))
+            Set-MmlmProgress -Text ("Posters: {0} of {1} images" -f $w, $wantThumb.Count) -Value $w -Max $wantThumb.Count
+            foreach ($th in $wave) { $posterTried[$th] = $true }
+            $good = 0
+            try {
+                $res = Get-MmlmPlexMany -BaseUrl $BaseUrl -Token $Token -Parallel $par -Binary -Accept 'image/jpeg,image/*' -Requests @($wave | ForEach-Object { @{ Path = '/photo/:/transcode'; Query = @{ width = 240; height = 360; minSize = 1; upscale = 1; url = $_ } } })
+                for ($i = 0; $i -lt $wave.Count; $i++) {
+                    $r = $res[$i]
+                    if ([int]$r.Status -ne 200 -or $null -eq $r.Data -or $r.Data.Length -eq 0) { continue }
+                    try { $dest = $wantDest[$wave[$i]]; [IO.File]::WriteAllBytes($dest + '.part', $r.Data); Move-Item -LiteralPath ($dest + '.part') -Destination $dest -Force; $good++ } catch { }
+                }
+            }
+            catch { }
+            # two waves in a row with nothing: the server is not serving pictures right now; the rest are tried next scan
+            if ($good -eq 0) { $empty++; if ($empty -ge 2) { foreach ($th in $wantThumb) { $posterTried[$th] = $true }; break } } else { $empty = 0 }
+        }
+    }
     foreach ($s in $stubs) {
         if (Test-MmlmScanCancelled) { break }
         $n++
@@ -729,22 +974,29 @@ function Invoke-MmlmPlexScan {
         if ($th -and $posterSeen.ContainsKey($th)) { $rec.PosterPath = $posterSeen[$th]; $rec.HasPoster = [bool]$posterSeen[$th] }
         else {
             if (-not $rec.PosterPath -or -not (Test-Path -LiteralPath $rec.PosterPath)) {
-                $poster = [string](@(Save-MmlmPlexPoster -BaseUrl $BaseUrl -Token $Token -ThumbPath $th) | Select-Object -Last 1)
+                $poster = ''
+                if ($posterTried.ContainsKey($th)) { $pf = Get-MmlmPlexPosterFile -BaseUrl $BaseUrl -ThumbPath $th; if (Test-Path -LiteralPath $pf) { $poster = $pf } }      # fetched (or tried) above
+                else { $poster = [string](@(Save-MmlmPlexPoster -BaseUrl $BaseUrl -Token $Token -ThumbPath $th) | Select-Object -Last 1) }
                 $rec.PosterPath = $poster
                 $rec.HasPoster  = [bool]$poster
             }
             if ($th) { $posterSeen[$th] = [string]$rec.PosterPath }
         }
         if ($DetectFel -and $rec.DVLayer -eq 'Dual layer' -and $rec.FullPath -and (Test-Path -LiteralPath $rec.FullPath -ErrorAction SilentlyContinue)) {
+            $t0 = $sw.Elapsed.TotalSeconds
             $layer = Get-MmlmDolbyVisionLayerType -Path $rec.FullPath -DurationSec ([int]([double]$rec.RuntimeMin * 60))
+            $tFel += $sw.Elapsed.TotalSeconds - $t0
             if ($layer) {
                 $rec.DVLayer  = $layer
                 $rec.HDRStack = ([string]$rec.HDRStack) -replace '\(dual layer\)', $layer
-                try { [IO.File]::WriteAllText($s.CacheFile, ($rec | ConvertTo-Json -Depth 3), (New-Object Text.UTF8Encoding($false))) } catch { }
+                if ($useItemCache) { try { [IO.File]::WriteAllText($s.CacheFile, ($rec | ConvertTo-Json -Depth 3), (New-Object Text.UTF8Encoding($false))) } catch { } }
             }
         }
         $out.Add($rec)
     }
+    Add-MmlmScanTime 'posters' ([Math]::Max(0.0, $sw.Elapsed.TotalSeconds - $tFel)) $posterSeen.Count
+    if ($tFel -gt 0) { Add-MmlmScanTime 'fel' $tFel }
+    if ($script:Traffic) { Add-MmlmScanTime 'requests' 0 ([int]$script:Traffic.Requests - $req0) }
     $out.ToArray()
 }
 
@@ -756,6 +1008,8 @@ Export-ModuleMember -Function @(
     'Get-MmlmPlexXml',
     'Get-MmlmPlexSections',
     'Get-MmlmPlexStubs',
+    'Get-MmlmPlexMany',
+    'Get-MmlmPlexParallel',
     'Get-MmlmPlexMetadataMap',
     'Get-MmlmPlexShowNode',
     'Save-MmlmPlexPoster',

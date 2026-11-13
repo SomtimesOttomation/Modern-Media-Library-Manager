@@ -232,7 +232,8 @@ function Export-PageLibrary {
             $u = ''
             $aid = Get-MmlmArtworkFileId ([string]$r.PlexThumb)
             if ($aid) { $leaf = '{0}-{1}.{2}' -f $k[1], $aid, $k[2]; if ($have.Contains($leaf)) { $u = 'art/' + $leaf + '?v=' + $ver[$leaf] } }
-            $r.PSObject.Properties.Remove($k[0]); $r.PSObject.Properties.Add((New-Object Management.Automation.PSNoteProperty($k[0], $u)))
+            $pr = $r.PSObject.Properties[$k[0]]
+            if ($null -ne $pr) { $pr.Value = $u } else { $r.PSObject.Properties.Add((New-Object Management.Automation.PSNoteProperty($k[0], $u))) }
         }
     }
     # collection ids: Plex titles keep "p:<key>"; a local file gets "h:<hash of its path>", and the path behind each hash is

@@ -250,11 +250,17 @@ function Get-MmlmPlexShowNode {
     , $node
 }
 
+function Get-MmlmPlexPosterFile {
+    # where a title's small poster is kept (one file per distinct picture on this server)
+    param([string]$BaseUrl, [string]$ThumbPath)
+    Join-Path $script:ThumbFolder ('plex-' + (Get-MmlmStringHash ($BaseUrl.ToLowerInvariant() + '|' + $ThumbPath)) + '.jpg')
+}
+
 function Save-MmlmPlexPoster {
     # Downloads a small (240x360) poster through Plex's own image resizer and keeps it in the thumbnail folder.
     param([string]$BaseUrl, [string]$Token, [string]$ThumbPath)
     if ([string]::IsNullOrWhiteSpace($ThumbPath)) { return '' }
-    $dest = Join-Path $script:ThumbFolder ('plex-' + (Get-MmlmStringHash ($BaseUrl.ToLowerInvariant() + '|' + $ThumbPath)) + '.jpg')
+    $dest = Get-MmlmPlexPosterFile -BaseUrl $BaseUrl -ThumbPath $ThumbPath
     if ((Test-Path -LiteralPath $dest) -and ((Get-Item -LiteralPath $dest).Length -gt 0)) { return $dest }
 
     $resp = $null
@@ -895,6 +901,42 @@ function Invoke-MmlmPlexScan {
     $posterSeen = @{}
     $n = 0
     Set-MmlmScanPhase -Lo $postLo -Hi 1.0
+
+    # posters that are not on disk yet, several at a time (one per distinct picture: an episode shares its show's)
+    $posterTried = @{}
+    if ($par -gt 1) {
+        $wantThumb = New-Object 'System.Collections.Generic.List[string]'; $wantDest = @{}; $seenThumb = @{}
+        foreach ($s in $stubs) {
+            $rec = $byKey[$s.Key]
+            if ($null -eq $rec) { continue }
+            $th = [string]$rec.PlexThumb
+            if (-not $th -or $seenThumb.ContainsKey($th)) { continue }
+            $seenThumb[$th] = $true
+            if ($rec.PosterPath -and (Test-Path -LiteralPath $rec.PosterPath)) { continue }
+            $dest = Get-MmlmPlexPosterFile -BaseUrl $BaseUrl -ThumbPath $th
+            if ((Test-Path -LiteralPath $dest) -and ((Get-Item -LiteralPath $dest).Length -gt 0)) { continue }
+            $wantThumb.Add($th); $wantDest[$th] = $dest
+        }
+        $empty = 0
+        for ($w = 0; $w -lt $wantThumb.Count; $w += $par) {
+            if (Test-MmlmScanCancelled) { break }
+            $wave = @($wantThumb.GetRange($w, [Math]::Min($par, $wantThumb.Count - $w)))
+            Set-MmlmProgress -Text ("Posters: {0} of {1} images" -f $w, $wantThumb.Count) -Value $w -Max $wantThumb.Count
+            foreach ($th in $wave) { $posterTried[$th] = $true }
+            $good = 0
+            try {
+                $res = Get-MmlmPlexMany -BaseUrl $BaseUrl -Token $Token -Parallel $par -Binary -Accept 'image/jpeg,image/*' -Requests @($wave | ForEach-Object { @{ Path = '/photo/:/transcode'; Query = @{ width = 240; height = 360; minSize = 1; upscale = 1; url = $_ } } })
+                for ($i = 0; $i -lt $wave.Count; $i++) {
+                    $r = $res[$i]
+                    if ([int]$r.Status -ne 200 -or $null -eq $r.Data -or $r.Data.Length -eq 0) { continue }
+                    try { $dest = $wantDest[$wave[$i]]; [IO.File]::WriteAllBytes($dest + '.part', $r.Data); Move-Item -LiteralPath ($dest + '.part') -Destination $dest -Force; $good++ } catch { }
+                }
+            }
+            catch { }
+            # two waves in a row with nothing: the server is not serving pictures right now; the rest are tried next scan
+            if ($good -eq 0) { $empty++; if ($empty -ge 2) { foreach ($th in $wantThumb) { $posterTried[$th] = $true }; break } } else { $empty = 0 }
+        }
+    }
     foreach ($s in $stubs) {
         if (Test-MmlmScanCancelled) { break }
         $n++
@@ -911,7 +953,9 @@ function Invoke-MmlmPlexScan {
         if ($th -and $posterSeen.ContainsKey($th)) { $rec.PosterPath = $posterSeen[$th]; $rec.HasPoster = [bool]$posterSeen[$th] }
         else {
             if (-not $rec.PosterPath -or -not (Test-Path -LiteralPath $rec.PosterPath)) {
-                $poster = [string](@(Save-MmlmPlexPoster -BaseUrl $BaseUrl -Token $Token -ThumbPath $th) | Select-Object -Last 1)
+                $poster = ''
+                if ($posterTried.ContainsKey($th)) { $pf = Get-MmlmPlexPosterFile -BaseUrl $BaseUrl -ThumbPath $th; if (Test-Path -LiteralPath $pf) { $poster = $pf } }      # fetched (or tried) above
+                else { $poster = [string](@(Save-MmlmPlexPoster -BaseUrl $BaseUrl -Token $Token -ThumbPath $th) | Select-Object -Last 1) }
                 $rec.PosterPath = $poster
                 $rec.HasPoster  = [bool]$poster
             }

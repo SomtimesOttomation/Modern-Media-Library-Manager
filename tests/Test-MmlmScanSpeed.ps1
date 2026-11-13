@@ -90,6 +90,16 @@ function Invoke-Scan {
 }
 function ConvertTo-PriorMap { param([object[]]$Recs) $h = @{}; foreach ($r in $Recs) { $h[[string]$r.PlexKey] = $r }; $h }
 
+# the compiled scan helper must build as C# 5 (what Windows PowerShell 5.1 compiles) with no warnings
+if ($PSVersionTable.PSVersion.Major -ge 7) {
+    $err = ''
+    try { Add-Type -TypeDefinition ([IO.File]::ReadAllText((Join-Path $root 'src/Mmlm.Scan.cs')).Replace('namespace Mmlm.Scan', 'namespace Mmlm.ScanCheck')) -Language CSharp -CompilerOptions '-langversion:5', '-warnaserror+' -ErrorAction Stop }
+    catch { $err = [string]$_.Exception.Message }
+    Check (-not $err) "src/Mmlm.Scan.cs compiles as C# 5 with no warnings $err"
+}
+$null = New-TestContext 'init'
+Check (Initialize-MmlmScanNative) "the compiled scan helper loads $(Get-MmlmScanNativeError)"
+
 Start-Mock 32499
 Start-Mock 32501 @{ PLEX_MOCK_SCALE = '240' }
 $small = New-MmlmServer -Kind plex -BaseUrl 'http://127.0.0.1:32499' -Token 'tok'

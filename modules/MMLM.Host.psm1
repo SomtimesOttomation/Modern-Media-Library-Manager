@@ -686,7 +686,14 @@ function Get-HostMediaInfoStatus {
     $read = 0; $unreach = 0; $failed = 0
     foreach ($v in $store.Values) { if ($v.err -eq 'unreachable') { $unreach++ } elseif ($v.err) { $failed++ } else { $read++ } }
     $lr = (Get-MediaInfoStoreFile) + '.lastrun'
-    [ordered]@{ found = [bool]$cli; version = $(if ($cli) { Get-MmlmMediaInfoVersion $cli } else { '' }); movies = (Get-SnapshotCount 'movies')
+    # one movie's path as Plex has it, and as this PC would open it with the path map (shown only in Settings, to set the map)
+    $ex = ''; $exLocal = ''; $exOk = $false
+    try {
+        $map = Get-MovieRidMap
+        foreach ($k in $map.Keys) { $ex = [string]$map[$k]; break }
+        if ($ex) { $exLocal = Resolve-MmlmLocalPath -Path $ex -From ([string]$A.from) -To ([string]$A.to); $exOk = [bool](Test-Path -LiteralPath $exLocal -PathType Leaf) }
+    } catch { }
+    [ordered]@{ found = [bool]$cli; version = $(if ($cli) { Get-MmlmMediaInfoVersion $cli } else { '' }); movies = (Get-SnapshotCount 'movies'); example = $ex; exampleLocal = $exLocal; exampleOk = $exOk
         read = $read; unreachable = $unreach; failed = $failed; lastRun = $(if (Test-Path -LiteralPath $lr) { [IO.File]::ReadAllText($lr).Trim() } else { '' }); running = [bool]$script:MediaInfo }
 }
 

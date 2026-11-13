@@ -220,6 +220,7 @@ function compareTab(repaint) {
   const field = (key, label, ph) => h('label', { class: 'mi-field' }, h('small', null, label),
     h('input', { type: 'text', value: s[key] || '', placeholder: ph, spellcheck: 'false', onchange: (e) => S.saveSettings({ [key]: e.target.value.trim() }).then(paintStatus).catch((x) => S.toast(x.message)) }));
   const status = h('div', { class: 'mi-status' }, h('small', null, 'Looking for MediaInfo...'));
+  const pathCheck = h('div', { class: 'mi-check' });
   const run = h('div', { class: 'mi-run' });
   const paintRun = () => {
     const d = S.state.miRun;
@@ -229,14 +230,35 @@ function compareTab(repaint) {
     try {
       const st = await S.mediaInfoStatus();
       const last = st.lastRun ? `Last library read ${st.lastRun}: ` : 'The library has not been read yet. So far: ';
+      const busy = st.running || S.state.miRun?.running ? true : null;
+      pathCheck.replaceChildren(...(st.example ? [
+        h('div', null, h('small', null, 'A movie as Plex has it: '), h('code', null, st.example)),
+        h('div', null, h('small', null, 'This PC looks for it at: '), h('code', null, st.exampleLocal),
+          h('span', { class: `mi-ok ${st.exampleOk ? 'ok' : 'bad'}` }, st.exampleOk ? ' Found' : ' Not found'))] : [h('small', null, 'Scan Movies first; then an example path shows here.')]));
+      if (st.found) {
+        status.replaceChildren(
+          h('p', null, h('b', null, `MediaInfo found${st.version ? ` · v${st.version}` : ''}`)),
+          h('p', null, h('small', null, `${last}${st.read.toLocaleString('en-US')} movie${st.read === 1 ? '' : 's'} read${st.unreachable ? `, ${st.unreachable.toLocaleString('en-US')} not reachable from this PC (see step 3 below)` : ''}${st.failed ? `, ${st.failed} could not be read` : ''}.`)),
+          h('p', null,
+            h('button', { class: 'btn', type: 'button', disabled: busy, onclick: () => S.readMediaInfo([], false).then(() => S.toast('MediaInfo is reading your movies. New and changed files only.')).catch((e) => S.toast(e.message)) }, 'Read all movies with MediaInfo'), ' ',
+            h('button', { class: 'btn', type: 'button', disabled: busy, onclick: () => S.readMediaInfo([], true).then(() => S.toast('MediaInfo is reading every movie again.')).catch((e) => S.toast(e.message)) }, 'Read every file again')));
+        return;
+      }
+      // not found: what to do, step by step
+      const cmd = 'winget install MediaArea.MediaInfo';
       status.replaceChildren(
-        h('p', null, h('b', null, st.found ? `Found${st.version ? ` · v${st.version}` : ''}` : 'Not found')),
-        h('p', null, h('small', null, st.found
-          ? `${last}${st.read.toLocaleString('en-US')} movie${st.read === 1 ? '' : 's'} read${st.unreachable ? `, ${st.unreachable.toLocaleString('en-US')} not reachable from this PC` : ''}${st.failed ? `, ${st.failed} could not be read` : ''}.`
-          : 'MMLM uses the MediaInfo command-line program already on this PC; it never downloads it. Install it (for example: winget install MediaArea.MediaInfo), put MediaInfo.exe in the lib folder beside the app, or give its location below.')),
-        st.found ? h('p', null,
-          h('button', { class: 'btn', type: 'button', disabled: st.running || S.state.miRun?.running ? true : null, onclick: () => S.readMediaInfo([], false).then(() => S.toast('MediaInfo is reading your movies. New and changed files only.')).catch((e) => S.toast(e.message)) }, 'Read all movies with MediaInfo'), ' ',
-          h('button', { class: 'btn', type: 'button', disabled: st.running || S.state.miRun?.running ? true : null, onclick: () => S.readMediaInfo([], true).then(() => S.toast('MediaInfo is reading every movie again.')).catch((e) => S.toast(e.message)) }, 'Read every file again')) : null);
+        h('p', null, h('b', null, 'MediaInfo is not installed yet')),
+        h('p', null, h('small', null, 'MMLM never downloads it for you. Set it up once:')),
+        h('ol', { class: 'mi-steps' },
+          h('li', null, 'Install the MediaInfo ', h('b', null, 'command-line'), ' version. The easy way: open Windows Terminal or PowerShell and run ',
+            h('code', null, cmd), ' ',
+            h('button', { class: 'btn small', type: 'button', onclick: () => navigator.clipboard.writeText(cmd).then(() => S.toast('Copied.')).catch(() => S.toast(cmd)) }, 'Copy'),
+            '. Or download the "CLI" zip from ',
+            h('a', { href: '#', onclick: (e) => { e.preventDefault(); S.openUrl('https://mediaarea.net/en/MediaInfo/Download/Windows'); } }, "MediaInfo's download page"),
+            ', unzip it, and give the full path to MediaInfo.exe in the first box below.'),
+          h('li', null, 'Restart MMLM (or close and reopen Settings). This should then say "MediaInfo found".'),
+          h('li', null, 'Only if Plex runs on another computer: fill in the two path boxes so this PC can open the movie files (examples under the boxes).')),
+        h('p', null, h('small', null, 'The ordinary MediaInfo app with a window (GUI) is not enough: it has to be the command-line version.')));
     } catch (e) { status.replaceChildren(h('small', null, e.message)); }
   }
   paintStatus(); paintRun();
@@ -252,11 +274,17 @@ function compareTab(repaint) {
     hr(),
     h('p', null, h('b', null, 'MediaInfo '), h('small', null, 'Brightness (MaxCLL and MaxFALL) is not in Plex; MediaInfo reads it from the file. Comparing two movies reads just those two; reading the library fills in every movie ahead of time, in the background. Only files this PC can reach, and nothing goes online.')),
     status, run,
-    h('div', { class: 'mi-grid' },
-      field('miPath', 'MediaInfo location (optional)', 'C:\\Tools\\MediaInfo\\MediaInfo.exe'),
-      field('miFrom', 'Path on the server', '/data/movies'),
-      field('miTo', 'Same folder on this PC', '\\\\NAS\\movies')),
-    h('p', null, h('small', null, 'Plex on another computer? Give the start of its movie paths and where this PC finds the same folder, so MediaInfo can open the files.')),
+    h('div', { class: 'mi-grid one' },
+      field('miPath', 'MediaInfo.exe location (only if it is not found by itself)', 'C:\\Tools\\MediaInfo\\MediaInfo.exe')),
+    h('details', { class: 'mi-map', open: s.miFrom || s.miTo ? true : null },
+      h('summary', null, 'Plex runs on another computer or a NAS?'),
+      h('p', null, h('small', null, "Plex stores each movie's location as that computer sees it. Tell MMLM how the same folder looks from this PC.")),
+      pathCheck,
+      h('div', { class: 'mi-grid' },
+        field('miFrom', 'Start of the path in Plex', '/data/movies'),
+        field('miTo', 'Same folder from this PC', '\\\\NAS\\movies')),
+      h('p', null, h('button', { class: 'btn small', type: 'button', onclick: () => paintStatus() }, 'Check again')),
+      h('p', null, h('small', null, 'Example: Plex on a NAS has /data/movies/Alien (1979)/Alien.mkv and this PC opens the share \\\\NAS\\movies, so enter /data/movies and \\\\NAS\\movies. Plex on this same PC: leave both empty.'))),
     hr(),
     h('p', null, h('label', { class: 'fun-chk' }, h('input', { type: 'checkbox', checked: s.cmpFun ? true : null, onchange: (e) => { if (e.target.checked) startTabGlow(); else stopTabGlow(); set('cmpFun', e.target.checked); } }), h('b', null, ' Fun mode')),
       h('small', null, ' Compare becomes Versus: the fiery VS, glowing posters and the skull bar. Their settings are in the Versus tab, which appears while this is on.')),

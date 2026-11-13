@@ -359,5 +359,5 @@ export function openSettings(tab, onClose) {
     paint();
     return h('div', null, h('h2', null, 'Settings'), tabs, body,
       h('p', { style: { textAlign: 'right' } }, h('button', { class: 'btn primary', type: 'button', onclick: close }, 'Done')));
-  }, '', onClose);
+  }, 'settings-host', onClose);
 }

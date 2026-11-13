@@ -465,7 +465,8 @@ body.dragging { cursor: ew-resize; user-select: none; }
 @media (prefers-reduced-motion: reduce) { .fx-water, .fx-nature, .fx-fire, .fx-lightning, .fx-specter, .fx-poster, .cmp-vs { animation: none !important; } }
 /* Settings > Fun swatches */
 .fx-grid { display: flex; flex-direction: column; gap: 14px; padding: 10px 4px 6px; }
-.fx-row { display: grid; grid-template-columns: 80px repeat(6, 1fr); gap: 10px; align-items: center; }
+.fx-row { display: grid; grid-template-columns: 80px repeat(8, minmax(0, 1fr)); gap: 8px; align-items: center; }
+@media (max-width: 820px) { .fx-row { grid-template-columns: 80px repeat(4, minmax(0, 1fr)); } }
 .fx-lbl { color: var(--muted); font-size: 13px; }
 .fx-opt { display: flex; flex-direction: column; align-items: center; gap: 8px; border: 1px solid transparent; background: none; color: var(--text); font: inherit; padding: 10px 2px 6px; border-radius: 10px; cursor: pointer; }
 .fx-opt.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
@@ -705,4 +706,8 @@ body.dragging { cursor: ew-resize; user-select: none; }
 .mi-ok.ok { color: #3fbf6f; font-weight: 600; } .mi-ok.bad { color: #e5484d; font-weight: 600; }
 .mi-cmd { display: inline-flex; align-items: center; gap: 6px; margin: 2px 0; }
 .mi-cmd input { font: 12px ui-monospace, Consolas, monospace; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface2); color: var(--text); user-select: text; -webkit-user-select: text; cursor: text; max-width: 100%; }
+<<<<<<< HEAD
 .mi-gui { border-left: 3px solid #e5484d; padding: 4px 10px; }
+=======
+.card.modal.settings-host { width: min(880px, 94vw); }
+>>>>>>> origin/redesign/settings-window-wider

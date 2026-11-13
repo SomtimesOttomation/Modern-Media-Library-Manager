@@ -708,3 +708,16 @@ body.dragging { cursor: ew-resize; user-select: none; }
 .mi-cmd input { font: 12px ui-monospace, Consolas, monospace; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface2); color: var(--text); user-select: text; -webkit-user-select: text; cursor: text; max-width: 100%; }
 .mi-gui { border-left: 3px solid #e5484d; padding: 4px 10px; }
 .card.modal.settings-host { width: min(880px, 94vw); }
+/* skull bar (skullfx.js): canvases for the bars and flames, one skull per side */
+.sk-bar { position: relative; margin: 6px 0 4px; height: auto; }
+.sk-bar .sk-cv { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.sk-bar .sk-track { left: 4%; right: 4%; top: 64%; height: 6px; }
+.sk-bar .sk-mid { top: 64%; height: 22px; }
+.sk-skull { position: absolute; pointer-events: none; }
+.sk-skull svg { width: 100%; height: 100%; display: block; overflow: visible; }
+.sk-set { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 22px; margin-bottom: 8px; }
+.sk-set label { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: center; }
+.sk-set label > span { grid-column: 1 / -1; font-size: 13px; }
+.sk-set select, .sk-set input[type=range] { width: 100%; }
+.sk-set label:first-child select { grid-column: 1 / -1; }
+.sk-val { min-width: 7.5em; text-align: right; color: var(--muted); }

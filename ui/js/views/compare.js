@@ -3,6 +3,7 @@
 // Collections compare their aggregates (totals and averages), then play a tournament: each side's films ranked by
 // worldwide gross, #1 vs #1 down to #10 vs #10. What is compared: metrics.js (Settings > Compare, or the Metrics
 // button). The plain look is the default; Fun mode (Settings > Compare) adds the poster borders and the VS (Settings > Fun).
+import { skullBar as skullBarFx } from '../skullfx.js';
 import * as S from '../store.js';
 import * as bridge from '../bridge.js';
 import { h } from '../util.js';
@@ -115,6 +116,7 @@ async function applyFx(el, url, setting, side) {
   // the side's colour for its bars, score and winner marks
   const tone = { fire: '#ff9a3c', water: '#4aa8ff', lightning: '#cfe6ff', specter: '#5fe39a', nature: '#8fbf4a', poster: c1 }[fx];
   const root = el.closest('.cmp');
+  if (root) root.dataset['fx' + side] = fx;               // the skull bar reads each side's theme from here
   if (root) { if (tone) root.style.setProperty(side === 'l' ? '--cl' : '--cr', tone); else root.style.removeProperty(side === 'l' ? '--cl' : '--cr'); }
 }
 
@@ -424,34 +426,8 @@ function fetchHint(list) {
 // The skull bar (Fun mode): each metric (or round) a side wins adds a skull on its side of the middle; skulls further
 // out are bigger and glow harder, and the bar glows more as the lead grows. Stops: the scored metrics (8 at most),
 // or the rounds of a tournament.
-const SKULL = '<svg viewBox="0 0 32 32" aria-hidden="true"><path fill="currentColor" d="M16 3C9 3 4 8 4 14.5c0 4 2 6.8 4.5 8.2V27a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-4.3C26 21.3 28 18.5 28 14.5 28 8 23 3 16 3z"/><circle cx="11" cy="15" r="3.4" fill="#120d10"/><circle cx="21" cy="15" r="3.4" fill="#120d10"/><path d="M14.5 20.5 16 18l1.5 2.5z" fill="#120d10"/><path d="M12 25v3M16 25v3M20 25v3" stroke="#120d10" stroke-width="1.6"/></svg>';
-function skullBar(l, r, stops) {
-  const t = tune();
-  if (!t.skulls.on && !t.bar.on) return null;
-  stops = Math.max(stops, l, r, 1);
-  const span = 46;                                     // % from the middle to the last stop
-  const at = (side, i) => 50 + side * (i / stops) * span;
-  const skScale = mult(t.skulls.size), skInt = mult(t.skulls.int), barScale = mult(t.bar.size), barInt = mult(t.bar.int);
-  const bar = h('div', { class: 'sk-bar', style: { '--sk-scale': skScale.toFixed(2), '--bar-scale': barScale.toFixed(2) } },
-    h('div', { class: 'sk-track' }), h('div', { class: 'sk-mid' }));
-  const lead = l - r, tone = lead > 0 ? 'var(--cl, #ff9a3c)' : 'var(--cr, #6fb7ff)';
-  if (t.bar.on && lead !== 0) {
-    const w = Math.abs(lead) / stops * span;
-    bar.append(h('div', { class: 'sk-fill', style: { left: `${lead > 0 ? 50 - w : 50}%`, width: `${w}%`, '--tone': tone, '--glow': (4 + 26 * Math.abs(lead) / stops * barInt).toFixed(1) } }));
-  }
-  if (t.skulls.on) {
-    for (const [side, n, tn] of [[-1, l, 'var(--cl, #ff9a3c)'], [1, r, 'var(--cr, #6fb7ff)']]) {
-      for (let i = 1; i <= n; i++) {
-        const k = i / stops;                               // 0..1: how far out this skull sits
-        const sk = h('div', { class: 'sk', style: { left: `${at(side, i)}%`, '--tone': tn, '--px': Math.round((22 + 26 * k) * skScale), '--glow': (2 + 22 * k * skInt).toFixed(1), '--delay': `${(i * 0.15).toFixed(2)}s`, opacity: (0.6 + 0.4 * k).toFixed(2) } });
-        sk.innerHTML = SKULL;
-        bar.append(sk);
-      }
-    }
-  }
-  return h('div', { class: 'sk-wrap', role: 'img', 'aria-label': `Skull bar: ${l} to ${r} out of ${stops}` }, bar,
-    h('div', { class: 'sk-legend' }, h('span', null, `${l} won`), h('span', null, `${stops} stops`), h('span', null, `${r} won`)));
-}
+// the skull bar lives in skullfx.js; the options come from Settings > Versus
+const skullBar = (l, r, stops) => skullBarFx(l, r, stops, { style: S.state.settings.skStyle, tattoo: S.state.settings.skTattoo, radius: S.state.settings.fxRadius });
 
 function banner(l, r, a, b, how) {
   const w = l > r ? 'l' : r > l ? 'r' : '';

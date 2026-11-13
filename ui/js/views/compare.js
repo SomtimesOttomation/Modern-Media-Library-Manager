@@ -128,10 +128,96 @@ async function applyFx(el, url, setting, side) {
   const c1 = cols[0] || '#8ea4ff', c2 = cols[1] || cols[0] || '#b06cff';
   el.style.setProperty('--fx1', c1); el.style.setProperty('--fx2', c2);
   el.dataset.fx = fx;
+  flames(el, fx === 'fire');
   // the side's colour for its bars, score and winner marks
   const tone = { fire: '#ff9a3c', lightning: '#6fb7ff', specter: '#5fe39a', poster: c1 }[fx];
   const root = el.closest('.cmp');
   if (root) { if (tone) root.style.setProperty(side === 'l' ? '--cl' : '--cr', tone); else root.style.removeProperty(side === 'l' ? '--cl' : '--cr'); }
+}
+
+// ---- real flames for the Fire effect -----------------------------------------------------------------------------------
+// A canvas behind the poster, a little larger than it, where small embers rise off every edge and fade from white-hot
+// to yellow, orange, red and smoke. "Calm" motion burns lower and slower; "Still" (or the system's reduce-motion
+// setting) keeps the steady glow with no animation. Stops by itself once the poster leaves the page.
+const FLAME_PAD = { x: 34, top: 96, bottom: 20 };
+let flameSprite = null;
+function flameSpriteImg() {
+  if (flameSprite) return flameSprite;
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const g = c.getContext('2d'), gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.35, 'rgba(255,255,255,.55)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+  return (flameSprite = c);
+}
+// one sprite per heat step, tinted once (white-hot -> yellow -> orange -> red -> dark red)
+const FLAME_STEPS = ['#ffe9a8', '#ffd25a', '#ffb02e', '#ff8a1a', '#ff640c', '#e8400a', '#b8220a', '#6e1206', '#3a0a04'];
+let flameTints = null;
+function flameTint(i) {
+  if (!flameTints) flameTints = FLAME_STEPS.map((col) => {
+    const c = document.createElement('canvas'); c.width = c.height = 64; const g = c.getContext('2d');
+    g.drawImage(flameSpriteImg(), 0, 0); g.globalCompositeOperation = 'source-in'; g.fillStyle = col; g.fillRect(0, 0, 64, 64);
+    return c;
+  });
+  return flameTints[Math.max(0, Math.min(FLAME_STEPS.length - 1, i))];
+}
+function flames(el, on) {
+  el._flames?.stop(); el._flames = null;
+  el.classList.remove('fx-flames');
+  if (!on) return;
+  const still = () => el.closest('.motion-still') || matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (still()) return;                                   // the CSS glow stays, without motion
+  const cv = document.createElement('canvas'); cv.className = 'fx-flame-canvas'; cv.setAttribute('aria-hidden', 'true');
+  el.prepend(cv); el.classList.add('fx-flames');
+  const g = cv.getContext('2d');
+  let W = 0, H = 0, w = 0, hgt = 0, dpr = 1, raf = 0, last = 0, seen = false, parts = [], acc = 0;
+  const size = () => {
+    w = el.clientWidth; hgt = el.clientHeight; dpr = Math.min(2, window.devicePixelRatio || 1);
+    W = w + FLAME_PAD.x * 2; H = hgt + FLAME_PAD.top + FLAME_PAD.bottom;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  };
+  // where a new ember starts: anywhere on the poster's edge, most often along the bottom and up the sides
+  const spawn = (calm) => {
+    const ox = FLAME_PAD.x, oy = FLAME_PAD.top, r = Math.random();
+    let x, y;
+    let out = 0;                                         // which way the ember drifts: away from the poster's sides
+    if (r < 0.18) { x = ox + Math.random() * w; y = oy + hgt + 2; }
+    else if (r < 0.7) { const left = Math.random() < 0.5; out = left ? -1 : 1; x = ox + (left ? -2 : w + 2) + (Math.random() - 0.5) * 5; y = oy + Math.pow(Math.random(), 0.6) * hgt; }
+    else { x = ox + Math.random() * w; y = oy + 1; }
+    const life = (calm ? 1.25 : 0.85) + Math.random() * 0.6;
+    parts.push({ x, y, vx: (Math.random() - 0.5) * 10 + out * (6 + Math.random() * 10), vy: -(calm ? 28 : 46) - Math.random() * (calm ? 26 : 44), size: 5 + Math.random() * 8, age: 0, life, wob: Math.random() * 6.28 });
+  };
+  const frame = (t) => {
+    raf = requestAnimationFrame(frame);
+    if (!el.isConnected) { if (seen) stop(); return; }
+    if (!seen) { seen = true; size(); last = t; return; }
+    if (el.clientWidth !== w || el.clientHeight !== hgt) size();
+    if (still()) { stop(); return; }
+    const calm = !!el.closest('.motion-calm');
+    const dt = Math.min(0.05, (t - last) / 1000); last = t;
+    const perim = 2 * (w + hgt);
+    acc += dt * perim * (calm ? 0.45 : 1.0);           // embers per second grow with the poster's size
+    while (acc >= 1 && parts.length < 1600) { spawn(calm); acc--; }
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, W, H);
+    g.globalCompositeOperation = 'lighter';
+    const keep = [];
+    for (const p of parts) {
+      p.age += dt;
+      const k = p.age / p.life;
+      if (k >= 1) continue;
+      p.wob += dt * 7;
+      p.x += (p.vx + Math.sin(p.wob) * 10) * dt; p.y += p.vy * dt; p.vy -= 18 * dt;   // flicker sideways, speed up as it rises
+      const sz = p.size * (1 - k * 0.65);
+      g.globalAlpha = 0.55 * (1 - k) * (k < 0.1 ? k / 0.1 : 1);
+      g.drawImage(flameTint(Math.floor(k * FLAME_STEPS.length)), p.x - sz, p.y - sz * 1.9, sz * 2, sz * 3.4);   // tall, thin tongues
+      keep.push(p);
+    }
+    parts = keep; g.globalAlpha = 1;
+  };
+  const stop = () => { cancelAnimationFrame(raf); cv.remove(); el.classList.remove('fx-flames'); if (el._flames === api) el._flames = null; };
+  const api = { stop };
+  el._flames = api;
+  raf = requestAnimationFrame(frame);
 }
 
 // ---- pieces --------------------------------------------------------------------------------------------------------

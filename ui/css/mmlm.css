@@ -607,4 +607,10 @@ body.dragging { cursor: ew-resize; user-select: none; }
 @media (max-width: 520px) { .setup-tiles { grid-template-columns: 1fr; } .setup-art { max-width: 200px; } }
 .dr-grid > .seg { justify-self: start; }   /* Report style: as wide as its two buttons, not the whole row */
 .hrow.scrolls { cursor: grab; } .hrow.dragging { cursor: grabbing; user-select: none; } .hrow.dragging * { pointer-events: none; }
-.scan-times { max-height: 220px; overflow: auto; font-size: 12px; padding: 10px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); white-space: pre; user-select: text; }
+
+/* Fire with real flames: the canvas sits behind the poster (which no longer clips, so the flames can reach past it) */
+.cmp-poster.fx-flames { position: relative; overflow: visible; isolation: isolate; animation: none; border-color: #ffb347;
+  box-shadow: 0 0 14px 3px rgba(255,120,20,.65), 0 0 40px 10px rgba(255,70,0,.3); }
+.cmp-poster.fx-flames > img, .cmp-poster.fx-flames > .cmp-ph { border-radius: 11px; position: relative; z-index: 1; height: 100%; }
+.cmp-poster.fx-flames > .cmp-ph { background: var(--poster-bg, var(--surface2)); }
+.fx-flame-canvas { position: absolute; left: -37px; top: -99px; z-index: 0; pointer-events: none; }

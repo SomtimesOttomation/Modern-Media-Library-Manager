@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.15.3
+
+**Redesign**
+- VS mode: the Fire effect draws real animated flames around the poster instead of a pulsing border (Calm burns slower; Still keeps a steady glow).
+
 ## 0.15.2
 
 **Bug/Fix**

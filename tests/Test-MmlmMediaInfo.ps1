@@ -63,6 +63,7 @@ $titles = @(@{ Key = 'p:1'; Path = "$srv/Bright One (2020).mkv" }, @{ Key = 'p:2
 $sync = [hashtable]::Synchronized(@{ Text = ''; Value = 0; Max = 0; Cancel = $false })
 $r = Update-MmlmBrightness -Cli $cli -Titles $titles -StoreFile $store -MapFrom $srv -MapTo $movies -Sync $sync
 Check ($r.Read -eq 2 -and $r.Unreachable -eq 1 -and $r.Skipped -eq 0 -and $sync.Text -eq 'MediaInfo: 3 of 3') "first read: 2 read, 1 not reachable ($($r.Read)/$($r.Unreachable)/$($r.Skipped))"
+Check ($sync.Title -eq 'Gone') "the title being read is named for the progress bar ($($sync.Title))"
 $s = Read-MmlmBrightnessStore $store
 Check ($s['p:1'].cll -eq 1000 -and $s['p:1'].fall -eq 400 -and $s['p:2'].cll -eq 0 -and $s['p:3'].err -eq 'unreachable') 'the results are saved per title'
 $r = Update-MmlmBrightness -Cli $cli -Titles $titles -StoreFile $store -MapFrom $srv -MapTo $movies

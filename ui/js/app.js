@@ -88,6 +88,25 @@ function toolBar() {
     setTimeout(() => { if (!S.state.scan.running && !(S.state.tool && S.state.tool.running)) bar.hidden = true; }, 6000);
   }
 }
+// MediaInfo reading files (Compare brightness) uses the same strip when no scan or tool is running, naming the title
+let miShown = false;
+function miBar() {
+  const m = S.state.miRun, bar = $('#syncbar');
+  if (!m || S.state.scan.running || (S.state.tool && S.state.tool.running)) return;
+  const fill = bar.querySelector('.syncbar-fill'), txt = bar.querySelector('.syncbar-text');
+  if (m.running) {
+    miShown = true; bar.hidden = false; bar.classList.remove('fail'); bar.classList.toggle('indeterminate', !m.pct);
+    fill.style.width = `${m.pct || 0}%`;
+    const count = m.total ? `${(m.n || 0).toLocaleString('en-US')} of ${m.total.toLocaleString('en-US')}` : '';
+    txt.textContent = ['MediaInfo', m.pct ? m.pct + '%' : '', count, m.title ? `Reading ${m.title}` : ''].filter(Boolean).join(' \u00b7 ');
+  } else if (miShown) {
+    miShown = false;
+    bar.classList.remove('indeterminate'); bar.classList.toggle('fail', !!m.error); fill.style.width = '100%';
+    const extra = [m.unreachable ? `${m.unreachable} not reachable` : '', m.failed ? `${m.failed} could not be read` : ''].filter(Boolean).join(', ');
+    txt.textContent = m.error ? `MediaInfo failed \u00b7 ${m.error}` : m.cancelled ? 'MediaInfo stopped' : `MediaInfo \u00b7 ${m.read || 0} read${m.skipped ? `, ${m.skipped} unchanged` : ''}${extra ? `, ${extra}` : ''}`;
+    setTimeout(() => { if (!S.state.scan.running && !(S.state.tool && S.state.tool.running) && !S.state.miRun?.running) bar.hidden = true; }, 6000);
+  }
+}
 function syncBar() {
   const bar = $('#syncbar'), sc = S.state.scan;
   const fill = bar.querySelector('.syncbar-fill'), txt = bar.querySelector('.syncbar-text');
@@ -291,6 +310,7 @@ S.subscribe((topics) => {
   if (topics.has('traffic')) { haltBar(); liveStatus(); }
   if (topics.has('dropped')) dropBar();
   if (topics.has('tool')) toolBar();
+  if (topics.has('mediainfo')) miBar();
   if (topics.has('scan')) { syncBar(); liveStatus(); if (!S.state.scan.running) $('#btn-refresh').classList.remove('spin'); else $('#btn-refresh').classList.add('spin'); }
   if (topics.has('counts') || topics.has('library')) { liveStatus(); navCounts(); }
   if (topics.has('update')) { versionChip(); updateToast(); }

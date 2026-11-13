@@ -130,7 +130,7 @@ export async function request(cmd, args = {}) {
       let i = 0;
       const t = setInterval(() => {
         i = Math.min(rids.length, i + Math.max(1, Math.ceil(rids.length / 5)));
-        if (i < rids.length) { emit('mediainfo', { running: true, whole: !args.rids?.length, text: `MediaInfo: ${i} of ${rids.length}`, pct: Math.round(100 * i / rids.length) }); return; }
+        if (i < rids.length) { emit('mediainfo', { running: true, whole: !args.rids?.length, text: `MediaInfo: ${i} of ${rids.length}`, title: (libs.movies.find((r) => r.Rid === rids[i - 1]) || {}).Title || '', n: i, total: rids.length, pct: Math.round(100 * i / rids.length) }); return; }
         clearInterval(t);
         rids.forEach((rid, k) => { const hdr = (libs.movies.find((r) => r.Rid === rid) || {}).HDRType || 'SDR'; miStore[rid] = hdr === 'SDR' ? [0, 0, 0] : [600 + ((k * 137) % 1400), 150 + ((k * 61) % 350), 0]; });
         emit('mediainfo', { running: false, whole: !args.rids?.length, cancelled: false, error: '', read: rids.length, skipped: 0, unreachable: 0, failed: 0 });

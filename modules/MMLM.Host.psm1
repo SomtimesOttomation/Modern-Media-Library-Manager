@@ -657,7 +657,7 @@ function Start-HostMediaInfo {
     $keys = $(if ($want.Count -gt 0) { $want } else { @($map.Keys | Sort-Object) })
     $titles = @(foreach ($k in $keys) { if ($map.ContainsKey($k)) { @{ Key = $k; Path = $map[$k] } } })
     if ($titles.Count -eq 0) { throw 'No movie files to read. Scan Movies first.' }
-    $sync = [hashtable]::Synchronized(@{ Text = 'MediaInfo: starting'; Value = 0; Max = $titles.Count; Cancel = $false; Done = $false; Error = $null; Result = $null })
+    $sync = [hashtable]::Synchronized(@{ Text = 'MediaInfo: starting'; Title = ''; Value = 0; Max = $titles.Count; Cancel = $false; Done = $false; Error = $null; Result = $null })
     $ps = [powershell]::Create()
     [void]$ps.AddScript($script:MediaInfoScript).AddArgument((Join-Path (Join-Path $script:Root 'modules') 'MMLM.MediaInfo.psm1')).AddArgument($cli).AddArgument($titles).AddArgument((Get-MediaInfoStoreFile)).AddArgument([string]$A.from).AddArgument([string]$A.to).AddArgument([bool]$A.force).AddArgument($sync)
     $script:MediaInfo = @{ Ps = $ps; Async = $ps.BeginInvoke(); Sync = $sync; Whole = ($want.Count -eq 0); Last = '' }
@@ -675,7 +675,7 @@ function Get-MediaInfoEvents {
             read = $(if ($r) { [int]$r.Read } else { 0 }); skipped = $(if ($r) { [int]$r.Skipped } else { 0 }); unreachable = $(if ($r) { [int]$r.Unreachable } else { 0 }); failed = $(if ($r) { [int]$r.Failed } else { 0 }) })
         return
     }
-    $d = [ordered]@{ running = $true; whole = [bool]$x.Whole; text = [string]$s.Text; pct = $(if ($s.Max -gt 0) { [int](100 * $s.Value / $s.Max) } else { 0 }) }
+    $d = [ordered]@{ running = $true; whole = [bool]$x.Whole; text = [string]$s.Text; title = [string]$s.Title; n = [int]$s.Value; total = [int]$s.Max; pct = $(if ($s.Max -gt 0) { [int](100 * $s.Value / $s.Max) } else { 0 }) }
     $j = ConvertTo-PageJson $d
     if ($j -ne $x.Last) { $x.Last = $j; Push-HostEvent 'mediainfo' $d }
 }

@@ -164,7 +164,13 @@ function Update-MmlmBrightness {
     foreach ($t in @($Titles)) {
         if ($Sync -and $Sync.Cancel) { break }
         $n++
-        if ($Sync) { $Sync.Text = ('MediaInfo: {0} of {1}' -f $n, $res.Total); $Sync.Value = $n; $Sync.Max = $res.Total }
+        if ($Sync) {
+            # the title being read: given, or the file name without its folder and extension
+            $name = $(if ($t -is [Collections.IDictionary]) { [string]$t['Title'] } else { [string]$t.Title })
+            if (-not $name) { $name = [IO.Path]::GetFileNameWithoutExtension((([string]$t.Path) -split '[\\/]')[-1]) }
+            $Sync.Title = $name
+            $Sync.Text = ('MediaInfo: {0} of {1}' -f $n, $res.Total); $Sync.Value = $n; $Sync.Max = $res.Total
+        }
         $key = [string]$t.Key
         $local = Resolve-MmlmLocalPath -Path ([string]$t.Path) -From $MapFrom -To $MapTo
         $fi = $null

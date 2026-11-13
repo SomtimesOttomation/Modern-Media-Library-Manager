@@ -255,7 +255,7 @@ function compareTab(repaint) {
               h('input', { type: 'text', readonly: true, value: cmd, 'aria-label': 'Install command', spellcheck: 'false', size: String(cmd.length),
                 onfocus: (e) => e.target.select(), onclick: (e) => e.target.select() }),
               h('button', { class: 'btn small', type: 'button', onclick: (e) => { const inp = e.target.previousSibling; inp.select(); navigator.clipboard.writeText(cmd).then(() => S.toast('Copied: paste it into Windows Terminal or PowerShell.')).catch(() => S.toast('Selected: press Ctrl+C to copy.')); } }, 'Copy')),
-            '. Or download the "CLI" zip from ',
+            h('br'), 'Or download the "CLI" zip from ',
             h('a', { href: '#', onclick: (e) => { e.preventDefault(); S.openUrl('https://mediaarea.net/en/MediaInfo/Download/Windows'); } }, "MediaInfo's download page"),
             ', unzip it, and give the full path to MediaInfo.exe in the first box below.'),
           h('li', null, 'Restart MMLM (or close and reopen Settings). This should then say "MediaInfo found".'),

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.17.0
+
+**Feature**
+- Settings > Data > Traffic details shows how many OMDb requests Fetch info has made today, against the free key's limit of about 1,000 a day.
+- A movie's card has a Fetch info link next to Save as picture, to fetch info for just that movie.
+
 ## 0.16.0
 
 **Feature**

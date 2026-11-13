@@ -1405,7 +1405,12 @@ $script:Commands = [ordered]@{
             $tab = $(if ([string]$a.tab -eq 'tv') { 'tv' } else { 'movies' })
             $p = Join-Path $script:CacheDir ('summary-' + $tab + '.json')
             if (Test-Path -LiteralPath $p) { [IO.File]::ReadAllText($p) } else { ConvertTo-PageJson @{ title = 'Recently added'; items = @(); updatedAt = $null } } } }
-    'traffic.get'    = @{ Fetch = $false; Run = { param($a) ConvertTo-PageJson @{ requests = [int]$script:Traffic.Requests; bytes = [long]$script:Traffic.Bytes; errors = [int]$script:Traffic.Errors; stopped = [bool]$script:Traffic.Halted; uptimeSec = [int]((Get-Date) - $script:Started).TotalSeconds } } }
+    'traffic.get'    = @{ Fetch = $false; Run = { param($a)
+            # OMDb requests today (Fetch info; free keys allow about 1,000 a day), from the Fetch tool's own count
+            $om = @{ date = ''; count = 0; limitHit = $false }
+            $of = Join-Path (Join-Path $script:AppData 'metadata') 'omdb-usage.json'
+            try { if (Test-Path -LiteralPath $of) { $o = [IO.File]::ReadAllText($of) | ConvertFrom-Json; if ([string]$o.date -eq (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')) { $om = @{ date = [string]$o.date; count = [int]$o.count; limitHit = [bool]$o.limitHit } } } } catch { }
+            ConvertTo-PageJson @{ requests = [int]$script:Traffic.Requests; bytes = [long]$script:Traffic.Bytes; errors = [int]$script:Traffic.Errors; stopped = [bool]$script:Traffic.Halted; uptimeSec = [int]((Get-Date) - $script:Started).TotalSeconds; omdb = $om } } }
     'traffic.stop'   = @{ Fetch = $false; Run = { param($a) Stop-DashTraffic; 'true' } }
     'traffic.resume' = @{ Fetch = $false; Run = { param($a) $script:Traffic.Halted = $false; Send-HostEventNow 'traffic' @{ stopped = $false }; 'true' } }
 }

@@ -684,3 +684,8 @@ body.dragging { cursor: ew-resize; user-select: none; }
 .cmp-poster.fx-themed > img, .cmp-poster.fx-themed > .cmp-ph { border-radius: 11px; position: relative; z-index: 1; height: 100%; }
 .cmp-poster.fx-themed > .cmp-ph { background: var(--poster-bg, var(--surface2)); }
 .fx-theme-canvas { position: absolute; left: -37px; top: -43px; z-index: 2; pointer-events: none; }
+.sheet .xp.xf { left: 150px; }
+.omdb { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.omdb small { color: var(--muted); flex-basis: 100%; }
+.omdb-bar { width: 90px; height: 6px; border-radius: 3px; background: var(--surface2); overflow: hidden; display: inline-block; }
+.omdb-bar i { display: block; height: 100%; background: var(--accent); }

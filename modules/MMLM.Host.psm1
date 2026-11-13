@@ -1410,7 +1410,11 @@ $script:Commands = [ordered]@{
             $om = @{ date = ''; count = 0; limitHit = $false }
             $of = Join-Path (Join-Path $script:AppData 'metadata') 'omdb-usage.json'
             try { if (Test-Path -LiteralPath $of) { $o = [IO.File]::ReadAllText($of) | ConvertFrom-Json; if ([string]$o.date -eq (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')) { $om = @{ date = [string]$o.date; count = [int]$o.count; limitHit = [bool]$o.limitHit } } } } catch { }
-            ConvertTo-PageJson @{ requests = [int]$script:Traffic.Requests; bytes = [long]$script:Traffic.Bytes; errors = [int]$script:Traffic.Errors; stopped = [bool]$script:Traffic.Halted; uptimeSec = [int]((Get-Date) - $script:Started).TotalSeconds; omdb = $om } } }
+            # each outside service's last result and, when it failed, why (Fetch info notes them)
+            $apis = [ordered]@{}
+            $af = Join-Path (Join-Path $script:AppData 'metadata') 'api-status.json'
+            try { if (Test-Path -LiteralPath $af) { $o = [IO.File]::ReadAllText($af) | ConvertFrom-Json; foreach ($pr in $o.PSObject.Properties) { $v = $pr.Value; $apis[$pr.Name] = @{ ok = [bool]$v.ok; reason = [string]$v.reason; at = [string]$v.at; lastOk = [string]$v.lastOk; lastFail = [string]$v.lastFail } } } } catch { }
+            ConvertTo-PageJson @{ requests = [int]$script:Traffic.Requests; bytes = [long]$script:Traffic.Bytes; errors = [int]$script:Traffic.Errors; stopped = [bool]$script:Traffic.Halted; uptimeSec = [int]((Get-Date) - $script:Started).TotalSeconds; omdb = $om; apis = $apis } } }
     'traffic.stop'   = @{ Fetch = $false; Run = { param($a) Stop-DashTraffic; 'true' } }
     'traffic.resume' = @{ Fetch = $false; Run = { param($a) $script:Traffic.Halted = $false; Send-HostEventNow 'traffic' @{ stopped = $false }; 'true' } }
 }

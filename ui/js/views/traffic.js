@@ -15,6 +15,20 @@ function omdbLine(o) {
     h('small', null, ' Counts reset each day (UTC). Every app using this key counts toward OMDb\'s limit; this shows MMLM\'s own requests.'));
 }
 
+// '2026-11-13 13:01:12' -> '13:01' today, else 'Nov 12 13:01'
+const when = (at) => { if (!at) return '—'; const d = new Date(at.replace(' ', 'T')); if (isNaN(d)) return at; const t = d.toTimeString().slice(0, 5); return d.toDateString() === new Date().toDateString() ? t : `${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ${t}`; };
+// Outside services (Fetch info): the last result for each and, when it failed, the reason the service gave
+function apiTable(apis) {
+  const rows = Object.entries(apis || {});
+  if (!rows.length) return h('p', null, h('small', null, 'Outside services: no Fetch info has run yet.'));
+  return h('div', { class: 'api-wrap' }, h('table', { class: 'tbl api-tbl' },
+    h('thead', null, h('tr', null, ['Service', 'Last result', 'Reason', 'When'].map((c) => h('th', null, c)))),
+    h('tbody', null, rows.map(([k, v]) => h('tr', null, h('td', null, k),
+      h('td', null, h('span', { class: `api-dot ${v.ok ? 'ok' : 'bad'}` }), v.ok ? ' OK' : ' Failed'),
+      h('td', null, v.ok ? (v.lastFail ? h('small', null, `last failure ${v.lastFail}`) : '—') : v.reason || 'No reason given'),
+      h('td', null, when(v.at)))))));
+}
+
 export function openTraffic() {
   let timer = 0;
   const body = h('div', null);
@@ -35,6 +49,7 @@ export function openTraffic() {
         h('dt', null, 'Downloaded'), h('dd', null, fmtBytes(t.bytes)),
         h('dt', null, 'Last request'), h('dd', null, t.last || '—'),
         h('dt', null, 'OMDb today'), h('dd', null, omdbLine(t.omdb))),
+      apiTable(t.apis),
       h('table', { class: 'tbl', style: { marginTop: '12px' } },
         h('thead', null, h('tr', null, ['Kind', 'Requests', 'Data'].map((c) => h('th', null, c)))),
         h('tbody', null, rows.map(([k, v]) => h('tr', null, h('td', null, k), h('td', null, v.requests), h('td', null, fmtBytes(v.bytes)))))),

@@ -195,7 +195,7 @@ export async function request(cmd, args = {}) {
     case 'collections.get': return collections;
     case 'collections.save': collections = args.collections; return collections;
     case 'summary.get': return { title: 'Recently added', items: [], updatedAt: null };
-    case 'traffic.get': return { ...traffic, stopped: halted, uptimeSec: Math.round(performance.now() / 1000), omdb: { date: '2026-11-13', count: 214, limitHit: false } };
+    case 'traffic.get': return { ...traffic, stopped: halted, uptimeSec: Math.round(performance.now() / 1000), omdb: { date: '2026-11-13', count: 214, limitHit: true }, apis: { TMDB: { ok: true, reason: '', at: '2026-11-13 13:01:12', lastOk: '2026-11-13 13:01:12', lastFail: '' }, OMDb: { ok: false, reason: 'HTTP 401: Request limit reached!', at: '2026-11-13 13:01:10', lastOk: '2026-11-13 12:40:02', lastFail: '2026-11-13 13:01:10' }, IMDb: { ok: true, reason: '', at: '2026-11-13 12:39:58', lastOk: '2026-11-13 12:39:58', lastFail: '' } } };
     case 'traffic.stop': halted = true; clearInterval(scanTimer); emit('traffic', { stopped: true }); return true;
     case 'traffic.resume': halted = false; emit('traffic', { stopped: false }); return true;
     case 'update.check': later(600, () => emit('update', { running: false, action: 'Check', result: { status: 'current', current: '0.5.0', latest: '0.5.0' } })); return true;

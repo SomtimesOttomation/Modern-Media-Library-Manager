@@ -27,9 +27,62 @@ function Add-MmlmOmdbUse {
     } catch { }
 }
 
+function Get-MmlmApiName {
+    param([string]$Url)
+    if ($Url -match 'themoviedb\.org') { return 'TMDB' }
+    if ($Url -match 'omdbapi\.com') { return 'OMDb' }
+    if ($Url -match 'imdbws\.com') { return 'IMDb' }
+    try { ([Uri]$Url).Host } catch { 'web' }
+}
+function Set-MmlmApiStatus {
+    # The last result per outside service (TMDB, OMDb, IMDb), with the reason when it failed, for Settings > Data >
+    # Traffic details. Kept in <AppData>\metadata\api-status.json; written when the result changes, and at most once a
+    # minute while things keep working.
+    param([string]$Api, [bool]$Ok, [string]$Reason = '')
+    if (-not $script:AppData) { return }
+    if ($null -eq $script:ApiState) { $script:ApiState = @{}; $script:ApiSaved = [datetime]::MinValue }
+    $f = Join-Path (Join-Path $script:AppData 'metadata') 'api-status.json'
+    try {
+        if ($script:ApiState.Count -eq 0 -and (Test-Path -LiteralPath $f)) {
+            $o = [IO.File]::ReadAllText($f) | ConvertFrom-Json
+            foreach ($pr in $o.PSObject.Properties) { $v = $pr.Value; $script:ApiState[$pr.Name] = @{ ok = [bool]$v.ok; reason = [string]$v.reason; at = [string]$v.at; lastOk = [string]$v.lastOk; lastFail = [string]$v.lastFail } }
+        }
+        $now = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+        $old = $script:ApiState[$Api]
+        $new = @{ ok = $Ok; reason = $(if ($Ok) { '' } else { $Reason }); at = $now
+            lastOk = $(if ($Ok) { $now } elseif ($old) { $old.lastOk } else { '' })
+            lastFail = $(if (-not $Ok) { $now } elseif ($old) { $old.lastFail } else { '' }) }
+        $script:ApiState[$Api] = $new
+        $changed = ($null -eq $old) -or ($old.ok -ne $Ok) -or ($old.reason -ne $new.reason)
+        if (-not $changed -and ((Get-Date) - $script:ApiSaved).TotalSeconds -lt 60) { return }
+        $dir = Split-Path -Parent $f; if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        [IO.File]::WriteAllText($f, (ConvertTo-Json -InputObject $script:ApiState -Depth 3 -Compress))
+        $script:ApiSaved = Get-Date
+    } catch { }
+}
+function Get-MmlmErrorText {
+    # The service's own message from a failed reply: OMDb's "Error", TMDB's "status_message", else the start of the body
+    param($Response)
+    if ($null -eq $Response) { return '' }
+    try {
+        $sr = New-Object IO.StreamReader($Response.GetResponseStream(), [Text.Encoding]::UTF8)
+        try { $body = $sr.ReadToEnd() } finally { $sr.Dispose() }
+    } catch { return '' }
+    try {
+        $j = $body | ConvertFrom-Json
+        foreach ($n in 'Error', 'status_message', 'message', 'error') { if ($j.PSObject.Properties[$n] -and [string]$j.$n) { return ([string]$j.$n).Trim() } }
+    } catch { }
+    $t = ($body -replace '<[^>]+>', ' ' -replace '\s+', ' ').Trim()
+    if ($t.Length -gt 160) { $t = $t.Substring(0, 160) + '...' }
+    $t
+}
+
 function Invoke-MmlmJsonGet {
-    # One polite GET. $null for 404; waits and retries on 429 / 5xx; throws 'KEYREJECT' when the service refuses the key.
+    # One polite GET. $null for 404; waits and retries on 429 / 5xx. When the service refuses the request it throws
+    # 'KEYREJECT|<service>|<reason>', or 'OMDBLIMIT|OMDb|<reason>' for OMDb's daily limit (it answers that with 401
+    # too). Every result is noted per service with its reason (Set-MmlmApiStatus).
     param([string]$Url, [hashtable]$Headers = @{}, [int]$TimeoutMs = 20000)
+    $api = Get-MmlmApiName $Url
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     for ($try = 1; $try -le 4; $try++) {
         if (Test-MmlmScanCancelled) { return $null }
@@ -46,15 +99,30 @@ function Invoke-MmlmJsonGet {
             }
             finally { $resp.Close() }
             Add-MmlmTraffic -Bytes $txt.Length
-            return ($txt | ConvertFrom-Json)
+            $j = $txt | ConvertFrom-Json
+            # OMDb can also answer 200 with an error inside
+            if ($api -eq 'OMDb' -and $j -and [string]$j.Response -eq 'False' -and [string]$j.Error -and [string]$j.Error -notmatch 'not found') {
+                $e = [string]$j.Error
+                Set-MmlmApiStatus $api $false ('HTTP 200: ' + $e)
+                if ($e -match 'limit') { throw ('OMDBLIMIT|OMDb|' + $e) }
+                if ($e -match 'key') { throw ('KEYREJECT|OMDb|' + $e) }
+            }
+            else { Set-MmlmApiStatus $api $true }
+            return $j
         }
         catch [Net.WebException] {
             Add-MmlmTraffic -Failed
             $r    = $_.Exception.Response
             $code = if ($null -ne $r) { [int]$r.StatusCode } else { 0 }
-            if ($code -eq 404) { return $null }
-            if ($code -eq 401 -or $code -eq 403) { throw 'KEYREJECT' }
-            if ($try -ge 4) { throw }
+            $msg  = Get-MmlmErrorText $r
+            $reason = $(if ($code -gt 0) { 'HTTP ' + $code + $(if ($msg) { ': ' + $msg } else { ' ' + [string]$r.StatusDescription }) } else { [string]$_.Exception.Message })
+            if ($code -eq 404) { Set-MmlmApiStatus $api $true; return $null }        # not found is an answer, not a failure
+            Set-MmlmApiStatus $api $false $reason
+            if ($code -eq 401 -or $code -eq 403) {
+                if ($api -eq 'OMDb' -and $msg -match 'limit') { throw ('OMDBLIMIT|OMDb|' + $reason) }
+                throw ('KEYREJECT|' + $api + '|' + $reason)
+            }
+            if ($try -ge 4) { throw ($api + ' did not answer: ' + $reason) }
             $wait = 2 * $try
             if ($code -eq 429 -and $null -ne $r) {
                 $ra = 0; if ([int]::TryParse([string]$r.Headers['Retry-After'], [ref]$ra) -and $ra -gt 0) { $wait = [Math]::Min(30, $ra) }
@@ -81,8 +149,9 @@ function Get-MmlmImdbRatingMap {
             $wc.DownloadFile('https://datasets.imdbws.com/title.ratings.tsv.gz', $gz + '.tmp')
             try { Add-MmlmTraffic -Bytes (Get-Item -LiteralPath ($gz + '.tmp')).Length } catch { }
             Move-Item -LiteralPath ($gz + '.tmp') -Destination $gz -Force
+            Set-MmlmApiStatus 'IMDb' $true
         }
-        catch { Remove-Item -LiteralPath ($gz + '.tmp') -Force -ErrorAction SilentlyContinue }
+        catch { Remove-Item -LiteralPath ($gz + '.tmp') -Force -ErrorAction SilentlyContinue; Set-MmlmApiStatus 'IMDb' $false ('Ratings file download failed: ' + [string]$_.Exception.Message) }
         finally { $wc.Dispose() }
     }
     if (-not (Test-Path -LiteralPath $gz)) { return $map }
@@ -235,7 +304,7 @@ function Invoke-MmlmMetadataScrape {
     if ($TmdbKey.Length -gt 60) { $headers['Authorization'] = 'Bearer ' + $TmdbKey } else { $keyQ = '&api_key=' + [Uri]::EscapeDataString($TmdbKey) }
     $store = Read-MmlmMetaStore -Path $StorePath
     $stats = @{ Done = 0; Found = 0; Missing = 0; Failed = 0 }
-    $tmdbOff = (-not $TmdbKey); $omdbOff = (-not $OmdbKey); $omdbLimit = $false; $keyBad = ''
+    $tmdbOff = (-not $TmdbKey); $omdbOff = (-not $OmdbKey); $omdbLimit = $false; $keyBad = ''; $omdbWhy = ''; $omdbErrs = 0
     Set-MmlmScanPhase -Lo 0.1 -Hi 1.0
     $i = 0
     foreach ($rec in $targets) {
@@ -291,11 +360,19 @@ function Invoke-MmlmMetadataScrape {
 
             # ---- OMDb: Rotten Tomatoes critic score, Metacritic Metascore, domestic box office ---------------------
             if (-not $omdbOff -and -not $omdbLimit -and $imdbId) {
-                $o = Invoke-MmlmJsonGet -Url ('https://www.omdbapi.com/?apikey=' + [Uri]::EscapeDataString($OmdbKey) + '&i=' + $imdbId)
+                $o = $null
+                try { $o = Invoke-MmlmJsonGet -Url ('https://www.omdbapi.com/?apikey=' + [Uri]::EscapeDataString($OmdbKey) + '&i=' + $imdbId) }
+                catch {
+                    # OMDb trouble never fails the title: what TMDB found is kept, and OMDb is left alone for the rest
+                    $m = [string]$_.Exception.Message
+                    if ($m -like 'OMDBLIMIT|*') { $omdbLimit = $true; $omdbWhy = $m.Split('|', 3)[2]; Add-MmlmOmdbUse -LimitHit }
+                    elseif ($m -like 'KEYREJECT|*') { $omdbOff = $true; $omdbWhy = $m.Split('|', 3)[2] }
+                    else { $omdbWhy = $m; $omdbErrs++ }
+                    Add-MmlmFetchDetail $rec 'OMDb' ('No Rotten Tomatoes / Metacritic / domestic box office: ' + $omdbWhy)
+                }
                 Add-MmlmOmdbUse
                 if ($o) {
-                    if ($o.Response -eq 'False' -and ([string]$o.Error) -match 'limit') { $omdbLimit = $true; Add-MmlmOmdbUse -LimitHit }
-                    elseif ($o.Response -eq 'True') {
+                    if ($o.Response -eq 'True') {
                         $rt = @($o.Ratings | Where-Object { $_.Source -eq 'Rotten Tomatoes' }) | Select-Object -First 1
                         if ($rt -and ([string]$rt.Value) -match '^(\d+)%') { $got['RTCritic'] = @{ Value = [int]$Matches[1]; Source = 'OMDb' } }
                         if (([string]$o.Metascore) -match '^\d+$' -and [int]$o.Metascore -gt 0) { $got['Metascore'] = @{ Value = [int]$o.Metascore; Source = 'OMDb' } }
@@ -306,7 +383,12 @@ function Invoke-MmlmMetadataScrape {
             }
         }
         catch {
-            if ($_.Exception.Message -eq 'KEYREJECT') { $keyBad = 'An API key was rejected - check the keys under the gear button.'; Add-MmlmFetchDetail $rec 'Failed' 'A service rejected the API key (HTTP 401/403). Check the TMDB and OMDb keys under the gear button.'; break }
+            $em = [string]$_.Exception.Message
+            if ($em -like 'KEYREJECT|*') {
+                $pp = $em.Split('|', 3)
+                $keyBad = ('{0} refused the request ({1}). Check the {0} key under the gear button.' -f $pp[1], $pp[2])
+                Add-MmlmFetchDetail $rec 'Failed' $keyBad; break
+            }
             $why = [string]$_.Exception.Message
             $inner = $_.Exception.InnerException
             if ($null -ne $inner -and $inner.Message -and $why -notmatch [regex]::Escape($inner.Message)) { $why += ' / ' + $inner.Message }
@@ -355,7 +437,9 @@ function Invoke-MmlmMetadataScrape {
     if ($stats.Failed  -gt 0) { $sum += ", $($stats.Failed) failed" }
     if ($skippedTv     -gt 0) { $sum += ", $skippedTv TV title(s) skipped" }
     $sum += '.'
-    if ($omdbLimit) { $sum += ' OMDb daily limit reached - run again tomorrow for the rest.' }
+    if ($omdbLimit) { $sum += (' OMDb daily limit reached ({0}) - run again tomorrow for the rest.' -f $omdbWhy) }
+    elseif ($omdbOff -and $omdbWhy) { $sum += (' OMDb refused the key ({0}); Rotten Tomatoes, Metacritic and domestic box office were skipped.' -f $omdbWhy) }
+    elseif ($omdbErrs -gt 0) { $sum += (' OMDb failed {0} time(s), last: {1}.' -f $omdbErrs, $omdbWhy) }
     if ($keyBad)    { $sum += ' ' + $keyBad }
     if ($tmdbOff)   { $sum += ' (No TMDB key set.)' }
     $script:Sync.Summary = $sum

@@ -682,6 +682,7 @@ function Get-MediaInfoEvents {
 function Get-HostMediaInfoStatus {
     param($A)
     $cli = Find-MmlmMediaInfoCli -Custom ([string]$A.path) -AppRoot $script:Root
+    $gui = Get-MmlmMediaInfoGuiSkipped
     $store = Read-MmlmBrightnessStore (Get-MediaInfoStoreFile)
     $read = 0; $unreach = 0; $failed = 0
     foreach ($v in $store.Values) { if ($v.err -eq 'unreachable') { $unreach++ } elseif ($v.err) { $failed++ } else { $read++ } }
@@ -693,7 +694,7 @@ function Get-HostMediaInfoStatus {
         foreach ($k in $map.Keys) { $ex = [string]$map[$k]; break }
         if ($ex) { $exLocal = Resolve-MmlmLocalPath -Path $ex -From ([string]$A.from) -To ([string]$A.to); $exOk = [bool](Test-Path -LiteralPath $exLocal -PathType Leaf) }
     } catch { }
-    [ordered]@{ found = [bool]$cli; version = $(if ($cli) { Get-MmlmMediaInfoVersion $cli } else { '' }); movies = (Get-SnapshotCount 'movies'); example = $ex; exampleLocal = $exLocal; exampleOk = $exOk
+    [ordered]@{ found = [bool]$cli; gui = $gui; version = $(if ($cli) { Get-MmlmMediaInfoVersion $cli } else { '' }); movies = (Get-SnapshotCount 'movies'); example = $ex; exampleLocal = $exLocal; exampleOk = $exOk
         read = $read; unreachable = $unreach; failed = $failed; lastRun = $(if (Test-Path -LiteralPath $lr) { [IO.File]::ReadAllText($lr).Trim() } else { '' }); running = [bool]$script:MediaInfo }
 }
 

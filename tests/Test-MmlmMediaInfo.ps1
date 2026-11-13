@@ -27,6 +27,15 @@ $onPath = "$(Get-Command mediainfo -CommandType Application -ErrorAction Silentl
 Check ([string]$found -ceq $onPath) "a wrong location falls back to the PATH, nothing is downloaded ([$found] vs [$onPath])"
 Check ((Get-MmlmMediaInfoVersion $cli) -eq '24.06') 'the version is read'
 
+# the windowed MediaInfo app is never used: it opens an empty window per file (told apart by its header, not run)
+function New-FakeExe([string]$p, [int]$sub) { $b = New-Object byte[] 512; $b[0] = 0x4D; $b[1] = 0x5A; [BitConverter]::GetBytes([int]128).CopyTo($b, 0x3C); $b[128] = 0x50; $b[129] = 0x45; [BitConverter]::GetBytes([uint16]$sub).CopyTo($b, 128 + 0x5C); [IO.File]::WriteAllBytes($p, $b) }
+$gui = Join-Path $tmp 'gui\MediaInfo.exe'; New-Item -ItemType Directory -Path (Split-Path $gui) | Out-Null; New-FakeExe $gui 2
+$con = Join-Path $tmp 'con\MediaInfo.exe'; New-Item -ItemType Directory -Path (Split-Path $con) | Out-Null; New-FakeExe $con 3
+Check ((Test-MmlmWindowedExe $gui) -and -not (Test-MmlmWindowedExe $con) -and -not (Test-MmlmWindowedExe $cli)) 'the windowed app is told apart from the command-line one'
+$f = Find-MmlmMediaInfoCli -Custom $gui -AppRoot (Join-Path $tmp 'app')
+Check ([string]$f -ne (Resolve-Path $gui).ProviderPath -and (Get-MmlmMediaInfoGuiSkipped) -eq (Resolve-Path $gui).ProviderPath) 'the windowed app set by hand is skipped and named'
+Check ((Find-MmlmMediaInfoCli -Custom $con -AppRoot $tmp) -eq (Resolve-Path $con).ProviderPath -and -not (Get-MmlmMediaInfoGuiSkipped)) 'a command-line MediaInfo.exe set by hand is used'
+
 $movies = Join-Path $tmp 'Movies'; New-Item -ItemType Directory -Path $movies | Out-Null
 $f1 = Join-Path $movies 'Bright One (2020).mkv'; [IO.File]::WriteAllText($f1, "1000 cd/m2|400 cd/m2`n")
 $f2 = Join-Path $movies 'Plain SDR (1999).mkv'; [IO.File]::WriteAllText($f2, "|`n")

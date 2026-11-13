@@ -614,3 +614,4 @@ body.dragging { cursor: ew-resize; user-select: none; }
 .cmp-poster.fx-flames > img, .cmp-poster.fx-flames > .cmp-ph { border-radius: 11px; position: relative; z-index: 1; height: 100%; }
 .cmp-poster.fx-flames > .cmp-ph { background: var(--poster-bg, var(--surface2)); }
 .fx-flame-canvas { position: absolute; left: -37px; top: -99px; z-index: 0; pointer-events: none; }
+.scan-times { max-height: 220px; overflow: auto; font-size: 12px; padding: 10px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); white-space: pre; user-select: text; }

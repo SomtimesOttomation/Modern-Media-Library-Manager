@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.18.1
+
+**Bug/Fix**
+- The Metrics window is wide enough that it no longer needs a sideways scroll bar.
+- Settings > Compare > MediaInfo no longer shows "null"; when MediaInfo is missing it shows numbered setup steps with a copyable install command, and the path map has a Check again button that shows whether an example file is found.
+
 ## 0.18.0
 
 **Feature**

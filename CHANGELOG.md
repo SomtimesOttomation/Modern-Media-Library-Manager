@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.20.0
+
+**Feature**
+- Versus skull bar: each side's bar runs from the middle out to its score, drawn in that side's theme (flames, water waves and bubbles, spectral wisps, lightning bolts, vines and falling leaves), with one flaming skull at its tip facing outward.
+- Eight skull looks (Bone, Charred, Engulfed, Bone ablaze, Cracked glass dark and light, Day of the Dead light and dark) and ten glowing tattoos, chosen in Settings > Versus, plus an Effect radius slider.
+- The effects draw faster: glows are drawn once and reused, the number of sparks is capped, and drawing stops when the bar is off screen or the window is hidden.
+
 ## 0.18.1
 
 **Bug/Fix**

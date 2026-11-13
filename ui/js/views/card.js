@@ -56,6 +56,8 @@ function links(r) {
   if (r.TMDBID) out.push(['TMDB', `https://www.themoviedb.org/${r.Show ? 'tv' : 'movie'}/${encodeURIComponent(r.TMDBID)}`]);
   return `<div class="links">${out.map(([n, u]) => `<button type="button" data-url="${esc(u)}">${n} \u2197</button>`).join('')}${ADDCOL}${r.__show ? '' : ALLDET}</div>`;
 }
+// Fetch info for just this movie (Tools > Fetch info, narrowed to it); not for TV episodes
+const FETCH_BTN = '<button class="xp xf" type="button" data-fetch="1" title="Look up ratings, Metacritic and box office for this movie"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3"/></svg><span>Fetch info</span></button>';
 const EXPORT_BTN = '<button class="xp" type="button" data-export="1" title="Save this card as a picture in Pictures\\Modern Media Library Manager"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v8M4.5 6.8 8 10.3l3.5-3.5M2.5 13.5h11"/></svg><span>Save as picture</span></button>';
 
 function titleSheet(r) {
@@ -67,7 +69,7 @@ function titleSheet(r) {
   const art = artUrl(r);
   // an episode keeps its own title as text; the show's logo goes above it in place of the show name
   const head = r.Show ? (S.state.settings.artLogo && r.Logo ? `<div class="eyebrow logo-row">${logoOrTitle(r, r.Show, 'span')}</div>${ep}` : ep) + `<h2>${esc(String(r.Title).replace(/^.* - S\d+E\d+ - /, ''))}</h2>` : logoOrTitle(r, r.Title);
-  return `<div class="sheet${art ? ' has-art' : ''}"${art ? ` style="--art:url('${esc(art)}')"` : ''}>${EXPORT_BTN}<button class="x" type="button" data-close="1" aria-label="Close">✕</button>
+  return `<div class="sheet${art ? ' has-art' : ''}"${art ? ` style="--art:url('${esc(art)}')"` : ''}>${EXPORT_BTN}${!r.Show && r.Rid ? FETCH_BTN : ''}<button class="x" type="button" data-close="1" aria-label="Close">✕</button>
     <div class="pcol"><div class="pimg">${posterHtml(r)}</div>${scoreCards(r)}</div>
     <div>
       ${head}
@@ -147,7 +149,7 @@ async function exportCard(sheet, btn, r, toast) {
     const W = Math.ceil(sheet.getBoundingClientRect().width);
     const clone = sheet.cloneNode(true);
     inlineStyles(sheet, clone);
-    clone.querySelectorAll('.x,.xp').forEach((n) => n.remove());
+    clone.querySelectorAll('.x,.xp,.xf').forEach((n) => n.remove());
     let note = '';
     for (const im of [...clone.querySelectorAll('img')]) {
       const d = await imageAsDataUrl(im.getAttribute('src'));
@@ -181,8 +183,9 @@ export function openCard(r, toast, back) {
     const box = document.createElement('div');
     box.innerHTML = titleSheet(r);
     box.addEventListener('click', (e) => {
-      const t = e.target.closest('[data-close],[data-export],[data-url],[data-addcol],[data-alldet]');
+      const t = e.target.closest('[data-close],[data-export],[data-fetch],[data-url],[data-addcol],[data-alldet]');
       if (!t) return;
+      if (t.dataset.fetch) { import('./tools.js').then((m) => m.fetchDialog('movies', [r.Rid])); return; }
       if (t.dataset.alldet) {
         const specs = box.querySelector('.specs'), have = box.querySelector('.alldet');
         if (have) { have.remove(); specs.hidden = false; t.textContent = 'All details'; }

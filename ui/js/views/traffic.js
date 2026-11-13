@@ -4,6 +4,17 @@ import * as bridge from '../bridge.js';
 import { h, fmtBytes, fmtDuration } from '../util.js';
 import { overlay } from './settings.js';
 
+// OMDb (Fetch info: Rotten Tomatoes, Metacritic, domestic box office) allows about 1,000 requests a day on a free key
+const OMDB_LIMIT = 1000;
+function omdbLine(o) {
+  const n = (o && o.count) || 0;
+  const left = Math.max(0, OMDB_LIMIT - n);
+  const bar = h('span', { class: 'omdb-bar', 'aria-hidden': 'true' }, h('i', { style: { width: Math.min(100, n / OMDB_LIMIT * 100) + '%' } }));
+  return h('span', { class: 'omdb' }, bar,
+    o && o.limitHit ? `${n} requests: OMDb says today's limit is reached` : `${n.toLocaleString('en-US')} of about ${OMDB_LIMIT.toLocaleString('en-US')} (about ${left.toLocaleString('en-US')} left on a free key)`,
+    h('small', null, ' Counts reset each day (UTC). Every app using this key counts toward OMDb\'s limit; this shows MMLM\'s own requests.'));
+}
+
 export function openTraffic() {
   let timer = 0;
   const body = h('div', null);
@@ -22,7 +33,8 @@ export function openTraffic() {
         h('dt', null, 'Open for'), h('dd', null, fmtDuration(t.uptimeSec)),
         h('dt', null, 'Requests'), h('dd', null, `${t.requests} (${t.errors || 0} failed)`),
         h('dt', null, 'Downloaded'), h('dd', null, fmtBytes(t.bytes)),
-        h('dt', null, 'Last request'), h('dd', null, t.last || '—')),
+        h('dt', null, 'Last request'), h('dd', null, t.last || '—'),
+        h('dt', null, 'OMDb today'), h('dd', null, omdbLine(t.omdb))),
       h('table', { class: 'tbl', style: { marginTop: '12px' } },
         h('thead', null, h('tr', null, ['Kind', 'Requests', 'Data'].map((c) => h('th', null, c)))),
         h('tbody', null, rows.map(([k, v]) => h('tr', null, h('td', null, k), h('td', null, v.requests), h('td', null, fmtBytes(v.bytes)))))),

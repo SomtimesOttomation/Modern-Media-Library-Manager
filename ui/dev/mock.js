@@ -195,7 +195,7 @@ export async function request(cmd, args = {}) {
     case 'collections.get': return collections;
     case 'collections.save': collections = args.collections; return collections;
     case 'summary.get': return { title: 'Recently added', items: [], updatedAt: null };
-    case 'traffic.get': return { ...traffic, stopped: halted, uptimeSec: Math.round(performance.now() / 1000) };
+    case 'traffic.get': return { ...traffic, stopped: halted, uptimeSec: Math.round(performance.now() / 1000), omdb: { date: '2026-11-13', count: 214, limitHit: false } };
     case 'traffic.stop': halted = true; clearInterval(scanTimer); emit('traffic', { stopped: true }); return true;
     case 'traffic.resume': halted = false; emit('traffic', { stopped: false }); return true;
     case 'update.check': later(600, () => emit('update', { running: false, action: 'Check', result: { status: 'current', current: '0.5.0', latest: '0.5.0' } })); return true;

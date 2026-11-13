@@ -12,6 +12,21 @@ function Set-MmlmFetchContext {
     foreach ($k in @($Values.Keys)) { Set-Variable -Scope Script -Name $k -Value $Values[$k] }
 }
 
+function Add-MmlmOmdbUse {
+    # Counts OMDb requests per day (free keys allow about 1,000 a day) for Settings > Data > Traffic details.
+    # Kept in <AppData>\metadata\omdb-usage.json: { "date": "yyyy-MM-dd", "count": n, "limitHit": false }.
+    param([switch]$LimitHit)
+    try {
+        $f = Join-Path (Join-Path $script:AppData 'metadata') 'omdb-usage.json'
+        $day = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
+        $u = @{ date = $day; count = 0; limitHit = $false }
+        if (Test-Path -LiteralPath $f) { $o = [IO.File]::ReadAllText($f) | ConvertFrom-Json; if ([string]$o.date -eq $day) { $u.count = [int]$o.count; $u.limitHit = [bool]$o.limitHit } }
+        if ($LimitHit) { $u.limitHit = $true } else { $u.count++ }
+        $dir = Split-Path -Parent $f; if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        [IO.File]::WriteAllText($f, (ConvertTo-Json -InputObject $u -Compress))
+    } catch { }
+}
+
 function Invoke-MmlmJsonGet {
     # One polite GET. $null for 404; waits and retries on 429 / 5xx; throws 'KEYREJECT' when the service refuses the key.
     param([string]$Url, [hashtable]$Headers = @{}, [int]$TimeoutMs = 20000)
@@ -277,8 +292,9 @@ function Invoke-MmlmMetadataScrape {
             # ---- OMDb: Rotten Tomatoes critic score, Metacritic Metascore, domestic box office ---------------------
             if (-not $omdbOff -and -not $omdbLimit -and $imdbId) {
                 $o = Invoke-MmlmJsonGet -Url ('https://www.omdbapi.com/?apikey=' + [Uri]::EscapeDataString($OmdbKey) + '&i=' + $imdbId)
+                Add-MmlmOmdbUse
                 if ($o) {
-                    if ($o.Response -eq 'False' -and ([string]$o.Error) -match 'limit') { $omdbLimit = $true }
+                    if ($o.Response -eq 'False' -and ([string]$o.Error) -match 'limit') { $omdbLimit = $true; Add-MmlmOmdbUse -LimitHit }
                     elseif ($o.Response -eq 'True') {
                         $rt = @($o.Ratings | Where-Object { $_.Source -eq 'Rotten Tomatoes' }) | Select-Object -First 1
                         if ($rt -and ([string]$rt.Value) -match '^(\d+)%') { $got['RTCritic'] = @{ Value = [int]$Matches[1]; Source = 'OMDb' } }

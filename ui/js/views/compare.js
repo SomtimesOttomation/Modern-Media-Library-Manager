@@ -14,6 +14,7 @@ import { fetchDialog } from './tools.js';
 import { BASE_YEAR } from '../inflation.js';
 import { chosen, val, GROUPS, infl, openMetrics, needsMediaInfo, MAX_SCORED } from '../metrics.js';
 import { tune, mult, vsColors } from '../fxtune.js';
+import { themeFx } from '../fxthemes.js';
 
 const CAP = 10;
 // what is being compared; kept for the session so a tab switch comes back to the same match-up
@@ -87,17 +88,20 @@ async function posterColours(url) {
   colourCache.set(url, out);
   return out;
 }
-// Auto: red/orange -> fire, blue -> lightning, green -> specter, anything else glows in the poster's colours
+// Auto: red/orange -> fire, deep blue -> water, pale blue or grey-white -> lightning, green -> spectral,
+// brown/olive -> nature; anything else glows in the poster's own colours
 function autoFx(cols, side) {
-  if (!cols.length) return side === 'l' ? 'fire' : 'lightning';
-  const [hh, s] = hexToHsl(cols[0]);
-  if (s < 0.18) return 'poster';
-  if (hh < 45 || hh >= 335) return 'fire';
-  if (hh >= 190 && hh < 255) return 'lightning';
-  if (hh >= 80 && hh < 170) return 'specter';
+  if (!cols.length) return side === 'l' ? 'fire' : 'water';
+  const [hh, s, l] = hexToHsl(cols[0]);
+  if (s < 0.18) return l > 0.6 ? 'lightning' : 'poster';
+  if (hh < 30 || hh >= 335) return 'fire';
+  if (hh < 60) return l < 0.45 ? 'nature' : 'fire';
+  if (hh < 80) return 'nature';
+  if (hh < 170) return 'specter';
+  if (hh < 255) return l > 0.65 ? 'lightning' : 'water';
   return 'poster';
 }
-const FX_NAMES = [['auto', 'Auto'], ['fire', 'Fire'], ['lightning', 'Lightning'], ['specter', 'Specter'], ['poster', 'Poster colours'], ['off', 'Off']];
+const FX_NAMES = [['auto', 'Auto'], ['fire', 'Fire'], ['water', 'Water'], ['specter', 'Spectral'], ['lightning', 'Lightning'], ['nature', 'Nature'], ['poster', 'Poster colours'], ['off', 'Off']];
 async function applyFx(el, url, setting, side) {
   const cols = await posterColours(url);
   const fx = setting === 'auto' ? autoFx(cols, side) : setting;
@@ -107,8 +111,9 @@ async function applyFx(el, url, setting, side) {
   el.style.setProperty('--fx1', c1); el.style.setProperty('--fx2', c2);
   el.dataset.fx = fx;
   flames(el, fx === 'fire');
+  themeFx(el, fx);                                      // water, spectral, lightning, nature (fxthemes.js)
   // the side's colour for its bars, score and winner marks
-  const tone = { fire: '#ff9a3c', lightning: '#6fb7ff', specter: '#5fe39a', poster: c1 }[fx];
+  const tone = { fire: '#ff9a3c', water: '#4aa8ff', lightning: '#cfe6ff', specter: '#5fe39a', nature: '#8fbf4a', poster: c1 }[fx];
   const root = el.closest('.cmp');
   if (root) { if (tone) root.style.setProperty(side === 'l' ? '--cl' : '--cr', tone); else root.style.removeProperty(side === 'l' ? '--cl' : '--cr'); }
 }

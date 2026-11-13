@@ -123,7 +123,7 @@ function Read-PageSettings {
 function Set-PageSetting {
     param([string]$Key, $Value)
     $views = @('posters', 'grid', 'dashboard', 'compare')
-    $fx = @('auto', 'fire', 'lightning', 'specter', 'poster', 'off')
+    $fx = @('auto', 'fire', 'water', 'specter', 'lightning', 'nature', 'poster', 'off')
     $ok = switch ($Key) {
         'theme'       { @('system', 'light', 'dark') -contains [string]$Value }
         'updateCheck' { $Value = [bool]$Value; $true }

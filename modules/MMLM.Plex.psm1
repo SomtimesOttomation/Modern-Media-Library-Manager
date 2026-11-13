@@ -644,6 +644,8 @@ function Invoke-MmlmPlexScan {
     param([string]$BaseUrl, [string]$Token, [bool]$Movies, [bool]$Shows, [bool]$Rebuild, [bool]$DetectFel, [hashtable]$Prior = @{})
 
     Set-MmlmProgress -Text 'Connecting to Plex...'
+    $sw = [Diagnostics.Stopwatch]::StartNew(); $req0 = $(if ($script:Traffic) { [int]$script:Traffic.Requests } else { 0 })
+    $tConvert = 0.0; $tCache = 0.0; $tShows = 0.0; $nShows = 0; $tFel = 0.0
     $sections = @(Get-MmlmPlexSections -BaseUrl $BaseUrl -Token $Token | Where-Object {
         ($_.Type -eq 'movie' -and $Movies) -or ($_.Type -eq 'show' -and $Shows) })
     if ($sections.Count -eq 0) { throw 'This Plex server has no movie / TV libraries matching your selection.' }
@@ -655,6 +657,7 @@ function Invoke-MmlmPlexScan {
         foreach ($s in @(Get-MmlmPlexStubs -BaseUrl $BaseUrl -Token $Token -Section $sec)) { $stubs.Add($s) }
     }
     $script:Sync.Total = $stubs.Count
+    Add-MmlmScanTime 'list' $sw.Elapsed.TotalSeconds $stubs.Count; $sw.Restart()
     if ($stubs.Count -eq 0) { return @() }
 
     # 2) reuse cached records whose Plex 'updatedAt' has not changed ------------------------
@@ -681,6 +684,8 @@ function Invoke-MmlmPlexScan {
         if ($hit) { $byKey[$s.Key] = $hit } else { $todo.Add($s) }
     }
 
+    Add-MmlmScanTime 'compare' $sw.Elapsed.TotalSeconds $stubs.Count; $sw.Restart()
+
     # 3) fetch full details for the rest, in batches ----------------------------------------
     $showCache = @{}
     $done = $stubs.Count - $todo.Count
@@ -696,17 +701,26 @@ function Invoke-MmlmPlexScan {
             if ($null -eq $v) { $done++; continue }
             $showNode = $null
             if ($v.GetAttribute('type') -eq 'episode') {
+                $t0 = $sw.Elapsed.TotalSeconds; $had = $showCache.ContainsKey($v.GetAttribute('grandparentRatingKey'))
                 $showNode = Get-MmlmPlexShowNode -BaseUrl $BaseUrl -Token $Token -ShowKey $v.GetAttribute('grandparentRatingKey') -Cache $showCache
+                $tShows += $sw.Elapsed.TotalSeconds - $t0; if (-not $had) { $nShows++ }
             }
             try {
+                $t0 = $sw.Elapsed.TotalSeconds
                 $rec = ConvertFrom-MmlmPlexVideo -Video $v -LibraryName $s.Section -Show $showNode
                 $byKey[$s.Key] = $rec
+                $t1 = $sw.Elapsed.TotalSeconds; $tConvert += $t1 - $t0
                 [IO.File]::WriteAllText($s.CacheFile, ($rec | ConvertTo-Json -Depth 3), (New-Object Text.UTF8Encoding($false)))
+                $tCache += $sw.Elapsed.TotalSeconds - $t1
             }
             catch { Write-Warning "Skipped Plex item $($s.Key): $_" }
             $done++
         }
     }
+
+    $t3 = $sw.Elapsed.TotalSeconds; $sw.Restart()
+    Add-MmlmScanTime 'fetch' ([Math]::Max(0.0, $t3 - $tConvert - $tCache - $tShows)) $todo.Count
+    Add-MmlmScanTime 'convert' $tConvert $todo.Count; Add-MmlmScanTime 'cache-write' $tCache $todo.Count; Add-MmlmScanTime 'shows' $tShows $nShows
 
     # 4) posters + optional FEL/MEL probe, then put everything back in library order ----------
     $out = New-Object System.Collections.Generic.List[object]
@@ -736,7 +750,9 @@ function Invoke-MmlmPlexScan {
             if ($th) { $posterSeen[$th] = [string]$rec.PosterPath }
         }
         if ($DetectFel -and $rec.DVLayer -eq 'Dual layer' -and $rec.FullPath -and (Test-Path -LiteralPath $rec.FullPath -ErrorAction SilentlyContinue)) {
+            $t0 = $sw.Elapsed.TotalSeconds
             $layer = Get-MmlmDolbyVisionLayerType -Path $rec.FullPath -DurationSec ([int]([double]$rec.RuntimeMin * 60))
+            $tFel += $sw.Elapsed.TotalSeconds - $t0
             if ($layer) {
                 $rec.DVLayer  = $layer
                 $rec.HDRStack = ([string]$rec.HDRStack) -replace '\(dual layer\)', $layer
@@ -745,6 +761,9 @@ function Invoke-MmlmPlexScan {
         }
         $out.Add($rec)
     }
+    Add-MmlmScanTime 'posters' ([Math]::Max(0.0, $sw.Elapsed.TotalSeconds - $tFel)) $posterSeen.Count
+    if ($tFel -gt 0) { Add-MmlmScanTime 'fel' $tFel }
+    if ($script:Traffic) { Add-MmlmScanTime 'requests' 0 ([int]$script:Traffic.Requests - $req0) }
     $out.ToArray()
 }
 

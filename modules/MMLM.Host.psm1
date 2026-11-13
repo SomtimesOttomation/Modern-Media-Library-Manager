@@ -252,6 +252,8 @@ function Export-PageLibrary {
     Move-Item -LiteralPath ($file + '.tmp') -Destination $file
 }
 
+$swAll = [Diagnostics.Stopwatch]::StartNew(); $swS = [Diagnostics.Stopwatch]::StartNew()
+function Mark { param([string]$Stage, [int]$Count = 0) Add-MmlmScanTime $Stage $swS.Elapsed.TotalSeconds $Count; $swS.Restart() }
 try {
     Initialize-MmlmNative
     $tv = ($Job.Tab -eq 'tv')
@@ -271,7 +273,9 @@ try {
         foreach ($r in [Mmlm.Native.Snapshot]::Load($Job.Snapshot)) { if ($r.PlexKey) { $prior[[string]$r.PlexKey] = $r } }
     }
     $use = $(if ($Job.Rebuild) { @{} } else { $prior })
+    Mark 'load-prior' $prior.Count
     $recs = @(Invoke-MmlmServerScan -Server $Job.Server -Movies (-not $tv) -Shows $tv -Rebuild ([bool]$Job.Rebuild) -DetectFel ([bool]$Job.DetectFel) -Prior $use)
+    Mark 'scan-total' $recs.Count
     if ($S.Cancel) { $S.Cancelled = $true; return }
     $new = @($recs | Where-Object { -not $prior.ContainsKey([string]$_.PlexKey) })
     Set-MmlmProgress -Text 'Saving...'
@@ -279,11 +283,14 @@ try {
     if (-not (Test-Path -LiteralPath $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
     try { Merge-MmlmMetaStore -Records $recs -Path $Job.MetaStore } catch { }          # fetched scores (Metacritic, RT, box office) and hand edits
     [Mmlm.Native.Snapshot]::Save([object[]]$recs, $Job.Snapshot, ('{0}|{1}' -f $recs.Count, (Get-Date).ToString('yyyy-MM-dd HH:mm')))
+    Mark 'save-snapshot' $recs.Count
     if (@($Job.ArtKinds).Count -gt 0) {          # Settings > Artwork: fetched like posters, from your Plex server only
         Set-MmlmScanPhase -Lo 0.0 -Hi 1.0
         try { [void](Sync-MmlmServerArtwork -Server $Job.Server -Recs $recs -Kinds @($Job.ArtKinds) -Folder (Join-Path $Job.CacheDir 'art') -Retry:([bool]$Job.Rebuild)) } catch { }
     }
+    Mark 'artwork'
     Export-PageLibrary -Recs $recs -Tab $Job.Tab
+    Mark 'export-page' $recs.Count
     # Today-page card: the six most recently added titles (episodes collapse to their show), posters copied into the cache dir
     $thumbs = Join-Path $Job.CacheDir 'thumbs'
     if (-not (Test-Path -LiteralPath $thumbs)) { New-Item -Path $thumbs -ItemType Directory -Force | Out-Null }
@@ -304,10 +311,23 @@ try {
     }
     $card = @{ title = $(if ($tv) { 'Recently added TV' } else { 'Recently added movies' }); items = $items.ToArray(); updatedAt = (Get-Date).ToString('o') }
     [IO.File]::WriteAllText((Join-Path $Job.CacheDir ('summary-' + $Job.Tab + '.json')), (ConvertTo-Json -InputObject $card -Depth 5 -Compress), (New-Object Text.UTF8Encoding($false)))
+    Mark 'card'
     $S.Count = $recs.Count; $S.New = $new.Count
 }
 catch { $S.Error = $_.Exception.Message }
-finally { $S.Done = $true }
+finally {
+    if ($Job.Kind -eq 'scan') {
+        # how long each stage took: Settings > Servers > Copy timings (to see where a slow scan spends its time)
+        try {
+            $state = $(if ($S.Error) { 'failed' } elseif ($S.Cancel) { 'cancelled' } else { 'finished' })
+            $lines = New-Object System.Collections.Generic.List[string]
+            $lines.Add(('{0}  {1}  server={2}  items={3}  new={4}  {5}  total={6:0.0}s  rebuild={7}  PowerShell {8}  MMLM {9}' -f (Get-Date).ToString('yyyy-MM-dd HH:mm'), $Job.Tab, [string]$Job.Server.Kind, [int]$S.Count, [int]$S.New, $state, $swAll.Elapsed.TotalSeconds, [bool]$Job.Rebuild, $PSVersionTable.PSVersion, [string]$Ctx.AppVersion))
+            if ($S.Times) { foreach ($k in @($S.Times.Keys)) { $lines.Add(('{0,-14} {1,9:0.00} s {2,8}' -f $k, [double]$S.Times[$k].Seconds, [int]$S.Times[$k].Count)) } }
+            [IO.File]::WriteAllLines((Join-Path $Job.CacheDir ('scan-timing-' + $Job.Tab + '.txt')), $lines.ToArray(), (New-Object Text.UTF8Encoding($false)))
+        } catch { }
+    }
+    $S.Done = $true
+}
 '@
 
 function New-WorkerContext {
@@ -1244,6 +1264,11 @@ $script:Commands = [ordered]@{
             [IO.File]::WriteAllText($p + '.tmp', $json, (New-Object Text.UTF8Encoding($false)))
             Move-Item -LiteralPath ($p + '.tmp') -Destination $p -Force
             $json } }
+    'scan.timing' = @{ Fetch = $false; Run = { param($a)
+            # the last scan's stage timings, as text, for each library
+            $o = [ordered]@{}
+            foreach ($t in 'movies', 'tv') { $f = Join-Path $script:CacheDir ('scan-timing-' + $t + '.txt'); $o[$t] = $(if (Test-Path -LiteralPath $f) { [IO.File]::ReadAllText($f) } else { '' }) }
+            ConvertTo-Json -InputObject $o -Compress } }
     'collections.get' = @{ Fetch = $false; Run = { param($a) ConvertTo-Json -InputObject (Get-PageCollections) -Depth 6 -Compress } }
     'collections.save' = @{ Fetch = $false; Run = { param($a) Save-PageCollections $a.collections; ConvertTo-Json -InputObject (Get-PageCollections) -Depth 6 -Compress } }
     'open.url'       = @{ Fetch = $false; Run = { param($a) Open-HostUrl ([string]$a.url); 'true' } }

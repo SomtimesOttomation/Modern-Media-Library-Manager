@@ -114,7 +114,23 @@ function plexTab(repaint) {
     h('p', null, h('b', null, 'Scan '), h('small', null, 'A scan reuses titles the server has not changed. A full rescan reads every title again.')),
     h('p', null, ...S.TABS.map((t) => h('button', { class: 'btn', type: 'button', style: { marginRight: '6px' }, disabled: S.state.scan.running || S.state.halted ? true : null,
       onclick: () => S.startScan(t, true).catch((e) => { msg.textContent = e.message; }) }, `Full rescan of ${t === 'tv' ? 'TV Shows' : 'Movies'}`))),
+    timingRow(),
   ];
+}
+
+// How long each stage of the last scan took, to copy into a message when a scan feels slow.
+function timingRow() {
+  const out = h('pre', { class: 'scan-times', hidden: true });
+  const note = h('small', null, '');
+  const btn = h('button', { class: 'btn', type: 'button', onclick: async () => {
+    let text = '';
+    try { const r = await bridge.request('scan.timing'); text = [r.movies, r.tv].filter(Boolean).join('\n').trim(); } catch (e) { note.textContent = e.message; return; }
+    if (!text) { note.textContent = 'No scan has finished yet.'; return; }
+    out.textContent = text; out.hidden = false;
+    try { await navigator.clipboard.writeText(text); note.textContent = 'Copied.'; }
+    catch { const r = document.createRange(); r.selectNodeContents(out); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); note.textContent = 'Press Ctrl+C to copy.'; }
+  } }, 'Copy timings');
+  return h('div', null, h('p', null, h('b', null, 'Last scan timings '), h('small', null, 'How long each stage of the last scan took.')), h('p', null, btn, ' ', note), out);
 }
 
 function dataTab() {

@@ -59,6 +59,16 @@ function Set-MmlmProgress {
     if ($Max -gt 0 -and $Value -ge 0) { $script:Sync.Value = $Value; $script:Sync.Max = $Max }
 }
 
+function Add-MmlmScanTime {
+    # Adds seconds to a named stage of the running scan (shown in Settings > Servers > Last scan timings).
+    param([string]$Stage, [double]$Seconds, [int]$Count = 0)
+    if ($null -eq $script:Sync) { return }
+    if (-not $script:Sync.ContainsKey('Times') -or $null -eq $script:Sync.Times) { $script:Sync.Times = [ordered]@{} }
+    $t = $script:Sync.Times
+    if (-not $t.Contains($Stage)) { $t[$Stage] = @{ Seconds = 0.0; Count = 0 } }
+    $t[$Stage].Seconds += $Seconds; $t[$Stage].Count += $Count
+}
+
 function ConvertTo-MmlmSafeInt {
     param($Value)
     $r = 0
@@ -1004,6 +1014,7 @@ catch { $Shared.Error = $_.Exception.Message; $WStat.State = 'Error' }
 }
 
 Export-ModuleMember -Function @(
+    'Add-MmlmScanTime',
     'Set-MmlmContext',
     'ConvertTo-MmlmSafeInt',
     'ConvertTo-MmlmSafeDouble',

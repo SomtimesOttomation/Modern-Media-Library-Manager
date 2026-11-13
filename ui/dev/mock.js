@@ -125,6 +125,7 @@ export async function request(cmd, args = {}) {
     case 'plex.set': plex.url = args.url; if (args.token) plex.hasToken = true; return plex;
     case 'jellyfin.set': plex.jellyfin.url = args.url; if (args.key) plex.jellyfin.hasKey = true; return plex;
     case 'server.use': plex.use[args.tab] = args.kind; return plex;
+    case 'scan.timing': return { movies: '2026-11-12 20:10  movies  server=plex  items=4120  new=12  finished  total=41.3s  rebuild=False  PowerShell 5.1  MMLM 0.15.3\nlist                3.10 s     4120\nfetch              21.40 s      300\nconvert             9.80 s      300', tv: '' };
     case 'server.test':
       setTimeout(() => emit('servertest', args.kind === 'jellyfin'
         ? { kind: 'jellyfin', ok: true, info: { name: 'Sample Jellyfin', version: '10.10.3', libraries: [{ name: 'Films', type: 'movie' }, { name: 'Series', type: 'show' }] }, error: '' }

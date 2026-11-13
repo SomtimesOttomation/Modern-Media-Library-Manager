@@ -615,3 +615,27 @@ body.dragging { cursor: ew-resize; user-select: none; }
 .cmp-poster.fx-flames > .cmp-ph { background: var(--poster-bg, var(--surface2)); }
 .fx-flame-canvas { position: absolute; left: -37px; top: -99px; z-index: 0; pointer-events: none; }
 .scan-times { max-height: 220px; overflow: auto; font-size: 12px; padding: 10px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); white-space: pre; user-select: text; }
+
+/* Compare: the plain (default) look, the Metrics button, the picker, Settings > Compare */
+.cmp-exec { font-family: Georgia, "Times New Roman", serif; font-size: 34px; font-weight: 600; letter-spacing: .01em; color: var(--text); line-height: 1.1; }
+.cmp-metrics { margin-bottom: 4px; }
+.cmp-panel.info .bar i { background: var(--muted, #8b93a7); opacity: .55; }
+.cmp-panel.info .v { font-weight: 400; }
+.met { width: min(560px, 90vw); display: flex; flex-direction: column; gap: 12px; }
+.met-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.met-head h2 { margin: 0; }
+.met-count { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.met-count.full { color: #e0a33a; }
+.met-body { display: flex; flex-direction: column; gap: 12px; max-height: 60vh; overflow: auto; }
+.met-group { display: flex; flex-direction: column; gap: 4px; }
+.met-g { font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
+.met-item { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 8px; cursor: pointer; }
+.met-item.on { background: var(--surface2, rgba(127,127,127,.12)); }
+.met-item.off { opacity: .45; cursor: default; }
+.met-item span { flex: 1; }
+.met-item small { color: var(--muted); }
+.met-foot { display: flex; justify-content: space-between; gap: 10px; border-top: 1px solid var(--line); padding-top: 10px; }
+.mi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+.mi-field { display: flex; flex-direction: column; gap: 4px; }
+.mi-field input { padding: 7px 9px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit; font-size: 13px; min-width: 0; }
+.fun-chk { font-size: 15px; }

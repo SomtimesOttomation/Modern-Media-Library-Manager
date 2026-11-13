@@ -45,7 +45,7 @@ $script:Series = $null
 $script:Tool = $null
 
 # the data modules, by full path (an already loaded copy is reused)
-foreach ($m0 in @('MMLM.Library.psm1', 'MMLM.Plex.psm1', 'MMLM.Jellyfin.psm1', 'MMLM.Server.psm1', 'MMLM.Fetch.psm1', 'MMLM.Doctor.psm1')) { Import-Module (Join-Path $PSScriptRoot $m0) -DisableNameChecking }
+foreach ($m0 in @('MMLM.Library.psm1', 'MMLM.Plex.psm1', 'MMLM.Jellyfin.psm1', 'MMLM.Server.psm1', 'MMLM.Fetch.psm1', 'MMLM.Doctor.psm1', 'MMLM.MediaInfo.psm1')) { Import-Module (Join-Path $PSScriptRoot $m0) -DisableNameChecking }
 
 function Write-HostLog {
     # failures go to %LOCALAPPDATA%\<app>\Logs\host.log instead of disappearing (kept under 1 MB)
@@ -139,6 +139,10 @@ function Set-PageSetting {
         'cmpWalkover' { $Value = [bool]$Value; $true }
         'cmpImdb'     { $Value = [bool]$Value; $true }
         'cmpInflation' { $Value = [bool]$Value; $true }
+        'cmpFun'      { $Value = [bool]$Value; $true }
+        { $_ -in @('cmpMetrics', 'cmpInfo') } { $Value = @(@($Value) | ForEach-Object { [string]$_ } | Where-Object { $_ -match '^[a-z]{1,12}$' } | Select-Object -Unique -First 16); $true }
+        'miPath'      { $Value = ([string]$Value).Trim(); $Value.Length -le 400 -and ($Value -eq '' -or $Value -match '(?i)mediainfo[^\\/]*$') }
+        { $_ -in @('miFrom', 'miTo') } { $Value = ([string]$Value).Trim(); $Value.Length -le 400 }
         'fxLeft'      { $fx -contains [string]$Value }
         'fxRight'     { $fx -contains [string]$Value }
         'fxMotion'    { @('still', 'calm', 'full') -contains [string]$Value }
@@ -611,6 +615,77 @@ function Get-ServerTestEvents {
     finally { $x.Ps.Dispose() }
     if ($null -eq $res) { $res = @{ ok = $false; error = 'No answer.' } }
     Push-HostEvent 'servertest' ([ordered]@{ kind = $x.Kind; ok = [bool]$res.ok; info = $res.info; error = [string]$res.error })
+}
+
+# ---- MediaInfo brightness (Compare: max / average brightness of movies) --------------------------------------------------
+# The MediaInfo command-line program already on this PC reads MaxCLL / MaxFALL from the files; nothing is downloaded.
+# Runs in the background; 'mediainfo' events report progress and the end.
+$script:MediaInfoScript = @'
+param($ModFile, $Cli, $Titles, $StoreFile, $From, $To, [bool]$Force, $Sync)
+try {
+    Import-Module $ModFile -DisableNameChecking
+    $r = Update-MmlmBrightness -Cli $Cli -Titles $Titles -StoreFile $StoreFile -MapFrom $From -MapTo $To -Force:$Force -Sync $Sync
+    $Sync.Result = $r
+}
+catch { $Sync.Error = $_.Exception.Message }
+finally { $Sync.Done = $true }
+'@
+function Get-MediaInfoStoreFile { Join-Path (Join-Path $script:AppData 'Library') 'mediainfo-movies.json' }
+function Get-MovieRidMap {
+    # rid -> the file's path on the server, for every movie in the last scan (paths never go to the page)
+    $o = @{}
+    $f = Get-SnapshotFile 'movies'
+    if (-not (Test-Path -LiteralPath $f)) { return $o }
+    Initialize-MmlmNative
+    foreach ($r in [Mmlm.Native.Snapshot]::Load($f)) {
+        $fp = [string]$r.FullPath
+        if (-not $fp) { continue }
+        $rid = $(if ([string]$r.PlexKey) { 'p:' + [string]$r.PlexKey } else { 'h:' + (Get-MmlmStringHash $fp).Substring(0, 16) })
+        if (-not $o.ContainsKey($rid)) { $o[$rid] = $fp }
+    }
+    $o
+}
+function Start-HostMediaInfo {
+    param($A)
+    if ($script:MediaInfo) { throw 'MediaInfo is already reading files.' }
+    $cli = Find-MmlmMediaInfoCli -Custom ([string]$A.path) -AppRoot $script:Root
+    if (-not $cli) { throw 'MediaInfo was not found. Install the MediaInfo command-line version (for example: winget install MediaArea.MediaInfo), or set its location in Settings > Compare.' }
+    $map = Get-MovieRidMap
+    $want = @(@($A.rids) | ForEach-Object { [string]$_ } | Where-Object { $_ })
+    $keys = $(if ($want.Count -gt 0) { $want } else { @($map.Keys | Sort-Object) })
+    $titles = @(foreach ($k in $keys) { if ($map.ContainsKey($k)) { @{ Key = $k; Path = $map[$k] } } })
+    if ($titles.Count -eq 0) { throw 'No movie files to read. Scan Movies first.' }
+    $sync = [hashtable]::Synchronized(@{ Text = 'MediaInfo: starting'; Value = 0; Max = $titles.Count; Cancel = $false; Done = $false; Error = $null; Result = $null })
+    $ps = [powershell]::Create()
+    [void]$ps.AddScript($script:MediaInfoScript).AddArgument((Join-Path (Join-Path $script:Root 'modules') 'MMLM.MediaInfo.psm1')).AddArgument($cli).AddArgument($titles).AddArgument((Get-MediaInfoStoreFile)).AddArgument([string]$A.from).AddArgument([string]$A.to).AddArgument([bool]$A.force).AddArgument($sync)
+    $script:MediaInfo = @{ Ps = $ps; Async = $ps.BeginInvoke(); Sync = $sync; Whole = ($want.Count -eq 0); Last = '' }
+}
+function Get-MediaInfoEvents {
+    $x = $script:MediaInfo
+    if (-not $x) { return }
+    $s = $x.Sync
+    if ($s.Done) {
+        $script:MediaInfo = $null
+        try { $x.Ps.EndInvoke($x.Async) | Out-Null } catch { } finally { $x.Ps.Dispose() }
+        $r = $s.Result
+        if ($x.Whole) { try { [IO.File]::WriteAllText((Get-MediaInfoStoreFile) + '.lastrun', (Get-Date).ToString('yyyy-MM-dd HH:mm')) } catch { } }
+        Push-HostEvent 'mediainfo' ([ordered]@{ running = $false; whole = [bool]$x.Whole; cancelled = [bool]$s.Cancel; error = [string]$s.Error
+            read = $(if ($r) { [int]$r.Read } else { 0 }); skipped = $(if ($r) { [int]$r.Skipped } else { 0 }); unreachable = $(if ($r) { [int]$r.Unreachable } else { 0 }); failed = $(if ($r) { [int]$r.Failed } else { 0 }) })
+        return
+    }
+    $d = [ordered]@{ running = $true; whole = [bool]$x.Whole; text = [string]$s.Text; pct = $(if ($s.Max -gt 0) { [int](100 * $s.Value / $s.Max) } else { 0 }) }
+    $j = ConvertTo-PageJson $d
+    if ($j -ne $x.Last) { $x.Last = $j; Push-HostEvent 'mediainfo' $d }
+}
+function Get-HostMediaInfoStatus {
+    param($A)
+    $cli = Find-MmlmMediaInfoCli -Custom ([string]$A.path) -AppRoot $script:Root
+    $store = Read-MmlmBrightnessStore (Get-MediaInfoStoreFile)
+    $read = 0; $unreach = 0; $failed = 0
+    foreach ($v in $store.Values) { if ($v.err -eq 'unreachable') { $unreach++ } elseif ($v.err) { $failed++ } else { $read++ } }
+    $lr = (Get-MediaInfoStoreFile) + '.lastrun'
+    [ordered]@{ found = [bool]$cli; version = $(if ($cli) { Get-MmlmMediaInfoVersion $cli } else { '' }); movies = (Get-SnapshotCount 'movies')
+        read = $read; unreachable = $unreach; failed = $failed; lastRun = $(if (Test-Path -LiteralPath $lr) { [IO.File]::ReadAllText($lr).Trim() } else { '' }); running = [bool]$script:MediaInfo }
 }
 
 function Get-SeriesIndex {
@@ -1227,6 +1302,19 @@ $script:Commands = [ordered]@{
             if (@(Get-MmlmServerKinds) -notcontains $kind) { throw 'Unknown server.' }
             Save-HostServerSettings @{ ($(if ($tab -eq 'tv') { 'TvServer' } else { 'MoviesServer' })) = $kind }
             ConvertTo-PageJson (Get-PlexInfo) } }
+    'mediainfo.status' = @{ Fetch = $false; Run = { param($a) ConvertTo-Json -InputObject (Get-HostMediaInfoStatus $a) -Compress } }
+    'mediainfo.values' = @{ Fetch = $false; Run = {
+            # rid -> [max brightness, average brightness] in cd/m2, for titles MediaInfo has read
+            param($a)
+            $o = [ordered]@{}
+            $st = Read-MmlmBrightnessStore (Get-MediaInfoStoreFile)
+            foreach ($k in $st.Keys) { $v = $st[$k]; $o[$k] = @([int]$v.cll, [int]$v.fall, $(if ($v.err) { 1 } else { 0 })) }
+            ConvertTo-Json -InputObject $o -Compress -Depth 3 } }
+    'mediainfo.read'   = @{ Fetch = $false; Run = {
+            # reads files on this PC or the network (no third party); 'mediainfo' events follow
+            param($a)
+            Start-HostMediaInfo $a; 'true' } }
+    'mediainfo.cancel' = @{ Fetch = $false; Run = { param($a) if ($script:MediaInfo) { $script:MediaInfo.Sync.Cancel = $true }; 'true' } }
     'server.test'    = @{ Fetch = $true; Run = {
             # Settings > Servers > Test: asks the server for its name and libraries in the background (counted as
             # traffic); the answer comes as a 'servertest' event
@@ -1362,6 +1450,7 @@ function Receive-DashEvents {
     try { Get-UpdateEvents; Watch-DropFolder } catch { Write-HostLog 'updates' $_ }
     try { Step-HostDoctor } catch { Write-HostLog 'doctor' $_; $script:Doctor = $null }
     try { Get-ServerTestEvents } catch { Write-HostLog 'server test' $_; $script:ServerTest = $null }
+    try { Get-MediaInfoEvents } catch { Write-HostLog 'mediainfo' $_; $script:MediaInfo = $null }
     try { Get-SeriesEvents } catch { Write-HostLog 'series' $_ }
     try { Get-ToolEvents } catch { Write-HostLog 'tools' $_ }
     # one drain for every event source; whatever is over the cap waits for the next call (callers wrap the result in @())

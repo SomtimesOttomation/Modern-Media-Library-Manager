@@ -45,6 +45,17 @@ Check ((Cmd 50 'settings.set' @{ key = 'moviesView'; value = 'compare' }) -match
 Check ((Cmd 51 'settings.set' @{ key = 'fxLeft'; value = 'lightning' }) -match '"fxLeft":"lightning"') 'Fun: a border effect saves'
 Check ((Cmd 52 'settings.set' @{ key = 'fxLeft'; value = 'rainbow' }) -match '"ok":false') 'Fun: an unknown effect is refused'
 [void](Cmd 54 'settings.set' @{ key = 'moviesView'; value = 'posters' }); [void](Cmd 55 'settings.set' @{ key = 'fxLeft'; value = 'auto' })
+# Compare: metrics, Fun mode and MediaInfo settings; MediaInfo commands answer at once (no MediaInfo here)
+Check ((Cmd 58 'settings.set' @{ key = 'cmpMetrics'; value = @('ww', 'rtc', 'vbr', 'cll') }) -match '"cmpMetrics":\["ww","rtc","vbr","cll"\]') 'Compare: chosen metrics save'
+Check ((Cmd 59 'settings.set' @{ key = 'cmpFun'; value = $true }) -match '"cmpFun":true') 'Compare: Fun mode saves'
+Check ((Cmd 60 'settings.set' @{ key = 'miPath'; value = 'C:\Tools\notepad.exe' }) -match '"ok":false') 'MediaInfo location: only a MediaInfo program is accepted'
+Check ((Cmd 61 'settings.set' @{ key = 'miFrom'; value = '/data/movies' }) -match '"miFrom":"/data/movies"') 'MediaInfo: the server path saves'
+$sw0 = [Diagnostics.Stopwatch]::StartNew()
+$st0 = Cmd 62 'mediainfo.status' @{ path = '' }
+Check ($st0 -match '"ok":true' -and $st0 -match '\\"found\\":false|"found":false' -and $sw0.ElapsedMilliseconds -lt 3000) "MediaInfo status answers quickly ($($sw0.ElapsedMilliseconds) ms)"
+Check ((Cmd 63 'mediainfo.values') -match '"ok":true') 'MediaInfo values answer (none yet)'
+Check ((Cmd 64 'mediainfo.read' @{ rids = @('p:1') }) -match 'MediaInfo was not found') 'MediaInfo read: a plain message when it is not installed (nothing is downloaded)'
+[void](Cmd 65 'settings.set' @{ key = 'cmpFun'; value = $false }); [void](Cmd 66 'settings.set' @{ key = 'cmpMetrics'; value = @('ww', 'dom', 'open', 'rtc', 'rta', 'meta', 'imdb') }); [void](Cmd 67 'settings.set' @{ key = 'miFrom'; value = '' })
 Check ((Cmd 53 'poster.colours' @{ url = 'https://mmlm.cache/../settings.json' }) -match '"ok":false') 'poster.colours stays inside the cache'
 $fn = @(($lib | ConvertFrom-Json).data.fields.n); $mi = [array]::IndexOf($fn, 'Metascore'); $ti = [array]::IndexOf($fn, 'Title')
 function Find-Row($json, $title) { foreach ($r in ($json | ConvertFrom-Json).data.rows) { if ($r[$ti] -eq $title) { return , $r } } }
@@ -154,7 +165,7 @@ Check ($ds.unseen -eq $false -and $ds.last.issues -eq @($rep.issues).Count) 'Ple
 [void](Cmd 77 'settings.set' @{ key = 'doctorChecks'; value = @('unreadable', 'unmatched', 'wrongmatch', 'gaps', 'poster', 'dupes', 'av1') })
 Start-DashWorker
 Check ($null -eq (Get-DashStatus).Badge.Count) 'badge clears when the tab is shown'
-[void](Cmd 4 'scan.start' @{ tab = 'movies'; rebuild = $true }); Start-Sleep -Milliseconds 150; Stop-DashTraffic; $e = Wait-Scan
+[void](Cmd 4 'scan.start' @{ tab = 'movies'; rebuild = $true }); Start-Sleep -Milliseconds 20; Stop-DashTraffic; $e = Wait-Scan
 Check ($e -match '"cancelled":true') 'kill switch cancels a running scan'
 Check ((($posted -join '') -replace '\s', '') -match '"event":"traffic","data":\{"stopped":true\}') 'kill switch tells the page at once'
 Check ((Cmd 5 'scan.start' @{ tab = 'movies' }) -match 'paused') 'no new scan while traffic is paused'

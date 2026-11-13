@@ -304,6 +304,7 @@ S.init().then(() => {
   haltBar(); dropBar();
   themeIcon(); applyWidth(); route(); versionChip(); syncBar();
   for (const t of S.TABS) S.loadLibrary(t);               // both libraries load once, from the saved scan (no network)
+  S.loadMediaInfo();                                       // brightness MediaInfo read earlier (Compare)
   initDoctor();                                            // PlexDoctor's alert (a check-up that found issues)
   if (needsSetup()) openSetup();                           // first launch: pick Jellyfin or Plex and connect
   const n = S.state.update.note;

@@ -13,9 +13,12 @@ export const state = {
   hostMode: 'standalone',
   hostTheme: '',
   showStatus: {},           // TV: show name -> { state: 'Ongoing'|'Ended', tmdb, lastAir } (TV Shows > Fetch info)
+  mi: {},                   // Compare: rid -> [max brightness, average brightness, failed] from MediaInfo
+  miRun: null,              // the MediaInfo read in progress (mediainfo events)
   settings: { theme: 'system', updateCheck: false, moviesView: 'posters', tvView: 'posters', moviesSort: 'added', tvSort: 'title', moviesSortRev: false, tvSortRev: false,
     columns: [], hideDupes: false, posterScale: 100, tvScale: 100, clearScale: 100, bannerScale: 100, doctorFreq: 'off', doctorAck: false, doctorDay: 0, doctorTime: '03:00', doctorStyle: 'compact', doctorChecks: ['unreadable', 'unmatched', 'wrongmatch', 'gaps', 'poster', 'dupes', 'av1'], widthPreset: 'full', customWidth: false, contentWidth: 0, artLogo: false, artBackground: false, artBanner: false, cmpInflation: false,
-    fxLeft: 'auto', fxRight: 'auto', fxMotion: 'full', vsStyle: 'arcade', cmpTally: true, cmpWalkover: true, cmpImdb: true },
+    fxLeft: 'auto', fxRight: 'auto', fxMotion: 'full', vsStyle: 'arcade', cmpTally: true, cmpWalkover: true, cmpImdb: true,
+    cmpFun: false, cmpMetrics: null, cmpInfo: null, miPath: '', miFrom: '', miTo: '' },
   plex: { url: '', hasToken: false },
   counts: { movies: { count: 0, when: '' }, tv: { count: 0, when: '' } },
   libs: { movies: lib(), tv: lib() },
@@ -234,6 +237,16 @@ export const saveKeys = (tmdb, omdb) => bridge.request('keys.set', { tmdb, omdb 
 export const openUrl = (url) => bridge.request('open.url', { url });
 export const savePicture = (name, png) => bridge.request('picture.save', { name, png }, 60000);
 
+// MediaInfo brightness (Compare): rid -> [max, average, failed]; read from files on this PC, never fetched online
+export async function loadMediaInfo() {
+  try { state.mi = (await bridge.request('mediainfo.values')) || {}; } catch (e) { state.mi = state.mi || {}; }
+  notify('mediainfo');
+}
+const miArgs = () => ({ path: state.settings.miPath || '', from: state.settings.miFrom || '', to: state.settings.miTo || '' });
+export const mediaInfoStatus = () => bridge.request('mediainfo.status', miArgs(), 30000);
+export const readMediaInfo = (rids, force) => bridge.request('mediainfo.read', { ...miArgs(), rids: rids || [], force: !!force });
+export const cancelMediaInfo = () => bridge.request('mediainfo.cancel');
+
 export async function init() {
   await bridge.ready();
   const info = await bridge.request('init');
@@ -257,6 +270,7 @@ export async function init() {
   bridge.on('library', onLibrary);
   bridge.on('update', onUpdate);
   bridge.on('tool', (d) => { state.tool = d; notify('tool'); });
+  bridge.on('mediainfo', (d) => { state.miRun = d; if (d && !d.running) loadMediaInfo(); notify('mediainfo'); });
   bridge.on('update.dropped', (d) => { state.dropped = d; notify('dropped'); });
 
   state.ready = true;

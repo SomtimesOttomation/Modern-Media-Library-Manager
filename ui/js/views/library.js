@@ -199,5 +199,6 @@ export function mount(ctx) {
 export function update(topics, ctx) {
   const L = S.state.libs.movies, changed = ctx.seen && (ctx.seen.status !== L.status || ctx.seen.rows !== L.rows);
   if (changed) ctx.seen = { status: L.status, rows: L.rows };
-  if (changed || topics.has('query') || topics.has('collections') || (L.status !== 'ready' && (topics.has('plex') || topics.has('traffic') || topics.has('scan')))) ctx.redraw?.();
+  const cmp = S.state.settings.moviesView === 'compare';
+  if (changed || topics.has('query') || topics.has('collections') || (cmp && (topics.has('settings') || (topics.has('mediainfo') && !S.state.miRun?.running))) || (L.status !== 'ready' && (topics.has('plex') || topics.has('traffic') || topics.has('scan')))) ctx.redraw?.();
 }

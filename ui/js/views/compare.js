@@ -1,7 +1,8 @@
 // Compare (Movies > Compare): two titles, or two collections, head to head on box office and critics.
 // A round is one stat row; the higher value wins it, a tie or a missing value counts for nobody.
 // Collections compare their aggregates (totals and averages), then play a tournament: each side's films ranked by
-// worldwide gross, #1 vs #1 down to #10 vs #10. Poster borders and the VS come from Settings > Fun.
+// worldwide gross, #1 vs #1 down to #10 vs #10. What is compared: metrics.js (Settings > Compare, or the Metrics
+// button). The plain look is the default; Fun mode (Settings > Compare) adds the poster borders and the VS (Settings > Fun).
 import * as S from '../store.js';
 import * as bridge from '../bridge.js';
 import { h } from '../util.js';
@@ -11,6 +12,7 @@ import { inTab } from './collections.js';
 import { openCard } from './card.js';
 import { fetchDialog } from './tools.js';
 import { BASE_YEAR } from '../inflation.js';
+import { chosen, val, GROUPS, infl, openMetrics, needsMediaInfo, MAX_SCORED } from '../metrics.js';
 
 const CAP = 10;
 // what is being compared; kept for the session so a tab switch comes back to the same match-up
@@ -18,36 +20,18 @@ export const pick = { mode: 'movie', left: '', right: '', cLeft: '', cRight: '' 
 
 const money = (n) => fmtMoney(n) || '';
 const pct = (n) => (num(n) > 0 ? Math.round(num(n)) + '%' : '');
-const int = (n) => (num(n) > 0 ? String(Math.round(num(n))) : '');
-const one = (n) => (num(n) > 0 ? num(n).toFixed(1) : '');
-
-// The stat rows. get(x) reads a movie or a collection aggregate; fmt shows it.
-// "Adjust for inflation" (toolbar) swaps in the adjusted figures (inflation.js), in BASE_YEAR dollars.
-const infl = () => !!S.state.settings.cmpInflation;
+// box office, inflation-adjusted when "Adjust for inflation" is on (inflation.js, BASE_YEAR dollars)
 const bo = (f) => (infl() ? f + 'Adj' : f);
-function statDefs() {
-  const box = [
-    { k: 'Worldwide', f: bo('BoxOfficeWorldwide'), fmt: money },
-    { k: 'Domestic', f: bo('BoxOfficeDomestic'), fmt: money },
-    { k: 'Opening weekend', f: bo('OpeningDomestic'), fmt: money, optional: true },
-  ];
-  const crit = [
-    { k: 'RT critics', f: 'RTCritic', fmt: pct },
-    { k: 'RT audience', f: 'RTAudience', fmt: pct },
-    { k: 'Metacritic', f: 'Metascore', fmt: int },
-  ];
-  if (S.state.settings.cmpImdb !== false) crit.push({ k: 'IMDb', f: 'Rating', fmt: one });
-  return { box, crit };
-}
+const fun = () => !!S.state.settings.cmpFun;
 
 // -1 left wins, 1 right wins, 0 nobody
 const judge = (a, b) => { a = num(a); b = num(b); if (a <= 0 || b <= 0 || a === b) return 0; return a > b ? -1 : 1; };
 
-// One movie against another: { box:[l,r], crit:[l,r], l, r, rows }
-function duel(a, b, defs) {
-  const score = (list) => list.reduce((t, d) => { const w = judge(a?.[d.f], b?.[d.f]); if (w < 0) t[0]++; else if (w > 0) t[1]++; return t; }, [0, 0]);
-  const box = score(defs.box), crit = score(defs.crit);
-  return { box, crit, l: box[0] + crit[0], r: box[1] + crit[1] };
+// One movie against another over the scored metrics: { l, r }
+function duel(a, b, list) {
+  let l = 0, r = 0;
+  for (const d of list) { const w = judge(val(d, a), val(d, b)); if (w < 0) l++; else if (w > 0) r++; }
+  return { l, r };
 }
 
 // ---- collections -------------------------------------------------------------------------------------------------
@@ -56,23 +40,16 @@ function members(c) {
   const f = bo('BoxOfficeWorldwide');
   return dedupe(L.rows.filter((r) => c.has(r))).sort((a, b) => num(b[f]) - num(a[f]) || num(b.BoxOfficeWorldwide) - num(a.BoxOfficeWorldwide));
 }
-// Aggregate: box office as totals, scores as averages over the films that have them
+// Aggregate: box office as totals, everything else as averages over the films that have it
 function aggregate(list, defs) {
-  const o = { count: list.length, top: list[0] || null };
-  const avg = (f) => { const v = list.map((r) => num(r[f])).filter((x) => x > 0); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0; };
-  const sum = (f) => list.reduce((a, r) => a + num(r[f]), 0);
-  defs.box.forEach((d) => { o[d.f] = sum(d.f); });
-  o.AvgWorldwide = avg(bo('BoxOfficeWorldwide'));
-  defs.crit.forEach((d) => { o[d.f] = avg(d.f); });
+  const o = { _agg: true, count: list.length, top: list[0] || null };
+  for (const d of defs) {
+    const v = list.map((r) => val(d, r)).filter((x) => x > 0);
+    o[d.id] = d.g === 'box' ? v.reduce((t, x) => t + x, 0) : v.length ? v.reduce((t, x) => t + x, 0) / v.length : 0;
+  }
   return o;
 }
-function aggDefs(defs) {
-  return {
-    box: [{ k: 'Total worldwide', f: bo('BoxOfficeWorldwide'), fmt: money }, { k: 'Avg per film', f: 'AvgWorldwide', fmt: money },
-      { k: 'Total domestic', f: bo('BoxOfficeDomestic'), fmt: money }, { k: 'Total opening weekends', f: bo('OpeningDomestic'), fmt: money, optional: true }],
-    crit: defs.crit.map((d) => ({ ...d, k: 'Avg ' + d.k, fmt: d.f === 'Rating' ? one : d.f === 'Metascore' ? int : pct })),
-  };
-}
+const aggLabel = (d) => ({ ...d, k: (d.g === 'box' ? 'Total ' : 'Avg ') + d.k.toLowerCase() });
 
 // ---- borders -----------------------------------------------------------------------------------------------------
 const colourCache = new Map();
@@ -224,19 +201,20 @@ function flames(el, on) {
 function posterBox(r, side, label, small) {
   const box = h('div', { class: `cmp-poster${small ? ' small' : ''}`, 'data-side': side, title: label || '' },
     r?.Poster ? h('img', { src: r.Poster, alt: '' }) : h('div', { class: 'cmp-ph' }, label || '?'));
-  applyFx(box, r?.Poster, S.state.settings[side === 'l' ? 'fxLeft' : 'fxRight'] || 'auto', side);
+  if (fun()) applyFx(box, r?.Poster, S.state.settings[side === 'l' ? 'fxLeft' : 'fxRight'] || 'auto', side);
   return box;
 }
 function vsMark() {
+  if (!fun()) return h('div', { class: 'cmp-exec', 'aria-hidden': 'true' }, 'Comparison');   // the plain look; Fun mode has the VS
   const st = S.state.settings.vsStyle || 'arcade';
   return st === 'off' ? null : h('div', { class: `cmp-vs ${st}`, 'aria-hidden': 'true' }, 'VS');
 }
-function statPanel(title, defs, a, b) {
+function statPanel(title, defs, a, b, info) {
   let lw = 0, rw = 0;
-  // Opening weekend only comes from hand-typed values, so it shows only when one side has it
-  defs = defs.filter((d) => !d.optional || num(a?.[d.f]) > 0 || num(b?.[d.f]) > 0);
+  // a row only some titles can have (opening weekend is typed in by hand) shows only when one side has it
+  defs = defs.filter((d) => !d.optional || val(d, a) > 0 || val(d, b) > 0);
   const rows = defs.map((d) => {
-    const av = num(a?.[d.f]), bv = num(b?.[d.f]), w = judge(av, bv), mx = Math.max(av, bv) || 1;
+    const av = val(d, a), bv = val(d, b), w = info ? 0 : judge(av, bv), mx = Math.max(av, bv) || 1;
     if (w < 0) lw++; else if (w > 0) rw++;
     return h('div', { class: 'cmp-row' },
       h('span', { class: `v l${w < 0 ? ' win' : ''}` }, d.fmt(av) || '—'),
@@ -245,7 +223,41 @@ function statPanel(title, defs, a, b) {
       h('div', { class: 'bar r' }, h('i', { style: { width: (bv / mx * 100) + '%' } })),
       h('span', { class: `v r${w > 0 ? ' win' : ''}` }, d.fmt(bv) || '—'));
   });
-  return { el: h('section', { class: 'cmp-panel card' }, h('h2', null, h('span', null, title), h('span', { class: 'tally' }, `${lw} – ${rw}`)), ...rows), l: lw, r: rw };
+  return { el: h('section', { class: `cmp-panel card${info ? ' info' : ''}` }, h('h2', null, h('span', null, title), info ? null : h('span', { class: 'tally' }, `${lw} – ${rw}`)), ...rows), l: lw, r: rw };
+}
+// One panel per group that has a chosen metric, then the information rows; returns the panels and the totals
+function panels(a, b, coll) {
+  const { scored, info } = chosen();
+  const out = [], how = [];
+  let l = 0, r = 0;
+  for (const [g, title] of GROUPS) {
+    if (g === 'info') continue;
+    let defs = scored.filter((d) => d.g === g);
+    if (!defs.length) continue;
+    if (coll) defs = defs.map(aggLabel);
+    const t = g === 'box' && infl() ? `${title} (${coll ? 'all films, ' : ''}${BASE_YEAR} dollars)` : coll && g === 'box' ? `${title} (all films)` : coll ? `${title} (averages)` : title;
+    const p = statPanel(t, defs, a, b, false);
+    out.push(p.el); l += p.l; r += p.r;
+    how.push(`${p.l}–${p.r} ${g === 'box' ? 'at the box office' : g === 'crit' ? 'with critics' : g === 'file' ? 'on the file' : 'on brightness'}`);
+  }
+  if (info.length) out.push(statPanel(coll ? 'For information (averages)' : 'For information', coll ? info.map(aggLabel) : info, a, b, true).el);
+  return { out, l, r, how: how.join(', ') };
+}
+function metricsBtn(redraw) {
+  const { scored } = chosen();
+  return h('button', { class: 'btn cmp-metrics', type: 'button', title: 'Choose what is compared', onclick: () => openMetrics(redraw) }, `Metrics (${scored.length} of ${MAX_SCORED})`);
+}
+// Brightness: MediaInfo reads the two files the first time they are compared (in the background, no network)
+const miTried = new Set();
+function brightnessNote(list) {
+  if (!needsMediaInfo()) return null;
+  const want = list.filter((r) => r && !S.state.mi[r.Rid] && !miTried.has(r.Rid));
+  if (want.length && !S.state.miRun?.running) { want.forEach((r) => miTried.add(r.Rid)); S.readMediaInfo(want.map((r) => r.Rid)).catch(() => { /* not set up: the note says so */ }); }
+  const missing = list.filter((r) => r && !(S.state.mi[r.Rid] && !S.state.mi[r.Rid][2]));
+  if (!missing.length) return null;
+  return h('div', { class: 'cmp-hint' },
+    h('span', null, S.state.miRun?.running ? 'MediaInfo is reading the files for brightness...' : 'Brightness comes from MediaInfo reading the file. It needs MediaInfo on this PC and a file it can reach.'),
+    h('button', { class: 'btn', type: 'button', onclick: () => import('./settings.js').then((m) => m.openSettings('compare')) }, 'MediaInfo settings'));
 }
 function seg(cur, opts, onPick, label) {
   return h('div', { class: 'seg', role: 'tablist', 'aria-label': label }, opts.map(([k, t]) =>
@@ -282,7 +294,7 @@ function chooseCollection(cur, onPick) {
 // ---- the view ----------------------------------------------------------------------------------------------------
 export function render(el, redraw, toast) {
   const L = S.state.libs.movies;
-  const s = S.state.settings, defs = statDefs();
+  const s = S.state.settings;
   const motion = s.fxMotion || 'full';
   const root = h('div', { class: `cmp motion-${motion}` });
   const byRid = new Map(L.rows.map((r) => [r.Rid, r]));
@@ -302,7 +314,7 @@ export function render(el, redraw, toast) {
     } }, 'Swap sides'),
     h('label', { class: 'cmp-infl', title: `Box office in ${BASE_YEAR} dollars, adjusted for US inflation from each release year (worldwide is approximate)` },
       h('input', { type: 'checkbox', checked: infl() ? true : null, onchange: (e) => S.saveSettings({ cmpInflation: e.target.checked }).then(redraw) }), ' Adjust for inflation'),
-    h('button', { class: 'btn', type: 'button', title: 'Border effects and the VS', onclick: () => import('./settings.js').then((m) => m.openSettings('fun', redraw)) }, 'Effects'));
+    fun() ? h('button', { class: 'btn', type: 'button', title: 'Border effects and the VS', onclick: () => import('./settings.js').then((m) => m.openSettings('fun', redraw)) }, 'Effects') : null);
   root.append(bar);
 
   const tallyOn = s.cmpTally !== false;
@@ -314,15 +326,14 @@ export function render(el, redraw, toast) {
       h('button', { type: 'button', class: 'cmp-pbtn', title: 'Open its card', onclick: () => openCard(r, toast) }, posterBox(r, side, r.Title)),
       nameEl(r), h('small', null, [r.Year > 0 ? r.Year : '', String(r.Genre || '').split(',')[0]].filter(Boolean).join(' · ')),
       h('button', { class: 'btn', type: 'button', onclick: () => chooseMovie(side === 'l' ? pick.left : pick.right, (rid) => { if (side === 'l') pick.left = rid; else pick.right = rid; redraw(); }) }, 'Change title'));
-    const pb = statPanel(infl() ? `Box office (${BASE_YEAR} dollars)` : 'Box office', defs.box, a, b), pc = statPanel('Critical reception', defs.crit, a, b);
-    const l = pb.l + pc.l, r = pb.r + pc.r;
+    const P = panels(a, b, false), l = P.l, r = P.r;
     root.append(h('div', { class: 'cmp-stage' }, sideBox(a, 'l'),
-      h('div', { class: 'cmp-mid' }, vsMark(), tallyOn ? h('small', { class: 'lbl' }, 'Rounds won') : null, tallyOn ? h('div', { class: 'cmp-score' }, h('b', { class: 'l' }, String(l)), h('span', null, '–'), h('b', { class: 'r' }, String(r))) : null),
+      h('div', { class: 'cmp-mid' }, metricsBtn(redraw), vsMark(), tallyOn ? h('small', { class: 'lbl' }, fun() ? 'Rounds won' : 'Metrics led') : null, tallyOn ? h('div', { class: 'cmp-score' }, h('b', { class: 'l' }, String(l)), h('span', null, '–'), h('b', { class: 'r' }, String(r))) : null),
       sideBox(b, 'r')));
-    root.append(h('div', { class: 'cmp-panels' }, pb.el, pc.el));
-    root.append(fetchHint([a, b]));
-    if (tallyOn) root.append(banner(l, r, a.Title, b.Title, `${pb.l}–${pb.r} at the box office, ${pc.l}–${pc.r} with critics`));
-    root.append(h('p', { class: 'cmp-note' }, h('small', null, 'A round is one row; ties and missing numbers count for nobody. Box office and Metacritic come from Tools > Fetch info.')));
+    root.append(h('div', { class: 'cmp-panels' }, ...P.out));
+    for (const x of [fetchHint([a, b]), brightnessNote([a, b])]) if (x) root.append(x);
+    if (tallyOn) root.append(banner(l, r, a.Title, b.Title, P.how));
+    root.append(h('p', { class: 'cmp-note' }, h('small', null, 'Each row goes to the bigger number; ties and missing numbers count for nobody. Box office and Metacritic come from Tools > Fetch info; brightness from MediaInfo.')));
     el.replaceChildren(root);
     return;
   }
@@ -334,7 +345,8 @@ export function render(el, redraw, toast) {
     el.replaceChildren(root); return;
   }
   const ma = members(ca), mb = members(cb);
-  const ga = aggregate(ma, defs), gb = aggregate(mb, defs), ad = aggDefs(defs);
+  const C = chosen(), all = [...C.scored, ...C.info];
+  const ga = aggregate(ma, all), gb = aggregate(mb, all);
   const head = (c, g, side) => h('div', { class: `cmp-chead ${side}` },
     posterBox(g.top, side, c.name, true),
     h('div', { class: 'info' }, h('small', { class: 'lbl' }, 'Collection'), h('div', { class: 'cmp-name' }, c.name),
@@ -347,7 +359,7 @@ export function render(el, redraw, toast) {
   for (let i = 0; i < n; i++) {
     const a = ma[i], b = mb[i];
     let w = 0, note = '';
-    if (a && b) { const d = duel(a, b, defs); w = d.l > d.r ? -1 : d.r > d.l ? 1 : 0; note = `${d.l}–${d.r}`; }
+    if (a && b) { const d = duel(a, b, C.scored); w = d.l > d.r ? -1 : d.r > d.l ? 1 : 0; note = `${d.l}–${d.r}`; }
     else if (s.cmpWalkover !== false) { w = a ? -1 : 1; note = 'walkover'; }
     else note = 'not played';
     if (w < 0) tl++; else if (w > 0) tr++;
@@ -359,16 +371,15 @@ export function render(el, redraw, toast) {
       h('span', { class: 'c r' }, pct(b?.RTCritic)), h('span', { class: 'g r' }, money(b?.[bo('BoxOfficeWorldwide')])), cell(b, 'r')));
   }
   root.append(h('div', { class: 'cmp-stage coll' }, head(ca, ga, 'l'),
-    h('div', { class: 'cmp-mid' }, vsMark(), tallyOn ? h('small', { class: 'lbl' }, 'Rounds won') : null, tallyOn ? h('div', { class: 'cmp-score' }, h('b', { class: 'l' }, String(tl)), h('span', null, '–'), h('b', { class: 'r' }, String(tr))) : null),
+    h('div', { class: 'cmp-mid' }, metricsBtn(redraw), vsMark(), tallyOn ? h('small', { class: 'lbl' }, fun() ? 'Rounds won' : 'Rounds led') : null, tallyOn ? h('div', { class: 'cmp-score' }, h('b', { class: 'l' }, String(tl)), h('span', null, '–'), h('b', { class: 'r' }, String(tr))) : null),
     head(cb, gb, 'r')));
-  const pb = statPanel(infl() ? `Box office (all films, ${BASE_YEAR} dollars)` : 'Box office (all films)', ad.box, ga, gb), pc = statPanel('Critical reception (averages)', ad.crit, ga, gb);
-  root.append(h('div', { class: 'cmp-panels' }, pb.el, pc.el));
-  root.append(fetchHint([...ma.slice(0, CAP), ...mb.slice(0, CAP)]));
+  root.append(h('div', { class: 'cmp-panels' }, ...panels(ga, gb, true).out));
+  const fh = fetchHint([...ma.slice(0, CAP), ...mb.slice(0, CAP)]); if (fh) root.append(fh);
   root.append(h('section', { class: 'cmp-panel card cmp-tour' },
     h('h2', null, h('span', null, `Tournament: #1 vs #1 by worldwide gross${infl() ? ' (inflation-adjusted)' : ''}${n ? `, ${n} round${n === 1 ? '' : 's'}` : ''}`), h('span', { class: 'tally' }, `${tl} – ${tr}`)),
     h('div', { class: 'cmp-trow hd' }, h('span', null, '#'), h('span', null, ca.name), h('span', null, 'Gross'), h('span', null, 'RT'), h('span', null, 'Winner'), h('span', null, 'RT'), h('span', null, 'Gross'), h('span', null, cb.name)),
     ...rows));
-  if (tallyOn) root.append(banner(tl, tr, ca.name, cb.name, `tournament rounds; each round is decided by the stat rows (${defs.box.length + defs.crit.length})`));
+  if (tallyOn) root.append(banner(tl, tr, ca.name, cb.name, `tournament rounds; each round is decided by the ${C.scored.length} scored metrics`));
   el.replaceChildren(root);
 }
 

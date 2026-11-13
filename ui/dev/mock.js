@@ -5,11 +5,12 @@ let emit = () => {};
 export function attach(fn) { emit = fn; }
 
 const qs = new URLSearchParams(location.search);
-const settings = { theme: qs.get('theme') || 'system', updateCheck: false, moviesView: qs.get('view') || 'posters', tvView: qs.get('view') || 'posters', moviesSort: 'added', tvSort: 'title', columns: [], hideDupes: false, tvScale: 100, clearScale: 100, bannerScale: 100, doctorFreq: 'off', doctorAck: false, doctorDay: 0, doctorTime: '03:00', doctorStyle: 'compact', doctorChecks: ['unreadable', 'unmatched', 'wrongmatch', 'gaps', 'poster', 'dupes', 'av1'], cmpInflation: false, artLogo: false, artBackground: false, artBanner: false, fxLeft: 'auto', fxRight: 'auto', fxMotion: 'full', vsStyle: 'arcade', cmpTally: true, cmpWalkover: true, cmpImdb: true };
+const settings = { theme: qs.get('theme') || 'system', updateCheck: false, moviesView: qs.get('view') || 'posters', tvView: qs.get('view') || 'posters', moviesSort: 'added', tvSort: 'title', columns: [], hideDupes: false, tvScale: 100, clearScale: 100, bannerScale: 100, doctorFreq: 'off', doctorAck: false, doctorDay: 0, doctorTime: '03:00', doctorStyle: 'compact', doctorChecks: ['unreadable', 'unmatched', 'wrongmatch', 'gaps', 'poster', 'dupes', 'av1'], cmpInflation: false, artLogo: false, artBackground: false, artBanner: false, fxLeft: 'auto', fxRight: 'auto', fxMotion: 'full', vsStyle: 'arcade', cmpTally: true, cmpWalkover: true, cmpImdb: true, cmpFun: qs.has('fun') };
 const plex = { url: 'http://plex-server:32400', hasToken: true, jellyfin: { url: '', hasKey: false }, use: { movies: 'plex', tv: 'plex' } };
 if (qs.has('fresh')) { plex.url = ''; plex.hasToken = false; }
 const traffic = { requests: 0, bytes: 0, errors: 0 };
 let halted = false, scanTimer = 0;
+const miStore = {};
 const empty = qs.has('empty');
 
 const seed = (s) => { let x = 17; for (const c of String(s)) x = (x * 31 + c.charCodeAt(0)) % 2147483647; const r = () => (x = (x * 48271) % 2147483647) / 2147483647; r(); r(); r(); return r; };
@@ -36,7 +37,7 @@ const FIELDS = [
   ['ReleaseDate', 'string', 'Overview', 0], ['IMDBID', 'string', 'Overview', 0], ['Resolution', 'string', 'Video', 0], ['ResolutionClass', 'string', 'Video', 1], ['VideoCodec', 'string', 'Video', 1],
   ['VideoBitRateMbps', 'double', 'Video', 1], ['BitsPerPixel', 'double', 'Video', 0], ['FrameRate', 'double', 'Video', 1], ['BitDepth', 'int', 'Video', 1], ['HDRType', 'string', 'HDR', 1],
   ['HDRStack', 'string', 'HDR', 0], ['DVProfile', 'string', 'HDR', 1], ['DVLayer', 'string', 'HDR', 1], ['AudioFormat', 'string', 'Audio', 1], ['ObjectAudio', 'string', 'Audio', 1],
-  ['AudioChannels', 'int', 'Audio', 0], ['AudioLayout', 'string', 'Audio', 1], ['AudioLanguages', 'string', 'Audio', 1], ['SubtitleTracks', 'int', 'Subtitles', 1], ['SubtitleLanguages', 'string', 'Subtitles', 0],
+  ['AudioChannels', 'int', 'Audio', 0], ['AudioBitRateKbps', 'int', 'Audio', 0], ['AudioLayout', 'string', 'Audio', 1], ['AudioLanguages', 'string', 'Audio', 1], ['SubtitleTracks', 'int', 'Subtitles', 1], ['SubtitleLanguages', 'string', 'Subtitles', 0],
   ['FileName', 'string', 'File', 1], ['Container', 'string', 'File', 1], ['Type', 'string', 'File', 0], ['FileSizeGB', 'double', 'File', 1], ['Source', 'string', 'File', 1], ['Added', 'string', 'File', 1],
   ['HasNfo', 'bool', 'Library', 0], ['HasPoster', 'bool', 'Library', 0], ['RTCritic', 'int', 'Ratings', 1], ['RTAudience', 'int', 'Ratings', 1], ['Metascore', 'int', 'Ratings', 1],
   ['BoxOfficeDomestic', 'double', 'Box office', 1], ['BoxOfficeWorldwide', 'double', 'Box office', 1], ['OpeningDomestic', 'double', 'Box office', 1], ['ViewCount', 'int', 'Library', 0], ['Poster', 'string', 'Library', 0], ['Art', 'string', 'Library', 0], ['Logo', 'string', 'Library', 0], ['Banner', 'string', 'Library', 0], ['Rid', 'string', 'Library', 0],
@@ -50,7 +51,7 @@ function quality(rnd) {
   const prof = hdr === 'Dolby Vision' ? pick(rnd, ['8', '8', '7', '5']) : '';
   return { ResolutionClass: res, Resolution: { '4K': '3840x2160', '1080p': '1920x1080', '720p': '1280x720', SD: '720x480' }[res], HDRType: hdr, HDRStack: hdr === 'Dolby Vision' ? `Dolby Vision P${prof}` : hdr,
     DVProfile: prof, DVLayer: prof === '7' ? pick(rnd, ['FEL', 'MEL']) : prof ? 'Single layer' : '', VideoCodec: res === 'SD' ? 'AVC' : pick(rnd, ['HEVC', 'HEVC', 'AVC', 'AV1']),
-    BitDepth: hdr === 'SDR' ? 8 : 10, FrameRate: 23.976, VideoBitRateMbps: Math.round((res === '4K' ? 18 + rnd() * 50 : res === '1080p' ? 4 + rnd() * 20 : 1 + rnd() * 4) * 10) / 10,
+    BitDepth: hdr === 'SDR' ? 8 : 10, FrameRate: 23.976, AudioBitRateKbps: Math.round(640 + rnd() * 4000), VideoBitRateMbps: Math.round((res === '4K' ? 18 + rnd() * 50 : res === '1080p' ? 4 + rnd() * 20 : 1 + rnd() * 4) * 10) / 10,
     BitsPerPixel: Math.round((0.03 + rnd() * 0.2) * 1000) / 1000,
     AudioFormat: pick(rnd, ['Dolby TrueHD', 'DTS-HD MA', 'Dolby Digital Plus', 'AAC', 'Dolby Digital']), ObjectAudio: pick(rnd, ['Dolby Atmos', 'None', 'None', 'DTS:X']),
     AudioLayout: pick(rnd, ['7.1', '5.1', '5.1', 'Stereo']), AudioChannels: 6, AudioLanguages: pick(rnd, ['English', 'English; French', 'English; Spanish', 'Japanese; English']),
@@ -121,6 +122,22 @@ export async function request(cmd, args = {}) {
   switch (cmd) {
     case 'init': return { version: '0.5.0', movies: { count: libs.movies.length, when: '2026-11-07 21:14' }, tv: { count: libs.tv.length, when: '2026-11-06 09:02' }, halted, scanning: false, scanTab: '', mode: qs.get('mode') || 'standalone', theme: qs.get('hosttheme') || '', settings, plex, updateNote: null, debug: true };
     case 'library.get': return empty ? { empty: true } : pack(libs[args.tab === 'tv' ? 'tv' : 'movies']);
+    case 'mediainfo.status': return { found: !qs.has('nomi'), version: '24.06', movies: libs.movies.length, read: Object.keys(miStore).length, unreachable: 3, failed: 0, lastRun: '', running: false };
+    case 'mediainfo.values': return miStore;
+    case 'mediainfo.read': {
+      if (qs.has('nomi')) throw new Error('MediaInfo was not found. Install the MediaInfo command-line version (for example: winget install MediaArea.MediaInfo), or set its location in Settings > Compare.');
+      const rids = args.rids && args.rids.length ? args.rids : libs.movies.map((r) => r.Rid);
+      let i = 0;
+      const t = setInterval(() => {
+        i = Math.min(rids.length, i + Math.max(1, Math.ceil(rids.length / 5)));
+        if (i < rids.length) { emit('mediainfo', { running: true, whole: !args.rids?.length, text: `MediaInfo: ${i} of ${rids.length}`, pct: Math.round(100 * i / rids.length) }); return; }
+        clearInterval(t);
+        rids.forEach((rid, k) => { const hdr = (libs.movies.find((r) => r.Rid === rid) || {}).HDRType || 'SDR'; miStore[rid] = hdr === 'SDR' ? [0, 0, 0] : [600 + ((k * 137) % 1400), 150 + ((k * 61) % 350), 0]; });
+        emit('mediainfo', { running: false, whole: !args.rids?.length, cancelled: false, error: '', read: rids.length, skipped: 0, unreachable: 0, failed: 0 });
+      }, 250);
+      return true;
+    }
+    case 'mediainfo.cancel': return true;
     case 'settings.set': settings[args.key] = args.value; return settings;
     case 'plex.set': plex.url = args.url; if (args.token) plex.hasToken = true; return plex;
     case 'jellyfin.set': plex.jellyfin.url = args.url; if (args.key) plex.jellyfin.hasKey = true; return plex;

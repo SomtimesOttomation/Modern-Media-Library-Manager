@@ -272,17 +272,29 @@ try {
         Set-MmlmProgress -Text 'Loading the last scan...'
         foreach ($r in [Mmlm.Native.Snapshot]::Load($Job.Snapshot)) { if ($r.PlexKey) { $prior[[string]$r.PlexKey] = $r } }
     }
+    # a scan that was cancelled or cut off left a checkpoint: what it had read is reused like the last scan's titles
+    # (but those titles still count as new for the badge, so $known is only the last finished scan)
+    $known = @{}; foreach ($k in $prior.Keys) { $known[$k] = $true }
+    $partial = [string]$Job.Snapshot + '.partial'
+    if ($Job.Rebuild) { Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue }
+    elseif (Test-Path -LiteralPath $partial) {
+        try { foreach ($r in [Mmlm.Native.Snapshot]::Load($partial)) { $k = [string]$r.PlexKey; if ($k -and -not $prior.ContainsKey($k)) { $prior[$k] = $r } } } catch { }
+    }
+    $dir0 = Split-Path -Parent $Job.Snapshot
+    if (-not (Test-Path -LiteralPath $dir0)) { New-Item -Path $dir0 -ItemType Directory -Force | Out-Null }
+    Set-MmlmServerContext -Values @{ ScanCheckpoint = { param($Records) [Mmlm.Native.Snapshot]::Save([object[]]@($Records), $partial, 'partial') }.GetNewClosure() }
     $use = $(if ($Job.Rebuild) { @{} } else { $prior })
     Mark 'load-prior' $prior.Count
     $recs = @(Invoke-MmlmServerScan -Server $Job.Server -Movies (-not $tv) -Shows $tv -Rebuild ([bool]$Job.Rebuild) -DetectFel ([bool]$Job.DetectFel) -Prior $use)
     Mark 'scan-total' $recs.Count
     if ($S.Cancel) { $S.Cancelled = $true; return }
-    $new = @($recs | Where-Object { -not $prior.ContainsKey([string]$_.PlexKey) })
+    $new = @($recs | Where-Object { -not $known.ContainsKey([string]$_.PlexKey) })
     Set-MmlmProgress -Text 'Saving...'
     $dir = Split-Path -Parent $Job.Snapshot
     if (-not (Test-Path -LiteralPath $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
     try { Merge-MmlmMetaStore -Records $recs -Path $Job.MetaStore } catch { }          # fetched scores (Metacritic, RT, box office) and hand edits
     [Mmlm.Native.Snapshot]::Save([object[]]$recs, $Job.Snapshot, ('{0}|{1}' -f $recs.Count, (Get-Date).ToString('yyyy-MM-dd HH:mm')))
+    Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue      # the full library is saved: the checkpoint is done with
     Mark 'save-snapshot' $recs.Count
     if (@($Job.ArtKinds).Count -gt 0) {          # Settings > Artwork: fetched like posters, from your Plex server only
         Set-MmlmScanPhase -Lo 0.0 -Hi 1.0
@@ -336,6 +348,7 @@ function New-WorkerContext {
         Sync = $Sync; Traffic = $script:Traffic; AppRoot = $script:Root; AppData = $script:AppData; AppVersion = $script:Version
         CacheFolder = (Join-Path $script:AppData 'Cache'); ThumbFolder = (Join-Path $script:AppData 'Thumbs'); LibFolder = (Join-Path $script:Root 'lib')
         CacheVersion = 4; Culture = [Globalization.CultureInfo]::InvariantCulture; PlexTimeoutMs = 30000; PlexClientId = 'mmlm-' + $env:COMPUTERNAME
+        NoItemCache = $true          # server scans: no cache file per title; the scan is checkpointed instead (see ScanScript)
         Fields = $script:Fields; TypeMap = @{ string = [string]; int = [int]; long = [long]; double = [double]; bool = [bool] }
         InformFolder = (Join-Path $script:AppData 'Inform')
     }

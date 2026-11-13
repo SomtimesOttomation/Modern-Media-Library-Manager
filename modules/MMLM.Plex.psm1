@@ -767,6 +767,9 @@ function Invoke-MmlmPlexScan {
     # 2) reuse cached records whose Plex 'updatedAt' has not changed ------------------------
     $byKey = @{}
     $todo  = New-Object System.Collections.Generic.List[object]
+    # one cache file per title is only kept for callers that do not hand in the last scan (-Prior); the page's scans
+    # set NoItemCache and are checkpointed by the host instead (55,000 small files are slow to write and to check)
+    $useItemCache = -not [bool]$script:NoItemCache
     Set-MmlmScanPhase -Lo 0.05 -Hi 0.10
     $chk = 0
     foreach ($s in $stubs) {
@@ -778,6 +781,7 @@ function Invoke-MmlmPlexScan {
         # unchanged since the last scan (same Plex 'updatedAt'): reuse the record we already have
         $p0 = $Prior[[string]$s.Key]
         if ($null -ne $p0 -and [string]$p0.PlexUpdated -eq [string]$s.Updated) { $byKey[$s.Key] = $p0; continue }
+        if (-not $useItemCache) { $todo.Add($s); continue }
         $ck = Join-Path $script:CacheFolder ((Get-MmlmStringHash ('plex|{0}|{1}|{2}|{3}|rt2' -f $BaseUrl.ToLowerInvariant(), $s.Key, $s.Updated, $script:CacheVersion)) + '.json')
         $s | Add-Member -NotePropertyName CacheFile -NotePropertyValue $ck -Force
         if ($Rebuild) { Remove-Item -LiteralPath $ck -Force -ErrorAction SilentlyContinue }
@@ -818,10 +822,21 @@ function Invoke-MmlmPlexScan {
         $tShows += $sw.Elapsed.TotalSeconds - $t0; $nShows += $showCache.Count
     }
 
+    $fresh = 0; $lastCheckpoint = 0; $tCheckpoint = 0.0
+    $checkpointEvery = 5000; if ($script:ScanCheckpointEvery) { $checkpointEvery = [int]$script:ScanCheckpointEvery }
+    $checkpoint = {
+        # the host saves what has been read so far, so a first scan that is cancelled or cut off carries on from here
+        if ($script:ScanCheckpoint -and $fresh -gt $lastCheckpoint) {
+            $t0 = $sw.Elapsed.TotalSeconds
+            try { & $script:ScanCheckpoint @($byKey.Values) } catch { }
+            $tCheckpoint += $sw.Elapsed.TotalSeconds - $t0
+        }
+    }
     $batches = New-Object System.Collections.Generic.List[object]
     for ($i = 0; $i -lt $todo.Count; $i += $batchSize) { $batches.Add(@($todo.GetRange($i, [Math]::Min($batchSize, $todo.Count - $i)))) }      # (GetRange: Select-Object -Skip re-walks the whole list every time)
     for ($w = 0; $w -lt $batches.Count; $w += $par) {
-        if (Test-MmlmScanCancelled) { break }
+        if (Test-MmlmScanCancelled) { . $checkpoint; break }
+        if (($fresh - $lastCheckpoint) -ge $checkpointEvery) { . $checkpoint; $lastCheckpoint = $fresh }
         Set-MmlmProgress -Text ("Reading Plex metadata: {0} of {1}" -f ($done + 1), $stubs.Count) -Value $done -Max $stubs.Count
         $wave = @($batches.GetRange($w, [Math]::Min($par, $batches.Count - $w)))
         $t0 = $sw.Elapsed.TotalSeconds
@@ -855,8 +870,14 @@ function Invoke-MmlmPlexScan {
                     $rec = ConvertFrom-MmlmPlexVideo -Video $v -LibraryName $s.Section -Show $showNode
                     $byKey[$s.Key] = $rec
                     $t1 = $sw.Elapsed.TotalSeconds; $tConvert += $t1 - $t0
-                    [IO.File]::WriteAllText($s.CacheFile, ($rec | ConvertTo-Json -Depth 3), (New-Object Text.UTF8Encoding($false)))
-                    $tCache += $sw.Elapsed.TotalSeconds - $t1
+                    if ($useItemCache) {
+                        [IO.File]::WriteAllText($s.CacheFile, ($rec | ConvertTo-Json -Depth 3), (New-Object Text.UTF8Encoding($false)))
+                        $tCache += $sw.Elapsed.TotalSeconds - $t1
+                    }
+                    else {
+                        $rec.PSObject.Properties.Add((New-Object Management.Automation.PSNoteProperty('PlexUpdated', [string]$s.Updated)))      # so a checkpoint can be resumed from
+                        $fresh++
+                    }
                 }
                 catch { Write-Warning "Skipped Plex item $($s.Key): $_" }
                 $done++
@@ -865,7 +886,8 @@ function Invoke-MmlmPlexScan {
     }
     $t3 = $sw.Elapsed.TotalSeconds; $sw.Restart()
     Add-MmlmScanTime 'fetch' $tFetch $todo.Count
-    Add-MmlmScanTime 'other' ([Math]::Max(0.0, $t3 - $tFetch - $tConvert - $tCache - $tShows))
+    Add-MmlmScanTime 'other' ([Math]::Max(0.0, $t3 - $tFetch - $tConvert - $tCache - $tShows - $tCheckpoint))
+    if ($tCheckpoint -gt 0) { Add-MmlmScanTime 'checkpoint' $tCheckpoint }
     Add-MmlmScanTime 'convert' $tConvert $todo.Count; Add-MmlmScanTime 'cache-write' $tCache $todo.Count; Add-MmlmScanTime 'shows' $tShows $nShows
 
     # 4) posters + optional FEL/MEL probe, then put everything back in library order ----------
@@ -902,7 +924,7 @@ function Invoke-MmlmPlexScan {
             if ($layer) {
                 $rec.DVLayer  = $layer
                 $rec.HDRStack = ([string]$rec.HDRStack) -replace '\(dual layer\)', $layer
-                try { [IO.File]::WriteAllText($s.CacheFile, ($rec | ConvertTo-Json -Depth 3), (New-Object Text.UTF8Encoding($false))) } catch { }
+                if ($useItemCache) { try { [IO.File]::WriteAllText($s.CacheFile, ($rec | ConvertTo-Json -Depth 3), (New-Object Text.UTF8Encoding($false))) } catch { } }
             }
         }
         $out.Add($rec)

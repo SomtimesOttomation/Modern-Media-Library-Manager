@@ -140,6 +140,28 @@ foreach ($mode in $(if ($env:MMLM_SCAN_MODES) { $env:MMLM_SCAN_MODES -split ',' 
     Check ((ConvertTo-StableText $rtv2) -ceq (ConvertTo-StableText $rtv)) 'rescan: the same records'
     Check ($st2.requests -le 4 -and ($ctx.Traffic.Requests - $before) -eq $st2.requests) "rescan: only the listing is asked for ($($st2.requests) requests)"
 
+    # a scan that is stopped part-way leaves a checkpoint, and the next scan carries on from it
+    if ($extra.NoItemCache) {
+        Reset-Mock 32501
+        $saved = New-Object System.Collections.Generic.List[object]
+        $ctx = New-TestContext "c-$mode" (@{} + $extra + @{ ScanCheckpointEvery = 100; PlexParallel = 1 })
+        Set-MmlmServerContext -Values @{ ScanCheckpoint = { param($Records) $saved.Clear(); $saved.AddRange(@($Records)); $ctx.Sync.Cancel = $true }.GetNewClosure() }
+        $cut = Invoke-Scan $rich $true
+        $firstReq = (Get-MockStats 32501).requests
+        Check ($saved.Count -ge 100 -and $saved.Count -lt 240 -and @($saved | Where-Object { -not $_.PlexUpdated }).Count -eq 0) "stopped part-way: $($saved.Count) titles were checkpointed, each with its change marker"
+        Initialize-MmlmNative
+        $pf = Join-Path $tmp 'ck.partial'
+        [Mmlm.Native.Snapshot]::Save([object[]]$saved.ToArray(), $pf, 'partial')
+        $back = @([Mmlm.Native.Snapshot]::Load($pf))
+        Check ($back.Count -eq $saved.Count -and [string]$back[0].PlexUpdated -eq [string]$saved[0].PlexUpdated -and $back[0].PlexUpdated) 'the checkpoint file keeps each change marker'
+        $ctx.Sync.Cancel = $false; Set-MmlmServerContext -Values @{ ScanCheckpoint = $null }
+        Reset-Mock 32501
+        $resumed = Invoke-Scan $rich $true (ConvertTo-PriorMap $back)
+        $st3 = Get-MockStats 32501
+        Check ((ConvertTo-StableText $resumed) -ceq (ConvertTo-StableText $rtv)) 'carried on from the checkpoint: the same records as an unbroken scan'
+        Check ($st3.requests -lt $st.requests) "carried on from the checkpoint: fewer requests than a first scan ($($st3.requests))"
+    }
+
     # one failed request does not lose titles
     $ctx = New-TestContext "f-$mode" $extra
     [void](New-Object Net.WebClient).DownloadString('http://127.0.0.1:32501/__reset')

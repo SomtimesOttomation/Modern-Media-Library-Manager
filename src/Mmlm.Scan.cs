@@ -119,7 +119,7 @@ namespace Mmlm.Scan
             public readonly Dictionary<string, object> Vals = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
             public void Set(string name, object value) { if (!Vals.ContainsKey(name)) Names.Add(name); Vals[name] = value; }
             public object Get(string name) { object v; return Vals.TryGetValue(name, out v) ? v : null; }
-            public string Str(string name) { object v = Get(name); return v == null ? "" : Convert.ToString(v, CultureInfo.InvariantCulture); }
+            public string Str(string name) { object v = Get(name); return v == null ? "" : System.Convert.ToString(v, CultureInfo.InvariantCulture); }
         }
         sealed class Ratings { public double Imdb; public double Tmdb; public int RTCritic; public int RTAudience; }
 
@@ -182,7 +182,7 @@ namespace Mmlm.Scan
                 else if (StartsLike(img, "themoviedb://")) { if (o.Tmdb <= 0) o.Tmdb = val; }
                 else if (StartsLike(img, "rottentomatoes://"))
                 {
-                    int pct = Convert.ToInt32(Math.Round(val * 10));
+                    int pct = System.Convert.ToInt32(Math.Round(val * 10));
                     if (pct < 1 || pct > 100) continue;
                     if (RxUpright.IsMatch(img)) { if (o.RTAudience <= 0) o.RTAudience = pct; }
                     else { if (o.RTCritic <= 0) o.RTCritic = pct; }
@@ -296,7 +296,7 @@ namespace Mmlm.Scan
 
         // fieldNames/fieldTypes: the app's field list (name and 'string' / 'int' / 'long' / 'double' / 'bool').
         // culture: the scan's number culture ($script:Culture); titleCase: (Get-Culture).TextInfo.
-        public static PSObject Convert(XmlElement video, XmlElement show, string libraryName, string[] fieldNames, string[] fieldTypes, IFormatProvider culture, TextInfo titleCase)
+        public static PSObject ToRecord(XmlElement video, XmlElement show, string libraryName, string[] fieldNames, string[] fieldTypes, IFormatProvider culture, TextInfo titleCase)
         {
             Rec rec = new Rec();
             for (int i = 0; i < fieldNames.Length; i++)

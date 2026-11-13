@@ -128,6 +128,9 @@ foreach ($mode in $(if ($env:MMLM_SCAN_MODES) { $env:MMLM_SCAN_MODES -split ',' 
     Check ($rmv.Count -eq 24 -and $rtv.Count -eq 240) 'varied library: 24 movies and 240 episodes'
     Compare-Golden 'plex-rich-movies' (ConvertTo-StableText $rmv) 'varied library: movies are unchanged'
     Compare-Golden 'plex-rich-tv' (ConvertTo-StableText $rtv) 'varied library: episodes are unchanged'
+    $tm = $ctx.Sync.Times
+    if ($mode -eq 'default') { Check ($tm -and $tm.Contains('convert-fast') -and $tm['convert-fast'].Count -eq 264 -and -not $tm.Contains('convert-retry')) 'every title went through the compiled record builder, none needed the retry' }
+    else { Check (-not ($tm -and $tm.Contains('convert-fast'))) 'this mode uses the PowerShell record builder' }
     Check ($st.maxConcurrent -le 6) "never more than 6 requests at once (saw $($st.maxConcurrent))"
     Check ($ctx.Traffic.Requests -eq $st.requests) "every request is counted for the traffic counter ($($ctx.Traffic.Requests) counted, $($st.requests) made)"
     "  ..    first scan of the varied library: $($st.requests) requests"
@@ -182,6 +185,19 @@ foreach ($mode in $(if ($env:MMLM_SCAN_MODES) { $env:MMLM_SCAN_MODES -split ',' 
     # a wrong token still gets the plain message
     $msg = ''; try { [void](Invoke-Scan (New-MmlmServer -Kind plex -BaseUrl 'http://127.0.0.1:32501' -Token 'wrong') $true) } catch { $msg = $_.Exception.Message }
     Check ($msg -eq 'Plex rejected the token (401 Unauthorized).') 'a wrong token: the same message as before'
+}
+
+# ---- compiled and PowerShell record builders agree on a few thousand varied titles (opt-in: needs the big mock) ----------
+if ($env:MMLM_COMPARE_BUILDERS -eq '1') {
+    $n = $(if ($env:MMLM_SPEED_ITEMS) { [int]$env:MMLM_SPEED_ITEMS } else { 55000 })
+    Start-Mock 32502 @{ PLEX_MOCK_SCALE = [string]$n; PLEX_MOCK_DELAY_MS = '40' }
+    $big = New-MmlmServer -Kind plex -BaseUrl 'http://127.0.0.1:32502' -Token 'tok'
+    $ctx = New-TestContext 'ab-fast' @{ NoItemCache = $true }
+    $fast = ConvertTo-StableText (Invoke-Scan $big $false)
+    $nFast = $ctx.Sync.Times['convert-fast'].Count
+    $ctx = New-TestContext 'ab-ps' @{ NoItemCache = $true; NativeConvert = $false }
+    $slow = ConvertTo-StableText (Invoke-Scan $big $false)
+    Check ($nFast -gt 1000 -and $fast -ceq $slow) "compiled and PowerShell record builders give identical records for $nFast varied movies"
 }
 
 # ---- Part C: speed (opt-in) -----------------------------------------------------------------------------------------------

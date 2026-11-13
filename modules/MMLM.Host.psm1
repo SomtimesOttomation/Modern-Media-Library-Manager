@@ -335,6 +335,7 @@ finally {
             $state = $(if ($S.Error) { 'failed' } elseif ($S.Cancel) { 'cancelled' } else { 'finished' })
             $lines = New-Object System.Collections.Generic.List[string]
             $lines.Add(('{0}  {1}  server={2}  items={3}  new={4}  {5}  total={6:0.0}s  rebuild={7}  PowerShell {8}  MMLM {9}' -f (Get-Date).ToString('yyyy-MM-dd HH:mm'), $Job.Tab, [string]$Job.Server.Kind, [int]$S.Count, [int]$S.New, $state, $swAll.Elapsed.TotalSeconds, [bool]$Job.Rebuild, $PSVersionTable.PSVersion, [string]$Ctx.AppVersion))
+            $lines.Add('scan helper: ' + $(if ('Mmlm.Scan.Http' -as [type]) { 'compiled' } else { 'not available (one request at a time). ' + (Get-MmlmScanNativeError) }))
             if ($S.Times) { foreach ($k in @($S.Times.Keys)) { $lines.Add(('{0,-14} {1,9:0.00} s {2,8}' -f $k, [double]$S.Times[$k].Seconds, [int]$S.Times[$k].Count)) } }
             [IO.File]::WriteAllLines((Join-Path $Job.CacheDir ('scan-timing-' + $Job.Tab + '.txt')), $lines.ToArray(), (New-Object Text.UTF8Encoding($false)))
         } catch { }

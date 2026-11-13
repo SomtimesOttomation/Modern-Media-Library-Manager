@@ -106,7 +106,12 @@ function Get-MmlmPlexMany {
     $results = $null
     if ($Parallel -gt 1) {
         if (Initialize-MmlmScanNative) {
-            if ([Net.ServicePointManager]::DefaultConnectionLimit -lt 8) { [Net.ServicePointManager]::DefaultConnectionLimit = 8 }      # Windows allows 2 connections per server by default
+            # Windows allows 2 connections per server by default; lift it for new connections and for this server's existing one
+            try {
+                if ([Net.ServicePointManager]::DefaultConnectionLimit -lt 8) { [Net.ServicePointManager]::DefaultConnectionLimit = 8 }
+                $sp = [Net.ServicePointManager]::FindServicePoint([Uri]$BaseUrl)
+                if ($sp -and $sp.ConnectionLimit -lt 8) { $sp.ConnectionLimit = 8 }
+            } catch { }
             $urls = New-Object 'System.Collections.Generic.List[string]'
             foreach ($r in $Requests) {
                 $parts = @()
@@ -829,6 +834,15 @@ function Invoke-MmlmPlexScan {
     }
 
     $fresh = 0; $lastCheckpoint = 0; $tCheckpoint = 0.0
+    # the compiled record builder (src\Mmlm.Scan.cs) when it is available; the PowerShell one otherwise, and for any
+    # title the compiled one cannot handle
+    $native = $false; $nNative = 0; $nFallback = 0
+    if ($script:NativeConvert -ne $false -and $script:Fields -and (Initialize-MmlmScanNative) -and ('Mmlm.Scan.PlexConvert' -as [type])) {
+        $native = $true
+        $fNames = [string[]]@($script:Fields | ForEach-Object { [string]$_.Name })
+        $fTypes = [string[]]@($script:Fields | ForEach-Object { [string]$_.Type })
+        $titleCase = (Get-Culture).TextInfo
+    }
     $checkpointEvery = 5000; if ($script:ScanCheckpointEvery) { $checkpointEvery = [int]$script:ScanCheckpointEvery }
     $checkpoint = {
         # the host saves what has been read so far, so a first scan that is cancelled or cut off carries on from here
@@ -873,7 +887,12 @@ function Invoke-MmlmPlexScan {
                 }
                 try {
                     $t0 = $sw.Elapsed.TotalSeconds
-                    $rec = ConvertFrom-MmlmPlexVideo -Video $v -LibraryName $s.Section -Show $showNode
+                    $rec = $null
+                    if ($native) {
+                        try { $rec = [Mmlm.Scan.PlexConvert]::ToRecord($v, $showNode, [string]$s.Section, $fNames, $fTypes, $script:Culture, $titleCase); $nNative++ }
+                        catch { $rec = $null; $nFallback++ }
+                    }
+                    if ($null -eq $rec) { $rec = ConvertFrom-MmlmPlexVideo -Video $v -LibraryName $s.Section -Show $showNode }
                     $byKey[$s.Key] = $rec
                     $t1 = $sw.Elapsed.TotalSeconds; $tConvert += $t1 - $t0
                     if ($useItemCache) {
@@ -894,6 +913,8 @@ function Invoke-MmlmPlexScan {
     Add-MmlmScanTime 'fetch' $tFetch $todo.Count
     Add-MmlmScanTime 'other' ([Math]::Max(0.0, $t3 - $tFetch - $tConvert - $tCache - $tShows - $tCheckpoint))
     if ($tCheckpoint -gt 0) { Add-MmlmScanTime 'checkpoint' $tCheckpoint }
+    if ($nNative -gt 0) { Add-MmlmScanTime 'convert-fast' 0 $nNative }
+    if ($nFallback -gt 0) { Add-MmlmScanTime 'convert-retry' 0 $nFallback }
     Add-MmlmScanTime 'convert' $tConvert $todo.Count; Add-MmlmScanTime 'cache-write' $tCache $todo.Count; Add-MmlmScanTime 'shows' $tShows $nShows
 
     # 4) posters + optional FEL/MEL probe, then put everything back in library order ----------

@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## 0.16.0
+
+**Feature**
+- Plex scans are much faster: requests go several at a time with bigger batches, posters download in parallel, no cache file is written per title, and each title's details are worked out by compiled code. A first scan that is cut off carries on where it stopped.
+- Settings > Servers > Copy timings shows how long each stage of the last scan took.
+- Settings > Compare: choose up to 8 scored metrics (box office, reviews, video and audio bitrate, max and average brightness), with runtime and file size as free information rows; also reachable from the new Metrics button.
+- MediaInfo reads brightness (MaxCLL / MaxFALL) from movie files with the MediaInfo already on the PC, for the two compared movies or the whole movie library, with a server-to-local path map.
+- Fun mode turns Compare into Versus: a burning VS in your own colours with embers, a skull bar that fills as each side wins metrics, and an effects table to set the size and intensity of every glow, with a reset.
+- Versus poster themes: Fire (real animated flames), Water, Spectral, Lightning and Nature; Auto picks one from the poster's colours.
+
+**Redesign**
+- Compare's default look is plain for sharing: no effects, and a 'Comparison' title in place of the VS.
+
+**Bug/Fix**
+- The settings tabs wrap onto a second row instead of running off the window.
+
+**Housekeeping**
+- Test screenshots that were shipping in the app folder were removed.
+- Added the scan speed plan document and new tests for scan results, timings and MediaInfo.
+
 ## 0.15.2
 
 **Bug/Fix**

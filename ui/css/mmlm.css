@@ -696,3 +696,12 @@ body.dragging { cursor: ew-resize; user-select: none; }
 .api-wrap { margin-top: 12px; overflow-x: auto; }
 .api-tbl { width: 100%; } .api-tbl th, .api-tbl td { text-align: left !important; } .api-tbl td:nth-child(2), .api-tbl td:nth-child(4) { white-space: nowrap; }
 .met-item small { text-align: right; white-space: nowrap; }
+.mi-steps { margin: 4px 0 8px; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; line-height: 1.5; }
+.mi-steps code { padding: 1px 6px; border-radius: 5px; background: var(--surface2); font-size: 12px; user-select: all; }
+.btn.small { padding: 2px 8px; font-size: 12px; }
+.mi-grid.one { grid-template-columns: 1fr; }
+.mi-map { margin: 6px 0; } .mi-map summary { cursor: pointer; font-size: 13px; color: var(--accent); }
+.mi-check { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; font-size: 12px; } .mi-check code { word-break: break-all; padding: 1px 5px; border-radius: 4px; background: var(--surface2); }
+.mi-ok.ok { color: #3fbf6f; font-weight: 600; } .mi-ok.bad { color: #e5484d; font-weight: 600; }
+.mi-cmd { display: inline-flex; align-items: center; gap: 6px; margin: 2px 0; }
+.mi-cmd input { font: 12px ui-monospace, Consolas, monospace; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface2); color: var(--text); user-select: text; -webkit-user-select: text; cursor: text; max-width: 100%; }

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.18.0
+
+**Feature**
+- Settings > Data > Traffic details lists TMDB, OMDb and the IMDb ratings file with their last result and, when one failed, the reason the service gave.
+
+**Bug/Fix**
+- OMDb's daily limit was reported as a rejected key; it is now reported as the limit.
+- When OMDb fails, the title keeps what TMDB found instead of failing, and the run summary says why OMDb was skipped.
+
 ## 0.17.0
 
 **Feature**

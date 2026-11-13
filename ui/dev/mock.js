@@ -122,7 +122,7 @@ export async function request(cmd, args = {}) {
   switch (cmd) {
     case 'init': return { version: '0.5.0', movies: { count: libs.movies.length, when: '2026-11-07 21:14' }, tv: { count: libs.tv.length, when: '2026-11-06 09:02' }, halted, scanning: false, scanTab: '', mode: qs.get('mode') || 'standalone', theme: qs.get('hosttheme') || '', settings, plex, updateNote: null, debug: true };
     case 'library.get': return empty ? { empty: true } : pack(libs[args.tab === 'tv' ? 'tv' : 'movies']);
-    case 'mediainfo.status': return { example: '/data/movies/The Silent Meridian (1993)/The Silent Meridian (1993).mkv', exampleLocal: (args.from && '/data/movies/The Silent Meridian (1993)/The Silent Meridian (1993).mkv'.startsWith(args.from)) ? args.to + '\\The Silent Meridian (1993)\\The Silent Meridian (1993).mkv' : '/data/movies/The Silent Meridian (1993)/The Silent Meridian (1993).mkv', exampleOk: !!args.from, found: !qs.has('nomi'), version: '24.06', movies: libs.movies.length, read: Object.keys(miStore).length, unreachable: 3, failed: 0, lastRun: '', running: false };
+    case 'mediainfo.status': return { example: '/data/movies/The Silent Meridian (1993)/The Silent Meridian (1993).mkv', exampleLocal: (args.from && '/data/movies/The Silent Meridian (1993)/The Silent Meridian (1993).mkv'.startsWith(args.from)) ? args.to + '\\The Silent Meridian (1993)\\The Silent Meridian (1993).mkv' : '/data/movies/The Silent Meridian (1993)/The Silent Meridian (1993).mkv', exampleOk: !!args.from, found: !qs.has('nomi') && !qs.has('migui'), gui: qs.has('migui') ? 'C:\\Program Files\\MediaInfo\\MediaInfo.exe' : '', version: '24.06', movies: libs.movies.length, read: Object.keys(miStore).length, unreachable: 3, failed: 0, lastRun: '', running: false };
     case 'mediainfo.values': return miStore;
     case 'mediainfo.read': {
       if (qs.has('nomi')) throw new Error('MediaInfo was not found. Install the MediaInfo command-line version (for example: winget install MediaArea.MediaInfo), or set its location in Settings > Compare.');
@@ -130,7 +130,7 @@ export async function request(cmd, args = {}) {
       let i = 0;
       const t = setInterval(() => {
         i = Math.min(rids.length, i + Math.max(1, Math.ceil(rids.length / 5)));
-        if (i < rids.length) { emit('mediainfo', { running: true, whole: !args.rids?.length, text: `MediaInfo: ${i} of ${rids.length}`, pct: Math.round(100 * i / rids.length) }); return; }
+        if (i < rids.length) { emit('mediainfo', { running: true, whole: !args.rids?.length, text: `MediaInfo: ${i} of ${rids.length}`, title: (libs.movies.find((r) => r.Rid === rids[i - 1]) || {}).Title || '', n: i, total: rids.length, pct: Math.round(100 * i / rids.length) }); return; }
         clearInterval(t);
         rids.forEach((rid, k) => { const hdr = (libs.movies.find((r) => r.Rid === rid) || {}).HDRType || 'SDR'; miStore[rid] = hdr === 'SDR' ? [0, 0, 0] : [600 + ((k * 137) % 1400), 150 + ((k * 61) % 350), 0]; });
         emit('mediainfo', { running: false, whole: !args.rids?.length, cancelled: false, error: '', read: rids.length, skipped: 0, unreachable: 0, failed: 0 });

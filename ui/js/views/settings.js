@@ -247,7 +247,8 @@ function compareTab(repaint) {
       // not found: what to do, step by step
       const cmd = 'winget install MediaArea.MediaInfo';
       status.replaceChildren(
-        h('p', null, h('b', null, 'MediaInfo is not installed yet')),
+        ...(st.gui ? [h('p', { class: 'mi-gui' }, h('b', null, 'That is the windowed MediaInfo app, which MMLM cannot use. '), h('small', null, `${st.gui} opens an empty window for every movie, so MMLM skips it. Install the command-line version (step 1) and empty the MediaInfo.exe location box, or point it at the command-line MediaInfo.exe.`))] : []),
+        h('p', null, h('b', null, st.gui ? 'The command-line MediaInfo is not installed yet' : 'MediaInfo is not installed yet')),
         h('p', null, h('small', null, 'MMLM never downloads it for you. Set it up once:')),
         h('ol', { class: 'mi-steps' },
           h('li', null, 'Install the MediaInfo ', h('b', null, 'command-line'), ' version. The easy way: open Windows Terminal or PowerShell and run ',

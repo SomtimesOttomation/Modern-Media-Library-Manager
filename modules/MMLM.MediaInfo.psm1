@@ -13,19 +13,50 @@
 #>
 Set-StrictMode -Version 2.0
 
+function Test-MmlmWindowedExe {
+    # $true when this .exe is a windowed (GUI) program, read from its header without running it. The windowed
+    # MediaInfo opens an empty window for every file it is given, so it must never be used as the command-line one.
+    param([string]$Path)
+    try {
+        $fs = [IO.File]::OpenRead($Path)
+        try {
+            $br = New-Object IO.BinaryReader($fs)
+            if ($fs.Length -lt 64 -or $br.ReadUInt16() -ne 0x5A4D) { return $false }   # not "MZ": not a Windows program
+            $fs.Position = 0x3C; $pe = $br.ReadInt32()
+            if ($pe -le 0 -or $pe + 0x5E -gt $fs.Length) { return $false }
+            $fs.Position = $pe; if ($br.ReadUInt32() -ne 0x00004550) { return $false }   # "PE\0\0"
+            $fs.Position = $pe + 0x5C
+            return ($br.ReadUInt16() -eq 2)   # subsystem 2 = Windows GUI, 3 = console
+        }
+        finally { $fs.Dispose() }
+    }
+    catch { $false }
+}
+
 function Find-MmlmMediaInfoCli {
-    # The MediaInfo command-line program to use, or '' when there is none. Never downloads anything.
+    # The MediaInfo command-line program to use, or '' when there is none. Never downloads anything. The windowed
+    # MediaInfo app is skipped (see Test-MmlmWindowedExe); $script:MediaInfoGuiSkipped names the last one skipped.
     param([string]$Custom, [string]$AppRoot)
+    $script:MediaInfoGuiSkipped = ''
     $cands = New-Object System.Collections.Generic.List[string]
     if ($Custom) { $cands.Add($Custom) }
     if ($AppRoot) {
         foreach ($rel in 'lib\MediaInfo.exe', 'lib\MediaInfo\MediaInfo.exe', 'lib\mediainfo', 'lib/mediainfo') { $cands.Add((Join-Path $AppRoot $rel)) }
     }
-    foreach ($c in $cands) { if ($c -and (Test-Path -LiteralPath $c -PathType Leaf)) { return (Resolve-Path -LiteralPath $c).ProviderPath } }
-    $cmd = Get-Command -Name 'mediainfo' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($cmd) { return [string]$cmd.Source }
+    foreach ($c in $cands) {
+        if ($c -and (Test-Path -LiteralPath $c -PathType Leaf)) {
+            $full = (Resolve-Path -LiteralPath $c).ProviderPath
+            if (Test-MmlmWindowedExe $full) { $script:MediaInfoGuiSkipped = $full; continue }
+            return $full
+        }
+    }
+    foreach ($cmd in @(Get-Command -Name 'mediainfo' -CommandType Application -ErrorAction SilentlyContinue)) {
+        if (Test-MmlmWindowedExe ([string]$cmd.Source)) { $script:MediaInfoGuiSkipped = [string]$cmd.Source; continue }
+        return [string]$cmd.Source
+    }
     ''
 }
+function Get-MmlmMediaInfoGuiSkipped { [string]$script:MediaInfoGuiSkipped }
 
 function Invoke-MmlmMediaInfoCli {
     # Runs the CLI with these arguments; returns @{ Code; Out; Err }. Stops it after $TimeoutMs.
@@ -133,7 +164,13 @@ function Update-MmlmBrightness {
     foreach ($t in @($Titles)) {
         if ($Sync -and $Sync.Cancel) { break }
         $n++
-        if ($Sync) { $Sync.Text = ('MediaInfo: {0} of {1}' -f $n, $res.Total); $Sync.Value = $n; $Sync.Max = $res.Total }
+        if ($Sync) {
+            # the title being read: given, or the file name without its folder and extension
+            $name = $(if ($t -is [Collections.IDictionary]) { [string]$t['Title'] } else { [string]$t.Title })
+            if (-not $name) { $name = [IO.Path]::GetFileNameWithoutExtension((([string]$t.Path) -split '[\\/]')[-1]) }
+            $Sync.Title = $name
+            $Sync.Text = ('MediaInfo: {0} of {1}' -f $n, $res.Total); $Sync.Value = $n; $Sync.Max = $res.Total
+        }
         $key = [string]$t.Key
         $local = Resolve-MmlmLocalPath -Path ([string]$t.Path) -From $MapFrom -To $MapTo
         $fi = $null
@@ -165,6 +202,8 @@ function Update-MmlmBrightness {
 
 Export-ModuleMember -Function @(
     'Find-MmlmMediaInfoCli',
+    'Test-MmlmWindowedExe',
+    'Get-MmlmMediaInfoGuiSkipped',
     'Get-MmlmMediaInfoVersion',
     'Read-MmlmBrightness',
     'Resolve-MmlmLocalPath',

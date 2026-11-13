@@ -705,3 +705,4 @@ body.dragging { cursor: ew-resize; user-select: none; }
 .mi-ok.ok { color: #3fbf6f; font-weight: 600; } .mi-ok.bad { color: #e5484d; font-weight: 600; }
 .mi-cmd { display: inline-flex; align-items: center; gap: 6px; margin: 2px 0; }
 .mi-cmd input { font: 12px ui-monospace, Consolas, monospace; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface2); color: var(--text); user-select: text; -webkit-user-select: text; cursor: text; max-width: 100%; }
+.mi-gui { border-left: 3px solid #e5484d; padding: 4px 10px; }

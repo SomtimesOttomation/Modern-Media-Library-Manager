@@ -9,6 +9,7 @@ import { openUpdate } from './update.js';
 import { openTraffic } from './traffic.js';
 import { chosen, openMetrics, MAX_SCORED } from '../metrics.js';
 import { BASE_YEAR } from '../inflation.js';
+import { SKULL_STYLES, TATTOOS } from '../skullfx.js';
 import { ELEMENTS, tune, saveTune, resetTune, vsColors, VS_DEFAULT, startTabGlow, stopTabGlow, tabGlowLeft } from '../fxtune.js';
 
 // In-page overlay (no alert/confirm/prompt): Escape or a click outside closes it.
@@ -299,6 +300,13 @@ const FX = [['auto', 'Auto'], ['fire', 'Fire'], ['water', 'Water'], ['specter', 
 function funTab(repaint) {
   const s = S.state.settings;
   const set = (k, v) => S.saveSettings({ [k]: v }).then(repaint);
+  const rangeRow = (label, key, min, max, step, def, show, tip) => {
+    const v = Number.isFinite(Number(s[key])) ? Number(s[key]) : def;
+    const out = h('small', { class: 'sk-val' }, show(v));
+    return h('label', { title: tip || null }, h('span', null, label),
+      h('input', { type: 'range', min: String(min), max: String(max), step: String(step), value: String(v), 'aria-label': label,
+        oninput: (e) => { out.textContent = show(+e.target.value); }, onchange: (e) => set(key, +e.target.value) }), out);
+  };
   const side = (key, label) => h('div', { class: 'fx-row' }, h('span', { class: 'fx-lbl' }, label),
     ...FX.map(([k, t]) => h('button', { type: 'button', class: `fx-opt${(s[key] || 'auto') === k ? ' on' : ''}`, 'aria-pressed': (s[key] || 'auto') === k ? 'true' : 'false', title: t, onclick: () => set(key, k) },
       h('span', { class: `fx-sw fx-${k === 'auto' ? 'poster' : k}`, style: { '--fx1': '#d6408c', '--fx2': '#8c50f0' } }), h('small', null, t))));
@@ -317,6 +325,13 @@ function funTab(repaint) {
       return h('label', { class: 'vs-col' }, h('input', { type: 'color', value: c, 'aria-label': `${name} colour`, onchange: (e) => save(e.target.value) }),
         h('input', { type: 'text', value: c, maxlength: '7', spellcheck: 'false', 'aria-label': `${name} colour hex code`, onchange: (e) => { const v = e.target.value.trim(); save(v.startsWith('#') ? v : '#' + v); } }), h('small', null, name));
     }), h('button', { class: 'btn', type: 'button', onclick: () => S.saveSettings({ vsColors: VS_DEFAULT.slice() }).then(repaint) }, 'Fire colours')),
+    hr(),
+    h('p', null, h('b', null, 'Skull bar '), h('small', null, "Each side's bar runs out to its score in that side's theme, with a flaming skull at its tip.")),
+    h('div', { class: 'sk-set' },
+      h('label', null, h('span', null, 'Skull'), h('select', { 'aria-label': 'Skull look', onchange: (e) => set('skStyle', e.target.value) },
+        SKULL_STYLES.map(([k, t]) => h('option', { value: k, selected: (s.skStyle || 'bone') === k ? true : null }, t)))),
+      rangeRow('Tattoo', 'skTattoo', 0, 10, 1, 0, (v) => TATTOOS[v]?.[0] || 'None'),
+      rangeRow('Effect radius', 'fxRadius', 0, 100, 5, 50, (v) => String(v), 'How far flames, sparks and wisps spread from the bars and skulls')),
     hr(),
     h('p', null, h('b', null, 'Effects '), h('small', null, 'Size is how big or far it reaches; intensity is how bright and busy it is. 50 is the normal look.')),
     tuneTable(repaint),

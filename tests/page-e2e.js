@@ -102,6 +102,16 @@ async function run() {
   await page.keyboard.press('Escape'); await page.waitForTimeout(1200);
   check((await page.$$('.cmp-poster[data-fx]')).length === 2 && await page.isVisible('.cmp-vs'), 'Compare in Fun mode: themed borders and the VS');
   check(await page.isVisible('.cmp-vs.vs-fire') && await page.isVisible('.sk-bar'), 'Compare in Fun mode: the burning VS and the skull bar');
+  await page.waitForTimeout(600);
+  check((await page.$$('.sk-skull svg')).length === 2 && (await page.$$('.sk-bar canvas')).length === 2, 'Skull bar: one skull per side, drawn over the elemental bars');
+  check(await page.$eval('.sk-skull svg', (e) => e.style.transform.includes('scaleX(-1)')), 'Skull bar: the left skull faces left (outward)');
+  await page.click('#btn-settings'); await page.click('.settings-tabs button:has-text("Versus")'); await page.waitForTimeout(300);
+  await page.selectOption('select[aria-label="Skull look"]', 'sugardark'); await page.waitForTimeout(300);
+  await page.$eval('input[aria-label="Tattoo"]', (e) => { e.value = '3'; e.dispatchEvent(new Event('change', { bubbles: true })); }); await page.waitForTimeout(300);
+  check((await page.textContent('.sk-set')).includes('Pentagram'), 'Versus: the tattoo slider names the tattoo');
+  await page.keyboard.press('Escape'); await page.waitForTimeout(1200);
+  check((await page.$eval('.sk-skull', (e) => e.innerHTML)).includes('#ff4fa3') && (await page.$eval('.sk-skull', (e) => e.innerHTML)).includes('L22.1,24.7'), 'Skull bar: the chosen skull look and tattoo are drawn');
+  await page.screenshot({ path: path.join(outDir, 'e2e-skullbar.png') });
   await page.click('.cmp-tools button:has-text("Collection vs")'); await page.waitForTimeout(500);
   check(await page.isVisible('.cmp-tour') || await page.isVisible('.cmp .state'), 'Collection vs collection opens (tournament, or a note when there are not two collections)');
   await page.click('.lib-tools .seg button:has-text("Posters")'); await page.waitForTimeout(500);

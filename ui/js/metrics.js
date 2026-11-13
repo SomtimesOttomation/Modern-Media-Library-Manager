@@ -94,5 +94,5 @@ export function openMetrics(onDone) {
       h('div', { class: 'met-foot' },
         h('button', { class: 'btn', type: 'button', onclick: () => { pick = new Set(DEFAULT_METRICS); info = new Set(DEFAULT_INFO); paint(); } }, 'Reset to defaults'),
         h('button', { class: 'btn primary', type: 'button', onclick: save }, 'Done')));
-  });
+  }, 'met-host');
 }

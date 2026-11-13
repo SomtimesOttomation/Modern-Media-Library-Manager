@@ -625,7 +625,8 @@ body.dragging { cursor: ew-resize; user-select: none; }
 .cmp-metrics { margin-bottom: 4px; }
 .cmp-panel.info .bar i { background: var(--muted, #8b93a7); opacity: .55; }
 .cmp-panel.info .v { font-weight: 400; }
-.met { width: min(560px, 90vw); display: flex; flex-direction: column; gap: 12px; }
+.card.modal.met-host { width: min(660px, 94vw); }
+.met { width: 100%; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
 .met-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
 .met-head h2 { margin: 0; }
 .met-count { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -694,3 +695,4 @@ body.dragging { cursor: ew-resize; user-select: none; }
 .api-tbl td { vertical-align: top; } .api-tbl td:nth-child(3) { max-width: 300px; }
 .api-wrap { margin-top: 12px; overflow-x: auto; }
 .api-tbl { width: 100%; } .api-tbl th, .api-tbl td { text-align: left !important; } .api-tbl td:nth-child(2), .api-tbl td:nth-child(4) { white-space: nowrap; }
+.met-item small { text-align: right; white-space: nowrap; }

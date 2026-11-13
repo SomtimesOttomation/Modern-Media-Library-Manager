@@ -50,6 +50,10 @@ Check ((Cmd 58 'settings.set' @{ key = 'cmpMetrics'; value = @('ww', 'rtc', 'vbr
 Check ((Cmd 59 'settings.set' @{ key = 'cmpFun'; value = $true }) -match '"cmpFun":true') 'Compare: Fun mode saves'
 Check ((Cmd 60 'settings.set' @{ key = 'miPath'; value = 'C:\Tools\notepad.exe' }) -match '"ok":false') 'MediaInfo location: only a MediaInfo program is accepted'
 Check ((Cmd 61 'settings.set' @{ key = 'miFrom'; value = '/data/movies' }) -match '"miFrom":"/data/movies"') 'MediaInfo: the server path saves'
+Check ((Cmd 68 'settings.set' @{ key = 'vsColors'; value = @('#ffffff', '#2266ff', '#000000') }) -match '"vsColors":\["#ffffff","#2266ff","#000000"\]') 'Versus: VS colours save'
+Check ((Cmd 69 'settings.set' @{ key = 'vsColors'; value = @('red', '#2266ff', '#000000') }) -match '"ok":false') 'Versus: a colour that is not a hex code is refused'
+Check ((Cmd 70 'settings.set' @{ key = 'fxTune'; value = '{"vs":[1,80,40],"skulls":[0,50,50]}' }) -match 'fxTune') 'Versus: effect sizes and intensities save'
+Check ((Cmd 71 'settings.set' @{ key = 'fxTune'; value = '<script>' }) -match '"ok":false') 'Versus: anything else in the effects setting is refused'
 $sw0 = [Diagnostics.Stopwatch]::StartNew()
 $st0 = Cmd 62 'mediainfo.status' @{ path = '' }
 Check ($st0 -match '"ok":true' -and $st0 -match '\\"found\\":false|"found":false' -and $sw0.ElapsedMilliseconds -lt 3000) "MediaInfo status answers quickly ($($sw0.ElapsedMilliseconds) ms)"

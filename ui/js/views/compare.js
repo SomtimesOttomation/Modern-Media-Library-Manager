@@ -13,6 +13,7 @@ import { openCard } from './card.js';
 import { fetchDialog } from './tools.js';
 import { BASE_YEAR } from '../inflation.js';
 import { chosen, val, GROUPS, infl, openMetrics, needsMediaInfo, MAX_SCORED } from '../metrics.js';
+import { tune, mult, vsColors } from '../fxtune.js';
 
 const CAP = 10;
 // what is being compared; kept for the session so a tab switch comes back to the same match-up
@@ -161,7 +162,7 @@ function flames(el, on) {
     else if (r < 0.7) { const left = Math.random() < 0.5; out = left ? -1 : 1; x = ox + (left ? -2 : w + 2) + (Math.random() - 0.5) * 5; y = oy + Math.pow(Math.random(), 0.6) * hgt; }
     else { x = ox + Math.random() * w; y = oy + 1; }
     const life = (calm ? 1.25 : 0.85) + Math.random() * 0.6;
-    parts.push({ x, y, vx: (Math.random() - 0.5) * 10 + out * (6 + Math.random() * 10), vy: -(calm ? 28 : 46) - Math.random() * (calm ? 26 : 44), size: 5 + Math.random() * 8, age: 0, life, wob: Math.random() * 6.28 });
+    parts.push({ x, y, vx: (Math.random() - 0.5) * 10 + out * (6 + Math.random() * 10), vy: -(calm ? 28 : 46) - Math.random() * (calm ? 26 : 44), size: (5 + Math.random() * 8) * mult(tune().poster.size), age: 0, life, wob: Math.random() * 6.28 });
   };
   const frame = (t) => {
     raf = requestAnimationFrame(frame);
@@ -172,7 +173,8 @@ function flames(el, on) {
     const calm = !!el.closest('.motion-calm');
     const dt = Math.min(0.05, (t - last) / 1000); last = t;
     const perim = 2 * (w + hgt);
-    acc += dt * perim * (calm ? 0.45 : 1.0);           // embers per second grow with the poster's size
+    const pt = tune().poster;
+    acc += dt * perim * (calm ? 0.45 : 1.0) * mult(pt.int);   // embers per second grow with the poster's size and the Posters intensity
     while (acc >= 1 && parts.length < 1600) { spawn(calm); acc--; }
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, W, H);
@@ -201,13 +203,31 @@ function flames(el, on) {
 function posterBox(r, side, label, small) {
   const box = h('div', { class: `cmp-poster${small ? ' small' : ''}`, 'data-side': side, title: label || '' },
     r?.Poster ? h('img', { src: r.Poster, alt: '' }) : h('div', { class: 'cmp-ph' }, label || '?'));
-  if (fun()) applyFx(box, r?.Poster, S.state.settings[side === 'l' ? 'fxLeft' : 'fxRight'] || 'auto', side);
+  if (fun()) {
+    const t = tune().poster;
+    box.style.setProperty('--gk', t.on ? mult(t.int).toFixed(2) : '0');
+    applyFx(box, r?.Poster, t.on ? (S.state.settings[side === 'l' ? 'fxLeft' : 'fxRight'] || 'auto') : 'off', side);
+  }
   return box;
 }
 function vsMark() {
   if (!fun()) return h('div', { class: 'cmp-exec', 'aria-hidden': 'true' }, 'Comparison');   // the plain look; Fun mode has the VS
   const st = S.state.settings.vsStyle || 'arcade';
-  return st === 'off' ? null : h('div', { class: `cmp-vs ${st}`, 'aria-hidden': 'true' }, 'VS');
+  if (st === 'off') return null;
+  if (st !== 'arcade') return h('div', { class: `cmp-vs ${st}`, 'aria-hidden': 'true' }, 'VS');
+  // the fiery VS: its colours (Settings > Versus), size and glow, and embers rising off it
+  const t = tune(), [c1, c2, c3] = vsColors();
+  const vs = h('div', { class: `cmp-vs arcade${t.vs.on ? ' vs-fire' : ''}`, 'aria-hidden': 'true',
+    style: { '--vs1': c1, '--vs2': c2, '--vs3': c3, '--vs-scale': (0.7 + 0.6 * t.vs.size / 100).toFixed(2), '--vk': t.vs.on ? mult(t.vs.int).toFixed(2) : '0' } }, 'VS');
+  const wrap = h('div', { class: 'vs-wrap' }, vs);
+  if (t.embers.on && t.vs.on) {
+    const n = Math.round(4 + 14 * t.embers.int / 100), ek = mult(t.embers.size);
+    for (let i = 0; i < n; i++) {
+      const col = [c1, c2, c3][i % 3];
+      wrap.append(h('span', { class: 'vs-ember', style: { left: `${18 + ((i * 37) % 64)}%`, background: col, boxShadow: `0 0 6px ${col}`, '--d': `${(1.2 + ((i * 7) % 10) / 10).toFixed(1)}s`, '--delay': `${((i * 0.37) % 1.6).toFixed(2)}s`, '--dx': `${((i % 5) - 2) * 6}px`, '--ek': ek.toFixed(2), width: `${Math.round(5 * ek)}px`, height: `${Math.round(8 * ek)}px` } }));
+    }
+  }
+  return wrap;
 }
 function statPanel(title, defs, a, b, info) {
   let lw = 0, rw = 0;
@@ -330,6 +350,7 @@ export function render(el, redraw, toast) {
     root.append(h('div', { class: 'cmp-stage' }, sideBox(a, 'l'),
       h('div', { class: 'cmp-mid' }, metricsBtn(redraw), vsMark(), tallyOn ? h('small', { class: 'lbl' }, fun() ? 'Rounds won' : 'Metrics led') : null, tallyOn ? h('div', { class: 'cmp-score' }, h('b', { class: 'l' }, String(l)), h('span', null, '–'), h('b', { class: 'r' }, String(r))) : null),
       sideBox(b, 'r')));
+    if (fun() && tallyOn) { const sb = skullBar(l, r, Math.min(MAX_SCORED, chosen().scored.length)); if (sb) root.append(sb); }
     root.append(h('div', { class: 'cmp-panels' }, ...P.out));
     for (const x of [fetchHint([a, b]), brightnessNote([a, b])]) if (x) root.append(x);
     if (tallyOn) root.append(banner(l, r, a.Title, b.Title, P.how));
@@ -373,6 +394,7 @@ export function render(el, redraw, toast) {
   root.append(h('div', { class: 'cmp-stage coll' }, head(ca, ga, 'l'),
     h('div', { class: 'cmp-mid' }, metricsBtn(redraw), vsMark(), tallyOn ? h('small', { class: 'lbl' }, fun() ? 'Rounds won' : 'Rounds led') : null, tallyOn ? h('div', { class: 'cmp-score' }, h('b', { class: 'l' }, String(tl)), h('span', null, '–'), h('b', { class: 'r' }, String(tr))) : null),
     head(cb, gb, 'r')));
+  if (fun() && tallyOn) { const sb = skullBar(tl, tr, n); if (sb) root.append(sb); }
   root.append(h('div', { class: 'cmp-panels' }, ...panels(ga, gb, true).out));
   const fh = fetchHint([...ma.slice(0, CAP), ...mb.slice(0, CAP)]); if (fh) root.append(fh);
   root.append(h('section', { class: 'cmp-panel card cmp-tour' },
@@ -392,6 +414,38 @@ function fetchHint(list) {
   return h('div', { class: 'cmp-hint' },
     h('span', null, `${missing.length === 1 ? (list.length === 2 ? 'One title has' : '1 title here has') : missing.length === list.length && list.length === 2 ? 'Both titles have' : `${missing.length} titles here have`} no box office or Metacritic yet. Plex does not have them; Fetch info looks them up (TMDB and OMDb, with your keys).`),
     h('button', { class: 'btn', type: 'button', disabled: S.state.halted || S.state.tool?.running ? true : null, onclick: () => fetchDialog('movies', rids) }, `Fetch info for ${rids.length === 1 ? 'this title' : `these ${rids.length}`}`));
+}
+
+// The skull bar (Fun mode): each metric (or round) a side wins adds a skull on its side of the middle; skulls further
+// out are bigger and glow harder, and the bar glows more as the lead grows. Stops: the scored metrics (8 at most),
+// or the rounds of a tournament.
+const SKULL = '<svg viewBox="0 0 32 32" aria-hidden="true"><path fill="currentColor" d="M16 3C9 3 4 8 4 14.5c0 4 2 6.8 4.5 8.2V27a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-4.3C26 21.3 28 18.5 28 14.5 28 8 23 3 16 3z"/><circle cx="11" cy="15" r="3.4" fill="#120d10"/><circle cx="21" cy="15" r="3.4" fill="#120d10"/><path d="M14.5 20.5 16 18l1.5 2.5z" fill="#120d10"/><path d="M12 25v3M16 25v3M20 25v3" stroke="#120d10" stroke-width="1.6"/></svg>';
+function skullBar(l, r, stops) {
+  const t = tune();
+  if (!t.skulls.on && !t.bar.on) return null;
+  stops = Math.max(stops, l, r, 1);
+  const span = 46;                                     // % from the middle to the last stop
+  const at = (side, i) => 50 + side * (i / stops) * span;
+  const skScale = mult(t.skulls.size), skInt = mult(t.skulls.int), barScale = mult(t.bar.size), barInt = mult(t.bar.int);
+  const bar = h('div', { class: 'sk-bar', style: { '--sk-scale': skScale.toFixed(2), '--bar-scale': barScale.toFixed(2) } },
+    h('div', { class: 'sk-track' }), h('div', { class: 'sk-mid' }));
+  const lead = l - r, tone = lead > 0 ? 'var(--cl, #ff9a3c)' : 'var(--cr, #6fb7ff)';
+  if (t.bar.on && lead !== 0) {
+    const w = Math.abs(lead) / stops * span;
+    bar.append(h('div', { class: 'sk-fill', style: { left: `${lead > 0 ? 50 - w : 50}%`, width: `${w}%`, '--tone': tone, '--glow': (4 + 26 * Math.abs(lead) / stops * barInt).toFixed(1) } }));
+  }
+  if (t.skulls.on) {
+    for (const [side, n, tn] of [[-1, l, 'var(--cl, #ff9a3c)'], [1, r, 'var(--cr, #6fb7ff)']]) {
+      for (let i = 1; i <= n; i++) {
+        const k = i / stops;                               // 0..1: how far out this skull sits
+        const sk = h('div', { class: 'sk', style: { left: `${at(side, i)}%`, '--tone': tn, '--px': Math.round((22 + 26 * k) * skScale), '--glow': (2 + 22 * k * skInt).toFixed(1), '--delay': `${(i * 0.15).toFixed(2)}s`, opacity: (0.6 + 0.4 * k).toFixed(2) } });
+        sk.innerHTML = SKULL;
+        bar.append(sk);
+      }
+    }
+  }
+  return h('div', { class: 'sk-wrap', role: 'img', 'aria-label': `Skull bar: ${l} to ${r} out of ${stops}` }, bar,
+    h('div', { class: 'sk-legend' }, h('span', null, `${l} won`), h('span', null, `${stops} stops`), h('span', null, `${r} won`)));
 }
 
 function banner(l, r, a, b, how) {

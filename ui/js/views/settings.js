@@ -9,6 +9,7 @@ import { openUpdate } from './update.js';
 import { openTraffic } from './traffic.js';
 import { chosen, openMetrics, MAX_SCORED } from '../metrics.js';
 import { BASE_YEAR } from '../inflation.js';
+import { ELEMENTS, tune, saveTune, resetTune, vsColors, VS_DEFAULT, startTabGlow, stopTabGlow, tabGlowLeft } from '../fxtune.js';
 
 // In-page overlay (no alert/confirm/prompt): Escape or a click outside closes it.
 function overlay(content, extraClass = '', onClose = null) {
@@ -257,12 +258,12 @@ function compareTab(repaint) {
       field('miTo', 'Same folder on this PC', '\\\\NAS\\movies')),
     h('p', null, h('small', null, 'Plex on another computer? Give the start of its movie paths and where this PC finds the same folder, so MediaInfo can open the files.')),
     hr(),
-    h('p', null, h('label', { class: 'fun-chk' }, h('input', { type: 'checkbox', checked: s.cmpFun ? true : null, onchange: (e) => set('cmpFun', e.target.checked) }), h('b', null, ' Fun mode')),
-      h('small', null, ' Poster borders, animation and the VS. Their settings are in the Fun tab, which appears while this is on.')),
+    h('p', null, h('label', { class: 'fun-chk' }, h('input', { type: 'checkbox', checked: s.cmpFun ? true : null, onchange: (e) => { if (e.target.checked) startTabGlow(); else stopTabGlow(); set('cmpFun', e.target.checked); } }), h('b', null, ' Fun mode')),
+      h('small', null, ' Compare becomes Versus: the fiery VS, glowing posters and the skull bar. Their settings are in the Versus tab, which appears while this is on.')),
   ];
 }
 
-// Fun: the Compare page's poster borders, animation and VS
+// Versus (Fun mode): the Compare page's poster borders, animation, the VS and its colours, and every effect's size and intensity
 const FX = [['auto', 'Auto'], ['fire', 'Fire'], ['lightning', 'Lightning'], ['specter', 'Specter'], ['poster', 'Poster colours'], ['off', 'Off']];
 function funTab(repaint) {
   const s = S.state.settings;
@@ -278,9 +279,35 @@ function funTab(repaint) {
     h('p', null, h('b', null, 'Animation '), segBtns('fxMotion', [['still', 'Still'], ['calm', 'Calm'], ['full', 'Full']], 'full')),
     h('p', null, h('small', null, 'Still is used anyway when Windows is set to reduce animations.')),
     h('p', null, h('b', null, 'VS '), segBtns('vsStyle', [['arcade', 'Arcade'], ['plain', 'Plain'], ['off', 'Off']], 'arcade')),
+    h('p', null, h('b', null, 'VS colours '), h('small', null, 'Top, middle and base of the burning VS: pick a colour or type its hex code.')),
+    h('div', { class: 'vs-cols' }, vsColors().map((c, i) => {
+      const save = (v) => { if (!/^#[0-9a-f]{6}$/i.test(v)) return; const cols = vsColors().slice(); cols[i] = v.toLowerCase(); S.saveSettings({ vsColors: cols }).then(repaint); };
+      const name = ['Top', 'Middle', 'Base'][i];
+      return h('label', { class: 'vs-col' }, h('input', { type: 'color', value: c, 'aria-label': `${name} colour`, onchange: (e) => save(e.target.value) }),
+        h('input', { type: 'text', value: c, maxlength: '7', spellcheck: 'false', 'aria-label': `${name} colour hex code`, onchange: (e) => { const v = e.target.value.trim(); save(v.startsWith('#') ? v : '#' + v); } }), h('small', null, name));
+    }), h('button', { class: 'btn', type: 'button', onclick: () => S.saveSettings({ vsColors: VS_DEFAULT.slice() }).then(repaint) }, 'Fire colours')),
+    hr(),
+    h('p', null, h('b', null, 'Effects '), h('small', null, 'Size is how big or far it reaches; intensity is how bright and busy it is. 50 is the normal look.')),
+    tuneTable(repaint),
+    h('p', null, h('button', { class: 'btn', type: 'button', onclick: () => resetTune().then(repaint) }, 'Reset effects to defaults'),
+      h('small', null, ' Puts every effect, and the VS colours, back to how they started.')),
   ];
 }
 
+function tuneTable(repaint) {
+  const t = tune();
+  const slider = (k, f, label) => h('div', { class: 'sl' },
+    h('input', { type: 'range', min: '0', max: '100', step: '5', value: String(t[k][f]), disabled: t[k].on ? null : true, 'aria-label': `${label} ${f === 'size' ? 'size' : 'intensity'}`,
+      oninput: (e) => { e.target.nextSibling.textContent = e.target.value; }, onchange: (e) => saveTune(k, f, +e.target.value).then(repaint) }),
+    h('small', null, String(t[k][f])));
+  return h('div', { class: 'fx-tune' }, h('span', { class: 'hd' }, 'Element'), h('span', { class: 'hd' }, 'On'), h('span', { class: 'hd' }, 'Size'), h('span', { class: 'hd' }, 'Intensity'),
+    ...ELEMENTS.flatMap(([k, label, tip]) => [
+      h('span', { title: tip }, label),
+      h('input', { type: 'checkbox', checked: t[k].on ? true : null, 'aria-label': `${label} on`, onchange: (e) => saveTune(k, 'on', e.target.checked).then(repaint) }),
+      slider(k, 'size', label), slider(k, 'int', label)]));
+}
+
+let glowTimer = 0;
 export function openSettings(tab, onClose) {
   if (tab) settingsTab = tab;
   overlay((close) => {
@@ -289,9 +316,12 @@ export function openSettings(tab, onClose) {
     const paint = () => {
       if (settingsTab === 'fun' && !S.state.settings.cmpFun) settingsTab = 'compare';
       const list = [['general', 'General'], ['plex', 'Servers'], ['data', 'Data'], ['artwork', 'Artwork'], ['compare', 'Compare'], ['doctor', 'PlexDoctor']];
-      if (S.state.settings.cmpFun) list.push(['fun', 'Fun']);
+      if (S.state.settings.cmpFun) list.push(['fun', 'Versus']);
+      if (settingsTab === 'fun') stopTabGlow();                  // seen: the Versus tab goes back to white
+      const hot = tabGlowLeft();
+      clearTimeout(glowTimer); if (hot > 0) glowTimer = setTimeout(() => { if (tabs.isConnected) paint(); }, hot + 50);
       tabs.replaceChildren(...list.map(([k, label]) => h('button', {
-        type: 'button', role: 'tab', 'aria-selected': settingsTab === k ? 'true' : 'false', class: settingsTab === k ? 'active' : '',
+        type: 'button', role: 'tab', 'aria-selected': settingsTab === k ? 'true' : 'false', class: `${settingsTab === k ? 'active' : ''}${k === 'fun' && hot > 0 ? ' tab-hot' : ''}`,
         onclick: () => { settingsTab = k; try { localStorage.setItem(TAB_KEY, k); } catch (e) { /* ignore */ } paint(); } }, label)));
       body.replaceChildren(...(settingsTab === 'plex' ? plexTab(paint) : settingsTab === 'data' ? dataTab() : settingsTab === 'artwork' ? artworkTab(paint) : settingsTab === 'doctor' ? doctorTab(paint) : settingsTab === 'fun' ? funTab(paint) : settingsTab === 'compare' ? compareTab(paint) : generalTab(close, paint)));
     };

@@ -18,7 +18,7 @@ export const state = {
   settings: { theme: 'system', updateCheck: false, moviesView: 'posters', tvView: 'posters', moviesSort: 'added', tvSort: 'title', moviesSortRev: false, tvSortRev: false,
     columns: [], hideDupes: false, posterScale: 100, tvScale: 100, clearScale: 100, bannerScale: 100, doctorFreq: 'off', doctorAck: false, doctorDay: 0, doctorTime: '03:00', doctorStyle: 'compact', doctorChecks: ['unreadable', 'unmatched', 'wrongmatch', 'gaps', 'poster', 'dupes', 'av1'], widthPreset: 'full', customWidth: false, contentWidth: 0, artLogo: false, artBackground: false, artBanner: false, cmpInflation: false,
     fxLeft: 'auto', fxRight: 'auto', fxMotion: 'full', vsStyle: 'arcade', cmpTally: true, cmpWalkover: true, cmpImdb: true,
-    cmpFun: false, cmpMetrics: null, cmpInfo: null, miPath: '', miFrom: '', miTo: '' },
+    cmpFun: false, cmpMetrics: null, cmpInfo: null, miPath: '', miFrom: '', miTo: '', fxTune: '', vsColors: null },
   plex: { url: '', hasToken: false },
   counts: { movies: { count: 0, when: '' }, tv: { count: 0, when: '' } },
   libs: { movies: lib(), tv: lib() },

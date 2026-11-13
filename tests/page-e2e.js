@@ -92,9 +92,16 @@ async function run() {
   await page.click('#btn-settings'); await page.click('.settings-tabs button:has-text("Compare")'); await page.waitForTimeout(400);
   check(!(await page.isVisible('.settings-tabs button:has-text("Fun")')), 'Settings: no Fun tab until Fun mode is on');
   await page.click('.fun-chk input'); await page.waitForTimeout(400);
-  check(await page.isVisible('.settings-tabs button:has-text("Fun")'), 'Settings: Fun mode adds the Fun tab');
+  check(await page.isVisible('.settings-tabs button.tab-hot:has-text("Versus")'), 'Settings: Fun mode adds the Versus tab, glowing while it is new');
+  await page.click('.settings-tabs button:has-text("Versus")'); await page.waitForTimeout(300);
+  check(!(await page.$('.settings-tabs button.tab-hot')) && await page.isVisible('.fx-tune'), 'Versus: opening it stops the glow; the effects table is there');
+  await page.$eval('input[aria-label="Skulls size"]', (e) => { e.value = '100'; e.dispatchEvent(new Event('change', { bubbles: true })); }); await page.waitForTimeout(300);
+  check((await page.$eval('input[aria-label="Skulls size"]', (e) => e.value)) === '100', 'Versus: an effect size saves');
+  await page.click('button:has-text("Reset effects to defaults")'); await page.waitForTimeout(300);
+  check((await page.$eval('input[aria-label="Skulls size"]', (e) => e.value)) === '50', 'Versus: Reset effects puts it back');
   await page.keyboard.press('Escape'); await page.waitForTimeout(1200);
   check((await page.$$('.cmp-poster[data-fx]')).length === 2 && await page.isVisible('.cmp-vs'), 'Compare in Fun mode: themed borders and the VS');
+  check(await page.isVisible('.cmp-vs.vs-fire') && await page.isVisible('.sk-bar'), 'Compare in Fun mode: the burning VS and the skull bar');
   await page.click('.cmp-tools button:has-text("Collection vs")'); await page.waitForTimeout(500);
   check(await page.isVisible('.cmp-tour') || await page.isVisible('.cmp .state'), 'Collection vs collection opens (tournament, or a note when there are not two collections)');
   await page.click('.lib-tools .seg button:has-text("Posters")'); await page.waitForTimeout(500);

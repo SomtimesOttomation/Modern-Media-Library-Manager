@@ -140,6 +140,8 @@ function Set-PageSetting {
         'cmpImdb'     { $Value = [bool]$Value; $true }
         'cmpInflation' { $Value = [bool]$Value; $true }
         'cmpFun'      { $Value = [bool]$Value; $true }
+        'fxTune'      { $Value = [string]$Value; $Value -eq '' -or ($Value.Length -le 1500 -and $Value -match '^\{[\[\]\{\}",:a-z0-9 ]*\}$') }
+        'vsColors'    { $Value = @(@($Value) | ForEach-Object { [string]$_ }); $Value.Count -eq 3 -and @($Value | Where-Object { $_ -notmatch '^#[0-9a-fA-F]{6}$' }).Count -eq 0 }
         { $_ -in @('cmpMetrics', 'cmpInfo') } { $Value = @(@($Value) | ForEach-Object { [string]$_ } | Where-Object { $_ -match '^[a-z]{1,12}$' } | Select-Object -Unique -First 16); $true }
         'miPath'      { $Value = ([string]$Value).Trim(); $Value.Length -le 400 -and ($Value -eq '' -or $Value -match '(?i)mediainfo[^\\/]*$') }
         { $_ -in @('miFrom', 'miTo') } { $Value = ([string]$Value).Trim(); $Value.Length -le 400 }

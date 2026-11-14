@@ -8,7 +8,8 @@ import { tune, mult } from './fxtune.js';
 export const PAL = {
   fire: ['#fff6cf', '#ffc04a', '#ff5a1f', '#7a1200'],
   water: ['#e9fbff', '#86d6ff', '#2a86ff', '#0a2a66'],
-  specter: ['#ecfff3', '#86ffb8', '#22d071', '#0a4a2a'],
+  specter: ['#eaffd9', '#7dff4a', '#2bd61a', '#0b4d12'],
+  blood: ['#ffd6d6', '#ff3b4a', '#b0001a', '#3a0006'],
   lightning: ['#ffffff', '#d4e6ff', '#7aa8ff', '#2a3a8a'],
   nature: ['#fff8d0', '#cfdc6e', '#7f952c', '#3a3a10'],
 };
@@ -250,6 +251,8 @@ export function skullBar(l, r, stops, opts = {}) {
         }
         if (room && Math.random() < n * 0.3) parts.push({ k: 'b', x: rnd(), y, vx: 0, vy: -(0.3 + Math.random() * 0.5) * bS, life: 1, decay: 0.012, r: (1 + Math.random() * 2) * bS, P, wob: Math.random() * 6 });
       }
+      if (th2 === 'blood' && room && Math.random() < n * 0.9) parts.push({ k: 'd', x: rnd(), y: y + th * 0.4, vx: 0, vy: 0.05, life: 1, decay: 0.006, r: (1.4 + Math.random() * 1.6) * bS, P, wob: 0, hang: 0.4 + Math.random() * 0.8 });
+      if (th2 === 'specter' && room) for (let i = 0; i < n * 1.2; i++) parts.push({ k: 'f', x: rnd(), y: y - th * 0.3, vx: (Math.random() - 0.5) * 0.4, vy: -(0.7 + Math.random() * 1.3) * bS, life: 1, decay: 0.03 + Math.random() * 0.04, r: (3 + Math.random() * 3.5) * bS, P, wob: Math.random() * 6 });
       if (th2 === 'specter' && room) for (let i = 0; i < n * 0.8; i++) parts.push({ k: 's', x: rnd(), y, vx: (Math.random() - 0.5) * 0.5, vy: -(0.25 + Math.random() * 0.5) * bS, life: 1, decay: 0.01 + Math.random() * 0.012, r: (4 + Math.random() * 6) * bS, P, wob: Math.random() * 6 });
       if (th2 === 'nature') {
         gb.globalCompositeOperation = 'source-over'; gb.globalAlpha = 1; gb.beginPath();
@@ -292,6 +295,12 @@ export function skullBar(l, r, stops, opts = {}) {
       if (p.k === 'f') { p.vy -= 0.02 * dt * 60; p.x += Math.sin(p.wob) * 0.2; const c = L > 0.85 ? P[0] : L > 0.6 ? P[1] : L > 0.3 ? P[2] : P[3]; glow(g, p.x, p.y, p.r * (0.3 + L * 0.8), c, L * L * 0.55 * a); }
       else if (p.k === 's') { p.x += Math.sin(p.wob) * 0.5; glow(g, p.x, p.y, p.r * (1.2 - L * 0.4), P[1], L * 0.3 * a); }
       else if (p.k === 'b') { p.x += Math.sin(p.wob) * 0.3; g.globalAlpha = L * 0.7; g.strokeStyle = P[0]; g.lineWidth = 1; g.beginPath(); g.arc(p.x, p.y, p.r, 0, 6.3); g.stroke(); }
+      else if (p.k === 'd') {
+        p.hang -= dt; if (p.hang < 0) p.vy += 0.09 * dt * 60;
+        g.globalCompositeOperation = 'source-over'; g.globalAlpha = Math.min(1, L * 1.4); g.fillStyle = P[2];
+        const len = Math.max(p.r, Math.min(14 * bS, p.vy * 4)); g.beginPath(); g.ellipse(p.x, p.y, p.r * 0.8, len, 0, 0, 6.3); g.fill();
+        g.globalCompositeOperation = 'lighter';
+      }
       else if (p.k === 'z') glow(g, p.x, p.y, p.r * 3, P[0], L * 0.9);
       else if (p.k === 'l') {
         g.globalCompositeOperation = 'source-over'; p.rot += 0.05; g.save(); g.translate(p.x + Math.sin(p.wob) * 4, p.y); g.rotate(p.rot);

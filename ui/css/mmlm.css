@@ -723,3 +723,7 @@ body.dragging { cursor: ew-resize; user-select: none; }
 .sk-set select, .sk-set input[type=range] { width: 100%; }
 .sk-set label:first-child select { grid-column: 1 / -1; }
 .sk-val { min-width: 7.5em; text-align: right; color: var(--muted); }
+/* Settings > Versus > Souls of the Damned */
+.dm-sub { margin: 4px 0 8px; }
+.dm-sub > summary { cursor: pointer; padding: 4px 0; }
+.dm-sub[open] > summary { margin-bottom: 8px; }

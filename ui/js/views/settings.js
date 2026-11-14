@@ -297,6 +297,7 @@ function compareTab(repaint) {
 
 // Versus (Fun mode): the Compare page's poster borders, animation, the VS and its colours, and every effect's size and intensity
 const FX = [['auto', 'Auto'], ['fire', 'Fire'], ['water', 'Water'], ['specter', 'Souls of the Damned'], ['blood', 'Blood'], ['lightning', 'Lightning'], ['nature', 'Nature'], ['poster', 'Poster colours'], ['off', 'Off']];
+let dmOpen = null;   // Souls of the Damned section: stays as the viewer left it while settings repaint
 function funTab(repaint) {
   const s = S.state.settings;
   const set = (k, v) => S.saveSettings({ [k]: v }).then(repaint);
@@ -332,6 +333,15 @@ function funTab(repaint) {
         SKULL_STYLES.map(([k, t]) => h('option', { value: k, selected: (s.skStyle || 'bone') === k ? true : null }, t)))),
       rangeRow('Tattoo', 'skTattoo', 0, 10, 1, 0, (v) => TATTOOS[v]?.[0] || 'None'),
       rangeRow('Effect radius', 'fxRadius', 0, 100, 5, 50, (v) => String(v), 'How far flames, sparks and wisps spread from the bars and skulls')),
+    hr(),
+    h('details', { class: 'dm-sub', open: (dmOpen ?? (s.fxLeft === 'specter' || s.fxRight === 'specter')) ? true : null, ontoggle: (e) => { dmOpen = e.target.open; } },
+      h('summary', null, h('b', null, 'Souls of the Damned'), h('small', null, ' the green theme: skulls, hands and ooze')),
+      h('div', { class: 'sk-set' },
+        rangeRow('Skulls', 'dmSkulls', 12, 128, 1, 24, (v) => String(v), 'How many tiny heads snake round the border'),
+        rangeRow('Hands', 'dmHands', 0, 48, 1, 8, (v) => String(v), 'How many hands can claw out at once (0 for none)'),
+        rangeRow('Clawing', 'dmClaw', 0, 50, 1, 28, (v) => (v / 10).toFixed(1) + ' a second', 'How fast the clawing hands rake; 0 and they only grab'),
+        rangeRow('Size variety', 'dmVariety', 0, 60, 1, 0, (v) => v + '%', 'Each skull and hand gets its own size, up to this much smaller or bigger'),
+        rangeRow('Drips', 'dmDrips', 0, 100, 5, 0, (v) => '+' + Math.round(v * 0.3) + '%', 'Up to 30% more, thicker, brighter and faster drips'))),
     hr(),
     h('p', null, h('b', null, 'Effects '), h('small', null, 'Size is how big or far it reaches; intensity is how bright and busy it is. 50 is the normal look.')),
     tuneTable(repaint),

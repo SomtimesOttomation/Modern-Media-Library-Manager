@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.21.0
+
+**Feature**
+- New Blood poster theme: thick red drips run off the frame and now and then a red wave snakes round the border; on the skull bar, blood drips off the bar.
+- Spectral is redone as Souls of the Damned: bright green fel fire licks up the frame, wailing ghosts rise off it and a ghoul's face flares in the flames now and then; the skull bar burns green.
+
 ## 0.20.0
 
 **Feature**

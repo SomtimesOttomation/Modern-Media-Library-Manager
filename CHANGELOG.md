@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.22.0
+
+**Feature**
+- Souls of the Damned is redone: a swarm of tiny screaming skulls snakes round the poster's border, hands claw out from behind its edges and green ooze drips down the sides, all in the fel fire. The old ghosts are gone.
+- New Settings > Versus > Souls of the Damned section: Skulls (12 to 128), Hands (0 to 48), Clawing speed, Size variety (up to 60%) and Drips (up to 30% more).
+- On this theme the poster Intensity slider now widens the border up to 2.5 times.
+
 ## 0.21.0
 
 **Feature**

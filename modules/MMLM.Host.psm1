@@ -1088,6 +1088,32 @@ function Read-HostCollections {
     if (-not (Test-Path -LiteralPath $p)) { return @() }
     try { return @(([IO.File]::ReadAllText($p, [Text.Encoding]::UTF8) | ConvertFrom-Json).Collections) } catch { Write-HostLog 'collections read' $_; return @() }
 }
+# ---- box office typed or pasted in by hand (movie card > Box office runs) ----
+# One JSON file beside the library: { "<Rid>": { opening, weekends: [...], weeks: [...], countries: [...], updated } }.
+# Nothing here is fetched from anywhere; it is only what the person pasted or typed.
+function Get-HostBoxOfficeFile { Join-Path (Split-Path (Get-SnapshotFile 'movies')) 'boxoffice-movies.json' }
+function Get-HostBoxOffice {
+    $f = Get-HostBoxOfficeFile
+    if (-not (Test-Path -LiteralPath $f)) { return '{}' }
+    try { $t = [IO.File]::ReadAllText($f); if ($t.Trim()) { [void]($t | ConvertFrom-Json); return $t } } catch { Write-HostLog 'boxoffice' $_ }
+    '{}'
+}
+function Save-HostBoxOffice {
+    param([string]$Rid, $Data)
+    if (-not $Rid) { throw 'No title was given.' }
+    $all = @{}
+    $f = Get-HostBoxOfficeFile
+    if (Test-Path -LiteralPath $f) { try { foreach ($pr in ([IO.File]::ReadAllText($f) | ConvertFrom-Json).PSObject.Properties) { $all[$pr.Name] = $pr.Value } } catch { Write-HostLog 'boxoffice' $_ } }
+    if ($null -eq $Data) { [void]$all.Remove($Rid) } else { $all[$Rid] = $Data }
+    $dir = Split-Path $f
+    if (-not (Test-Path -LiteralPath $dir)) { [void](New-Item -ItemType Directory -Path $dir -Force) }
+    $json = ConvertTo-Json -InputObject $all -Depth 8 -Compress
+    $tmp = $f + '.tmp'
+    [IO.File]::WriteAllText($tmp, $json, (New-Object Text.UTF8Encoding($false)))
+    [IO.File]::Copy($tmp, $f, $true); Remove-Item -LiteralPath $tmp -Force
+    $json
+}
+
 function Get-PageCollections {
     $out = @()
     foreach ($c in (Read-HostCollections)) {
@@ -1382,6 +1408,8 @@ $script:Commands = [ordered]@{
             $o = [ordered]@{}
             foreach ($t in 'movies', 'tv') { $f = Join-Path $script:CacheDir ('scan-timing-' + $t + '.txt'); $o[$t] = $(if (Test-Path -LiteralPath $f) { [IO.File]::ReadAllText($f) } else { '' }) }
             ConvertTo-Json -InputObject $o -Compress } }
+    'boxoffice.get'  = @{ Fetch = $false; Run = { param($a) Get-HostBoxOffice } }
+    'boxoffice.save' = @{ Fetch = $false; Run = { param($a) Save-HostBoxOffice ([string]$a.rid) $a.data } }
     'collections.get' = @{ Fetch = $false; Run = { param($a) ConvertTo-Json -InputObject (Get-PageCollections) -Depth 6 -Compress } }
     'collections.save' = @{ Fetch = $false; Run = { param($a) Save-PageCollections $a.collections; ConvertTo-Json -InputObject (Get-PageCollections) -Depth 6 -Compress } }
     'open.url'       = @{ Fetch = $false; Run = { param($a) Open-HostUrl ([string]$a.url); 'true' } }

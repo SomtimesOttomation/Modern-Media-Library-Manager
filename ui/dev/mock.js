@@ -21,6 +21,7 @@ const artOf = (hue) => svgUrl(`<svg xmlns="http://www.w3.org/2000/svg" width="12
 const logoOf = (title, hue) => svgUrl(`<svg xmlns="http://www.w3.org/2000/svg" width="800" height="310"><text x="0" y="200" textLength="780" lengthAdjust="spacingAndGlyphs" font-family="Impact, Arial Black, sans-serif" font-size="${Math.min(150, 1400 / Math.max(6, title.length))}" fill="hsl(${hue},80%,78%)" stroke="#000" stroke-width="5" paint-order="stroke" letter-spacing="3">${title.toUpperCase().replace(/&/g, '&amp;')}</text></svg>`);
 const bannerOf = (title, hue) => svgUrl(`<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="185"><defs><linearGradient id="b"><stop offset="0" stop-color="hsl(${hue},60%,35%)"/><stop offset="1" stop-color="hsl(${(hue + 60) % 360},55%,14%)"/></linearGradient></defs><rect width="1000" height="185" fill="url(#b)"/><text x="28" y="92" font-family="Georgia, serif" font-size="54" fill="#fff" font-style="italic">${title.replace(/&/g, '&amp;')}</text></svg>`);
 // what Plex would have for a title (decided by its name, so the other sample values stay the same)
+const boxOffice = {};
 function artwork(title, tv) {
   let x = 0; for (const c of title) x = (x * 31 + c.charCodeAt(0)) >>> 0;
   const hue = x % 360;
@@ -192,6 +193,8 @@ export async function request(cmd, args = {}) {
     case 'tools.cancel': case 'folder.show': return true;
     case 'dashboards.get': return dashData;
     case 'dashboards.save': dashData = args.data; return dashData;
+    case 'boxoffice.get': return boxOffice;
+    case 'boxoffice.save': if (args.data == null) delete boxOffice[args.rid]; else boxOffice[args.rid] = args.data; return boxOffice;
     case 'collections.get': return collections;
     case 'collections.save': collections = args.collections; return collections;
     case 'summary.get': return { title: 'Recently added', items: [], updatedAt: null };

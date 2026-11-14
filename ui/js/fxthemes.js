@@ -1,5 +1,6 @@
 // Versus poster themes drawn on a canvas around the poster (Fire has its own, in compare.js):
-//   water     rain across the poster, drops running down the frame, ripples at the base (blue)
+//   water     rain across the poster, rain on the glass over it (beads, and drops running down), drops down the frame,
+//             ripples at the base (blue)
 //   specter   "Souls of the Damned": green fel fire; a swarm of tiny screaming heads snakes round the border, hands claw out
 //             from behind it and green ooze drips down the sides (Settings > Versus > Souls of the Damned)
 //   blood     red blood dripping off the frame (thick and often); now and then a red wave snakes round the border
@@ -66,12 +67,48 @@ function jag(g, pts, amp) {
   g.stroke();
 }
 
+// rain on glass, over the poster: small beads build up, now and then a heavy drop runs down in a wobbly line,
+// sweeping up the beads in its way and leaving a trail of tiny ones; the glass mists slightly
+function glassDrop(g, x, y, r, a) {
+  if (r < 0.6) return;
+  const gr = g.createRadialGradient(x - r * 0.25, y - r * 0.35, r * 0.1, x, y, r);
+  gr.addColorStop(0, `rgba(255,255,255,${0.10 * a})`); gr.addColorStop(0.65, `rgba(200,225,255,${0.06 * a})`); gr.addColorStop(1, `rgba(10,25,45,${0.55 * a})`);
+  g.fillStyle = gr; g.beginPath(); g.ellipse(x, y, r, r * 1.08, 0, 0, 7); g.fill();
+  g.fillStyle = `rgba(255,255,255,${0.75 * a})`; g.beginPath(); g.ellipse(x + r * 0.25, y + r * 0.4, r * 0.32, r * 0.2, 0, 0, 7); g.fill();   // the bright spot light makes through a drop
+  g.fillStyle = `rgba(255,255,255,${0.5 * a})`; g.beginPath(); g.arc(x - r * 0.38, y - r * 0.45, r * 0.13, 0, 7); g.fill();
+}
+function rainOnGlass(S, g, o, dt, k) {
+  const { w, h, ox, oy, sz, calm } = o, maxBeads = Math.round(w * h / 260 * k);
+  g.save(); g.globalCompositeOperation = 'source-over';
+  g.beginPath(); if (g.roundRect) g.roundRect(ox, oy, w, h, 11); else g.rect(ox, oy, w, h); g.clip();
+  g.fillStyle = `rgba(190,215,240,${0.06 + 0.03 * Math.min(1, k)})`; g.fillRect(ox, oy, w, h);                 // a little mist
+  for (let n = dt * (calm ? 25 : 60) * k; n > 0; n--) if (Math.random() < n && S.beads.length < maxBeads)
+    S.beads.push({ x: ox + Math.random() * w, y: oy + Math.random() * h, r: (0.7 + Math.random() ** 2.2 * 3.2) * sz, a: 0 });
+  if (Math.random() < dt * (calm ? 0.35 : 0.9) * k)
+    S.runners.push({ x: ox + Math.random() * w, y: oy - 4, r: (2.6 + Math.random() * 2.2) * sz, v: 0, ph: Math.random() * 6, stop: 0, trail: 0 });
+  for (const b of S.beads) { b.a = Math.min(1, b.a + dt * 2); glassDrop(g, b.x, b.y, b.r, b.a); }
+  S.runners = S.runners.filter((d) => {
+    if (d.stop > 0) d.stop -= dt; else { d.v = Math.min((calm ? 45 : 90) * (d.r / 3), d.v + 160 * dt); d.y += d.v * dt; d.x += Math.sin(d.y * 0.08 + d.ph) * 0.35; if (Math.random() < dt * 0.8) d.stop = 0.1 + Math.random() * 0.35; }
+    d.trail += d.v * dt;
+    if (d.trail > 7 * sz) { d.trail = 0; if (Math.random() < 0.7) S.beads.push({ x: d.x + (Math.random() - 0.5) * 1.5, y: d.y - d.r * 1.4, r: d.r * (0.22 + Math.random() * 0.2), a: 1 }); d.r *= 0.985; }
+    for (let i = S.beads.length - 1; i >= 0; i--) {                                                       // sweep up beads in the way
+      const b = S.beads[i]; if (Math.abs(b.x - d.x) < d.r && Math.abs(b.y - d.y) < d.r * 1.2 && b.r < d.r) { d.r = Math.min(6 * sz, Math.hypot(d.r, b.r * 0.6)); S.beads.splice(i, 1); }
+    }
+    g.fillStyle = 'rgba(20,35,55,0.18)'; g.fillRect(d.x - d.r * 0.45, d.y - d.r * 6, d.r * 0.9, d.r * 6);   // the wet streak behind it
+    glassDrop(g, d.x, d.y, d.r, 1);
+    return d.y - d.r < oy + h && d.r > 1;
+  });
+  if (S.beads.length > maxBeads * 1.3) S.beads.splice(0, S.beads.length - Math.round(maxBeads * 1.3));
+  g.restore();
+}
+
 const THEMES = {
   water: {
     glow: true,
-    init: () => ({ rain: [], drips: [], rings: [] }),
+    init: () => ({ rain: [], drips: [], rings: [], beads: [], runners: [] }),
     step(S, g, o, dt, k) {
       const { w, h, ox, oy, W, H, sz, calm } = o;
+      rainOnGlass(S, g, o, dt, k);
       for (let n = dt * (calm ? 50 : 120) * k; n > 0; n--) { if (Math.random() < n) S.rain.push({ x: Math.random() * (W + 60) - 30, y: -20, v: (calm ? 320 : 560) + Math.random() * 200, l: (10 + Math.random() * 14) * sz }); }
       if (Math.random() < dt * (calm ? 1.2 : 3) * k) { const left = Math.random() < 0.5; S.drips.push({ x: ox + (left ? 0 : w), y: oy + Math.random() * h * 0.6, v: 30 + Math.random() * 40, r: (1.6 + Math.random() * 1.8) * sz }); }
       g.lineCap = 'round';

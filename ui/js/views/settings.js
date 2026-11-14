@@ -296,7 +296,7 @@ function compareTab(repaint) {
 }
 
 // Versus (Fun mode): the Compare page's poster borders, animation, the VS and its colours, and every effect's size and intensity
-const FX = [['auto', 'Auto'], ['fire', 'Fire'], ['water', 'Water'], ['specter', 'Spectral'], ['lightning', 'Lightning'], ['nature', 'Nature'], ['poster', 'Poster colours'], ['off', 'Off']];
+const FX = [['auto', 'Auto'], ['fire', 'Fire'], ['water', 'Water'], ['specter', 'Souls of the Damned'], ['blood', 'Blood'], ['lightning', 'Lightning'], ['nature', 'Nature'], ['poster', 'Poster colours'], ['off', 'Off']];
 function funTab(repaint) {
   const s = S.state.settings;
   const set = (k, v) => S.saveSettings({ [k]: v }).then(repaint);
@@ -312,7 +312,7 @@ function funTab(repaint) {
       h('span', { class: `fx-sw fx-${k === 'auto' ? 'poster' : k}`, style: { '--fx1': '#d6408c', '--fx2': '#8c50f0' } }), h('small', null, t))));
   const segBtns = (key, opts, def) => h('div', { class: 'seg' }, opts.map(([k, t]) => h('button', { type: 'button', class: (s[key] || def) === k ? 'active' : '', onclick: () => set(key, k) }, t)));
   return [
-    h('p', null, h('b', null, 'Compare: poster borders '), h('small', null, "Auto picks from the poster's main colours: red or orange is fire, deep blue is water, pale blue or white is lightning, green is spectral, brown or olive is nature; anything else glows in the poster's own colours. The skulls and the bar take the same theme.")),
+    h('p', null, h('b', null, 'Compare: poster borders '), h('small', null, "Auto picks from the poster's main colours: red or orange is fire, deep blue is water, pale blue or white is lightning, green is Souls of the Damned, brown or olive is nature; anything else glows in the poster's own colours. The skulls and the bar take the same theme.")),
     h('div', { class: `fx-grid motion-${s.fxMotion || 'full'}` }, side('fxLeft', 'Left side'), side('fxRight', 'Right side')),
     hr(),
     h('p', null, h('b', null, 'Animation '), segBtns('fxMotion', [['still', 'Still'], ['calm', 'Calm'], ['full', 'Full']], 'full')),

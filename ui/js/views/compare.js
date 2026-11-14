@@ -102,7 +102,7 @@ function autoFx(cols, side) {
   if (hh < 255) return l > 0.65 ? 'lightning' : 'water';
   return 'poster';
 }
-const FX_NAMES = [['auto', 'Auto'], ['fire', 'Fire'], ['water', 'Water'], ['specter', 'Spectral'], ['lightning', 'Lightning'], ['nature', 'Nature'], ['poster', 'Poster colours'], ['off', 'Off']];
+const FX_NAMES = [['auto', 'Auto'], ['fire', 'Fire'], ['water', 'Water'], ['specter', 'Souls of the Damned'], ['blood', 'Blood'], ['lightning', 'Lightning'], ['nature', 'Nature'], ['poster', 'Poster colours'], ['off', 'Off']];
 async function applyFx(el, url, setting, side) {
   const cols = await posterColours(url);
   const fx = setting === 'auto' ? autoFx(cols, side) : setting;
@@ -114,7 +114,7 @@ async function applyFx(el, url, setting, side) {
   flames(el, fx === 'fire');
   themeFx(el, fx);                                      // water, spectral, lightning, nature (fxthemes.js)
   // the side's colour for its bars, score and winner marks
-  const tone = { fire: '#ff9a3c', water: '#4aa8ff', lightning: '#cfe6ff', specter: '#5fe39a', nature: '#8fbf4a', poster: c1 }[fx];
+  const tone = { fire: '#ff9a3c', water: '#4aa8ff', lightning: '#cfe6ff', specter: '#5dff3a', blood: '#d0142c', nature: '#8fbf4a', poster: c1 }[fx];
   const root = el.closest('.cmp');
   if (root) root.dataset['fx' + side] = fx;               // the skull bar reads each side's theme from here
   if (root) { if (tone) root.style.setProperty(side === 'l' ? '--cl' : '--cr', tone); else root.style.removeProperty(side === 'l' ? '--cl' : '--cr'); }

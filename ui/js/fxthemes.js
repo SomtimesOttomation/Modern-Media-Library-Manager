@@ -1,6 +1,7 @@
 // Versus poster themes drawn on a canvas around the poster (Fire has its own, in compare.js):
 //   water     rain across the poster, drops running down the frame, ripples at the base (blue)
-//   specter   "Spectral": green ooze dripping off the frame; now and then a small skull snakes round the border
+//   specter   "Souls of the Damned": green fel fire licking up the frame, wailing ghosts rising off it, a ghoul face flaring now and then
+//   blood     red blood dripping off the frame (thick and often); now and then a red wave snakes round the border
 //   lightning white-blue crackle on the border; every few seconds a bolt races round it
 //   nature    vines creep in from the corners (brown and green) and leaves drift down
 // Size and intensity come from Settings > Versus > Effects > Posters. "Calm" runs slower and sparser; "Still" and the
@@ -8,7 +9,7 @@
 import { tune, mult } from './fxtune.js';
 
 const PAD = { x: 34, top: 40, bottom: 34 };
-export const THEMED = ['water', 'specter', 'lightning', 'nature'];
+export const THEMED = ['water', 'specter', 'blood', 'lightning', 'nature'];
 
 // a point on the poster's border, d pixels clockwise from its top-left corner
 function edgePoint(d, w, h) {
@@ -55,41 +56,102 @@ const THEMES = {
   },
   specter: {
     glow: true,
+    init: () => ({ fl: [], ghosts: [], next: 1 + Math.random() * 2, ghoul: null, gnext: 3 + Math.random() * 3, t: 0 }),
+    step(S, g, o, dt, k) {
+      const { w, h, ox, oy, sz, calm } = o;
+      S.t += dt;
+      // fel fire: green flames rising off every edge, most of all the top
+      for (let n = dt * (calm ? 110 : 260) * k; n > 0; n--) {
+        if (Math.random() >= n) continue;
+        const [x, y, side] = edgePoint(Math.random() * 2 * (w + h), w, h);
+        const out = side === 1 ? 1 : side === 3 ? -1 : 0;
+        S.fl.push({ x: ox + x, y: oy + y, vx: out * (8 + Math.random() * 14) + (Math.random() - 0.5) * 8, vy: -(calm ? 26 : 44) - Math.random() * 40, life: 1, dec: 0.8 + Math.random() * 0.8, r: (8 + Math.random() * 10) * sz });
+      }
+      S.fl = S.fl.filter((p) => {
+        p.life -= p.dec * dt; p.x += p.vx * dt + Math.sin(S.t * 9 + p.y * 0.05) * 0.4; p.y += p.vy * dt;
+        if (p.life <= 0) return false;
+        const L = p.life, c = L > 0.8 ? '235,255,215' : L > 0.55 ? '125,255,74' : L > 0.3 ? '43,214,26' : '8,90,20';
+        const gr = g.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r * (0.4 + L * 0.7));
+        gr.addColorStop(0, `rgba(${c},${0.7 * L})`); gr.addColorStop(0.5, `rgba(${c},${0.25 * L})`); gr.addColorStop(1, `rgba(${c},0)`);
+        g.fillStyle = gr; g.beginPath(); g.arc(p.x, p.y, p.r * (0.4 + L * 0.7), 0, 7); g.fill();
+        return true;
+      });
+      // ghosts: a pale green soul with hollow eyes and a wailing mouth leaves the frame and drifts up, fading
+      S.next -= dt;
+      if (S.next <= 0) {
+        const [x, y] = edgePoint(Math.random() * 2 * (w + h), w, h);
+        S.ghosts.push({ x: ox + x, y: oy + y, vy: -(calm ? 16 : 26) - Math.random() * 14, sway: Math.random() * 6, life: 1, s: (0.8 + Math.random() * 0.6) * sz });
+        S.next = (calm ? 2.6 : 1.2) / Math.max(0.3, k) + Math.random() * 1.2;
+      }
+      S.ghosts = S.ghosts.filter((G) => {
+        G.life -= dt / (calm ? 4.5 : 3.2); G.y += G.vy * dt; G.sway += dt * 2.4;
+        if (G.life <= 0) return false;
+        const a = Math.min(1, G.life * 1.6) * Math.min(1, (1 - G.life) * 5), x = G.x + Math.sin(G.sway) * 8 * G.s, y = G.y, s = 11 * G.s;
+        g.save(); g.translate(x, y); g.scale(s / 10, s / 10);
+        const body = g.createLinearGradient(0, -10, 0, 22); body.addColorStop(0, `rgba(200,255,190,${0.55 * a})`); body.addColorStop(1, 'rgba(60,220,80,0)');
+        g.fillStyle = body; g.beginPath(); g.arc(0, -2, 8, Math.PI, 0);
+        for (let i = 0; i <= 6; i++) { const tx = 8 - i * (16 / 6), ty = 16 + Math.sin(G.sway * 3 + i) * 3; g.lineTo(tx, ty); }
+        g.closePath(); g.fill();
+        g.globalCompositeOperation = 'source-over';
+        g.fillStyle = `rgba(4,20,6,${0.85 * a})`; g.beginPath(); g.ellipse(-3, -2, 1.7, 2.4, 0, 0, 7); g.ellipse(3, -2, 1.7, 2.4, 0, 0, 7); g.fill();
+        g.beginPath(); g.ellipse(0, 4.5, 1.6, 2.8 + Math.sin(G.sway * 4) * 0.8, 0, 0, 7); g.fill();
+        g.globalCompositeOperation = 'lighter';
+        g.restore();
+        return y > -40;
+      });
+      // now and then a ghoul's face flares up in the flames on the frame
+      S.gnext -= dt;
+      if (!S.ghoul && S.gnext <= 0) { const [x, y] = edgePoint(Math.random() * 2 * (w + h), w, h); S.ghoul = { x: ox + x, y: oy + y, t: 0 }; }
+      if (S.ghoul) {
+        const q = S.ghoul; q.t += dt; const a = Math.sin(Math.min(1, q.t / 1.6) * Math.PI);
+        const gr = g.createRadialGradient(q.x, q.y, 0, q.x, q.y, 26 * sz); gr.addColorStop(0, `rgba(125,255,74,${0.5 * a})`); gr.addColorStop(1, 'rgba(43,214,26,0)');
+        g.fillStyle = gr; g.beginPath(); g.arc(q.x, q.y, 26 * sz, 0, 7); g.fill();
+        g.globalAlpha = a; miniSkull(g, q.x, q.y, 18 * sz, 'rgba(210,255,190,0.9)'); g.globalAlpha = 1;
+        if (q.t >= 1.6) { S.ghoul = null; S.gnext = (calm ? 7 : 4) / Math.max(0.3, k) + Math.random() * 3; }
+      }
+    },
+  },
+  blood: {
+    glow: false,
     init: () => ({ drips: [], skull: null, next: 2 + Math.random() * 3, t: 0 }),
     step(S, g, o, dt, k) {
       const { w, h, ox, oy, sz, calm } = o;
       S.t += dt;
-      if (Math.random() < dt * (calm ? 1.4 : 3.5) * k) {
+      if (Math.random() < dt * (calm ? 4.2 : 10.5) * k) {
         const r = Math.random(); let x, y;
         if (r < 0.6) { x = ox + Math.random() * w; y = oy; } else { x = ox + (r < 0.8 ? 0 : w); y = oy + Math.random() * h * 0.5; }
         S.drips.push({ x, y, y0: y, len: 0, max: (14 + Math.random() * 30) * sz, v: 0, r: (2 + Math.random() * 2.5) * sz, fall: false });
       }
       // ooze along the top edge
-      g.fillStyle = 'rgba(110,255,120,0.18)';
+      g.fillStyle = 'rgba(150,0,16,0.35)';
       for (let i = 0; i < 9; i++) { const x = ox + (i + 0.5) * w / 9, bob = Math.sin(S.t * 2 + i) * 2; g.beginPath(); g.ellipse(x, oy + bob, (w / 18) * 1.1, 5 * sz, 0, 0, 7); g.fill(); }
       S.drips = S.drips.filter((d) => {
         if (!d.fall) { d.len += (calm ? 8 : 16) * dt; if (d.len >= d.max) d.fall = true; }
         else { d.v += 160 * dt; d.y += d.v * dt; }
         const top = d.fall ? d.y - d.max * 0.6 : d.y0;
         const gr = g.createLinearGradient(d.x, top, d.x, d.y + d.len);
-        gr.addColorStop(0, 'rgba(90,255,110,0.05)'); gr.addColorStop(1, 'rgba(150,255,140,0.9)');
+        gr.addColorStop(0, 'rgba(120,0,12,0.05)'); gr.addColorStop(1, 'rgba(178,8,28,0.95)');
         g.strokeStyle = gr; g.lineWidth = d.r * 0.9; g.lineCap = 'round'; g.beginPath(); g.moveTo(d.x, top); g.lineTo(d.x, d.y + d.len); g.stroke();
-        g.fillStyle = 'rgba(170,255,150,0.95)'; g.beginPath(); g.arc(d.x, d.y + d.len, d.r, 0, 7); g.fill();
+        g.fillStyle = 'rgba(196,14,36,0.98)'; g.beginPath(); g.arc(d.x, d.y + d.len, d.r, 0, 7); g.fill();
         return d.y + d.len < o.H + 10;
       });
-      // the small skull that snakes round the border now and then
+      // a red wave that snakes round the border now and then
       S.next -= dt;
       if (!S.skull && S.next <= 0) S.skull = { d: Math.random() * 2 * (w + h), run: 0, len: (calm ? 6 : 4) };
       if (S.skull) {
         const s = S.skull; s.run += dt;
-        const P = 2 * (w + h), speed = P / s.len;
-        for (let i = 14; i >= 0; i--) {
-          const [x, y] = edgePoint(s.d + (s.run * speed) - i * 7 * sz, w, h);
-          const wob = Math.sin(s.run * 12 - i * 0.7) * 3 * sz;
-          g.fillStyle = `rgba(120,255,140,${0.5 * (1 - i / 15)})`; g.beginPath(); g.arc(ox + x + wob, oy + y + wob, (4 - i * 0.2) * sz, 0, 7); g.fill();
+        const P = 2 * (w + h), speed = P / s.len, seg = 46;
+        g.lineCap = 'round'; g.lineJoin = 'round';
+        for (let pass = 0; pass < 2; pass++) {
+          g.beginPath();
+          for (let i = 0; i <= seg; i++) {
+            const along = s.d + s.run * speed - i * 4 * sz, [x, y, side] = edgePoint(along, w, h);
+            const wave = Math.sin(s.run * 10 - i * 0.45) * 5 * sz * (1 - i / seg);
+            const nx = side === 1 ? wave : side === 3 ? -wave : 0, ny = side === 0 ? -wave : side === 2 ? wave : 0;
+            if (i === 0) g.moveTo(ox + x + nx, oy + y + ny); else g.lineTo(ox + x + nx, oy + y + ny);
+          }
+          g.strokeStyle = pass ? 'rgba(220,30,50,0.95)' : 'rgba(110,0,10,0.45)'; g.lineWidth = (pass ? 3.2 : 8) * sz; g.stroke();
         }
-        const [hx, hy] = edgePoint(s.d + s.run * speed, w, h);
-        miniSkull(g, ox + hx, oy + hy, 13 * sz, 'rgba(200,255,190,0.95)');
         if (s.run >= s.len) { S.skull = null; S.next = (calm ? 9 : 5) / Math.max(0.3, k) + Math.random() * 3; }
       }
     },

@@ -42,5 +42,19 @@ Check ($s.OMDb.ok -and -not $s.OMDb.reason -and $s.OMDb.lastFail) 'working again
 $m = Try-Get 'http://127.0.0.1:1/omdbapi.com/?how=x'
 Check ($m -like 'OMDb did not answer: *' -and -not (Status).OMDb.ok) "no connection at all is a failure with the reason ($m)"
 
+# OMDb is asked only when a movie lacks what it gives (RT critics, Metacritic, domestic box office), its free key allows 1,000 a day
+$e = { param($at, $man) @{ Manual = $(if ($man) { $man } else { @{} }); Scraped = @{}; Force = @(); Sources = @{}; At = ''; OmdbAt = $at } }
+$full = [pscustomobject]@{ RTCritic = 90; Metascore = 80; BoxOfficeDomestic = 1e8 }
+$part = [pscustomobject]@{ RTCritic = 90; Metascore = 0;  BoxOfficeDomestic = 1e8 }
+$none = [pscustomobject]@{ RTCritic = 0;  Metascore = 0;  BoxOfficeDomestic = 0 }
+$old = (Get-Date).AddDays(-45).ToString('yyyy-MM-dd'); $new = (Get-Date).AddDays(-3).ToString('yyyy-MM-dd')
+Check (-not (Test-MmlmOmdbNeeded $full (& $e '') $false)) 'a movie with all three already is not sent to OMDb'
+Check (Test-MmlmOmdbNeeded $part (& $e '') $false) 'a movie missing its Metacritic score is'
+Check (Test-MmlmOmdbNeeded $none (& $e '') $false) 'a movie with none of them is'
+Check (-not (Test-MmlmOmdbNeeded $part (& $e '' @{ Metascore = 70 }) $false)) 'a value typed in by hand counts as filled'
+Check (-not (Test-MmlmOmdbNeeded $part (& $e $new) $false)) 'a movie OMDb answered 3 days ago is not asked again (it had nothing then)'
+Check (Test-MmlmOmdbNeeded $part (& $e $old) $false) 'after 30 days it is asked again'
+Check (Test-MmlmOmdbNeeded $full (& $e $new) $true) 'Replace ticked asks OMDb anyway'
+
 Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
 "Done: $fail problem(s)."

@@ -285,6 +285,19 @@ function Invoke-MmlmShowStatusFetch {
     ('Show status: {0} looked up ({1} ongoing, {2} ended){3}.' -f $done, $going, $ended, $(if ($miss) { ", $miss not found on TMDB" } else { '' }))
 }
 
+function Test-MmlmOmdbNeeded {
+    # $true when OMDb could add something to this movie: Rotten Tomatoes critics, Metacritic or domestic box office is
+    # empty (and not typed in by hand), or Replace is ticked. A movie OMDb answered in the last 30 days is not asked
+    # again while those fields are still empty: OMDb had nothing for them then.
+    param($Record, $Entry, [bool]$Overwrite)
+    if ($Overwrite) { return $true }
+    $missing = @('RTCritic', 'Metascore', 'BoxOfficeDomestic') | Where-Object { -not $Entry.Manual.ContainsKey($_) -and (Test-MmlmValueEmpty $Record.$_) }
+    if (@($missing).Count -eq 0) { return $false }
+    $at = [datetime]::MinValue
+    if ($Entry.OmdbAt -and [datetime]::TryParse([string]$Entry.OmdbAt, [ref]$at) -and ((Get-Date) - $at).TotalDays -lt 30) { return $false }
+    $true
+}
+
 function Invoke-MmlmMetadataScrape {
     # Fills Year, Genre, certification, rating, studio, director, Rotten Tomatoes critic score and box office for the given titles.
     param([object[]]$Records, [int[]]$Indexes, [string]$TmdbKey, [string]$OmdbKey, [bool]$Overwrite, [string]$DataFolder, [string]$StorePath)
@@ -303,7 +316,7 @@ function Invoke-MmlmMetadataScrape {
     $headers = @{}; $keyQ = ''
     if ($TmdbKey.Length -gt 60) { $headers['Authorization'] = 'Bearer ' + $TmdbKey } else { $keyQ = '&api_key=' + [Uri]::EscapeDataString($TmdbKey) }
     $store = Read-MmlmMetaStore -Path $StorePath
-    $stats = @{ Done = 0; Found = 0; Missing = 0; Failed = 0 }
+    $stats = @{ Done = 0; Found = 0; Missing = 0; Failed = 0; OmdbSkipped = 0 }
     $tmdbOff = (-not $TmdbKey); $omdbOff = (-not $OmdbKey); $omdbLimit = $false; $keyBad = ''; $omdbWhy = ''; $omdbErrs = 0
     Set-MmlmScanPhase -Lo 0.1 -Hi 1.0
     $i = 0
@@ -314,8 +327,10 @@ function Invoke-MmlmMetadataScrape {
         $keys  = Get-MmlmMetaKeys $rec
         $entry = $null
         foreach ($k in $keys) { if ($store.ContainsKey($k)) { $entry = $store[$k]; break } }
-        if ($null -eq $entry) { $entry = @{ Manual = @{}; Scraped = @{}; Force = @(); Sources = @{}; At = '' } }
+        if ($null -eq $entry) { $entry = @{ Manual = @{}; Scraped = @{}; Force = @(); Sources = @{}; At = ''; OmdbAt = '' } }
+        if (-not $entry.ContainsKey('OmdbAt')) { $entry.OmdbAt = '' }
         $got = @{}                                   # field -> @{ Value; Source }
+        $omdbAsked = $false
         $imdbId = [string]$rec.IMDBID
         try {
             # ---- TMDB ---------------------------------------------------------------
@@ -359,7 +374,11 @@ function Invoke-MmlmMetadataScrape {
             }
 
             # ---- OMDb: Rotten Tomatoes critic score, Metacritic Metascore, domestic box office ---------------------
-            if (-not $omdbOff -and -not $omdbLimit -and $imdbId) {
+            # Asked only when the movie still lacks something OMDb gives (or Replace is ticked), and not again within
+            # 30 days for a movie OMDb has already answered: its free key allows 1,000 requests a day.
+            $omdbNeed = Test-MmlmOmdbNeeded -Record $rec -Entry $entry -Overwrite $Overwrite
+            if (-not $omdbNeed -and -not $omdbOff -and $imdbId) { $stats.OmdbSkipped++ }
+            if ($omdbNeed -and -not $omdbOff -and -not $omdbLimit -and $imdbId) {
                 $o = $null
                 try { $o = Invoke-MmlmJsonGet -Url ('https://www.omdbapi.com/?apikey=' + [Uri]::EscapeDataString($OmdbKey) + '&i=' + $imdbId) }
                 catch {
@@ -372,6 +391,7 @@ function Invoke-MmlmMetadataScrape {
                 }
                 Add-MmlmOmdbUse
                 if ($o) {
+                    $entry.OmdbAt = (Get-Date).ToString('yyyy-MM-dd'); $omdbAsked = $true
                     if ($o.Response -eq 'True') {
                         $rt = @($o.Ratings | Where-Object { $_.Source -eq 'Rotten Tomatoes' }) | Select-Object -First 1
                         if ($rt -and ([string]$rt.Value) -match '^(\d+)%') { $got['RTCritic'] = @{ Value = [int]$Matches[1]; Source = 'OMDb' } }
@@ -413,7 +433,7 @@ function Invoke-MmlmMetadataScrape {
             $entry.Sources[$name] = $got[$name].Source
             if ($Overwrite -and $entry.Force -notcontains $name) { $entry.Force = @($entry.Force) + $name }
         }
-        if ($got.Count -gt 0) {
+        if ($got.Count -gt 0 -or $omdbAsked) {
             $entry.At = (Get-Date).ToString('yyyy-MM-dd')
             foreach ($k in (Get-MmlmMetaKeys $rec)) { $store[$k] = $entry }
             $stats.Found++
@@ -440,6 +460,7 @@ function Invoke-MmlmMetadataScrape {
     if ($omdbLimit) { $sum += (' OMDb daily limit reached ({0}) - run again tomorrow for the rest.' -f $omdbWhy) }
     elseif ($omdbOff -and $omdbWhy) { $sum += (' OMDb refused the key ({0}); Rotten Tomatoes, Metacritic and domestic box office were skipped.' -f $omdbWhy) }
     elseif ($omdbErrs -gt 0) { $sum += (' OMDb failed {0} time(s), last: {1}.' -f $omdbErrs, $omdbWhy) }
+    if ($stats.OmdbSkipped -gt 0) { $sum += (' OMDb was not asked for {0} title(s) that already had its scores and box office (or were checked in the last 30 days).' -f $stats.OmdbSkipped) }
     if ($keyBad)    { $sum += ' ' + $keyBad }
     if ($tmdbOff)   { $sum += ' (No TMDB key set.)' }
     $script:Sync.Summary = $sum
@@ -448,6 +469,7 @@ function Invoke-MmlmMetadataScrape {
 Export-ModuleMember -Function @(
     'Set-MmlmFetchContext',
     'Invoke-MmlmJsonGet',
+    'Test-MmlmOmdbNeeded',
     'Get-MmlmImdbRatingMap',
     'Add-MmlmFetchDetail',
     'Get-MmlmTitleKey',

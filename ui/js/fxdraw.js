@@ -151,3 +151,38 @@ export function bloodBar(g, st, tip, mid, y, dt, size, rate, bottom) {
   if (E.len >= E.max) { E.drops.push({ x: ex, y: ey + E.len * size, r: w * 1.3, v: 15 }); E.len = 0; E.max = rnd(34, 46); }
   E.drops = E.drops.filter((p) => { p.v += 260 * dt; p.y += p.v * dt; drop(g, p.x, p.y, p.r); return p.y < bottom; });
 }
+
+// the Blood theme's skull, "Drenched": drawn over the Bone skull (skull space 120 x 100, facing right) - the bone
+// stained deep red and blotchy, a cap of blood over the crown, blood welling in the eye and nose, and streams running
+// down from the crown, the eye, the nose and the jaw, gathering gobs that drop
+const SKULL_OUTLINE = 'M20,60 C10,44 14,20 40,11 C62,4 90,10 101,30 C104,36 106,40 104,44 L100,47 C104,52 108,58 107,63 L102,64 C104,68 104,72 102,75 L101,80 L78,80 C74,74 66,70 58,70 C52,72 48,76 46,80 C40,80 36,74 34,70 C28,68 22,66 20,60 Z M52,72 C55,82 60,90 70,93 L97,94 C101,93 103,90 102,86 L100,83 L80,83 C73,83 67,80 62,76 Z';
+let skullPath = null;
+const DRENCH = [[34, 22, 4.5, 40], [52, 14, 5, 58], [70, 12, 3.4, 44], [86, 54, 4.5, 34], [103, 62, 3.6, 24], [96, 88, 6, 20], [80, 91, 4.5, 18], [26, 40, 3.6, 30]];
+export function drenched(g, st, x, y, w, face, dt, bottom, moving) {
+  const k = w / 120; st.t = (st.t || 0) + dt;
+  skullPath = skullPath || new Path2D(SKULL_OUTLINE);
+  g.save(); g.translate(x + (face < 0 ? w : 0), y); g.scale(k * face, k);
+  g.save(); g.clip(skullPath);
+  g.globalCompositeOperation = 'multiply'; g.fillStyle = 'rgba(150,10,18,.55)'; g.fill(skullPath);
+  g.globalCompositeOperation = 'source-over';
+  for (let i = 0; i < 18; i++) { const sx = 22 + ((i * 47) % 80), sy = 14 + ((i * 29) % 70); const gr = g.createRadialGradient(sx, sy, 0, sx, sy, 10); gr.addColorStop(0, 'rgba(70,0,6,.55)'); gr.addColorStop(1, 'rgba(70,0,6,0)'); g.fillStyle = gr; g.fillRect(sx - 10, sy - 10, 20, 20); }
+  const cap = g.createLinearGradient(0, 4, 0, 34); cap.addColorStop(0, '#e5212f'); cap.addColorStop(0.5, '#a30c18'); cap.addColorStop(1, '#5a020a');
+  g.fillStyle = cap; g.beginPath(); g.moveTo(10, 0); g.lineTo(110, 0); g.lineTo(110, 30);
+  for (let xx = 110; xx >= 10; xx -= 3) g.lineTo(xx, 22 + Math.sin(xx * 0.35 + st.t * 0.8) * 2.4 + Math.sin(xx * 0.9) * 1.6 + (xx < 40 ? (40 - xx) * 0.55 : 0));
+  g.closePath(); g.fill();
+  g.strokeStyle = 'rgba(255,225,225,.6)'; g.lineWidth = 1.4; g.beginPath(); g.moveTo(40, 13); g.quadraticCurveTo(64, 7, 90, 14); g.stroke();
+  const pulse = 0.85 + Math.sin(st.t * 2) * 0.1, eye = g.createRadialGradient(87, 46, 1, 88, 49, 9);
+  eye.addColorStop(0, '#ff4a55'); eye.addColorStop(0.5, '#b10f1c'); eye.addColorStop(1, '#3a0207');
+  g.fillStyle = eye; g.beginPath(); g.ellipse(88, 50, 8.6 * pulse, 7.6 * pulse, 0, 0, 7); g.fill();
+  g.fillStyle = 'rgba(255,240,240,.85)'; g.beginPath(); g.ellipse(85.5, 46.5, 2, 1.3, -0.5, 0, 7); g.fill();
+  g.fillStyle = '#9a0c18'; g.beginPath(); g.moveTo(101, 55); g.lineTo(106, 62); g.lineTo(100, 63); g.closePath(); g.fill();
+  g.restore();
+  st.runs = st.runs || DRENCH.map(([sx, sy, sw, sl]) => ({ sx, sy, sw, sl, len: rnd(0, sl), drops: [] }));
+  for (const r of st.runs) {
+    if (moving) r.len += dt * (6 + r.sw * 1.6) * moving;
+    if (r.len > r.sl) { r.drops.push({ y: r.sy + r.len, v: 10, r: r.sw }); r.len = r.sl * rnd(0.35, 0.6); }
+    drip(g, r.sx, r.sy, r.len, r.sw, 1, false);
+    r.drops = r.drops.filter((d) => { d.v += 260 * dt / k; d.y += d.v * dt; drop(g, r.sx, d.y, d.r); return y + d.y * k < bottom; });
+  }
+  g.restore();
+}

@@ -3,7 +3,7 @@
 // and ten glowing tattoos (Settings > Versus). Glows are pre-drawn once and stamped, the number of sparks is capped,
 // and drawing stops when the bar leaves the page or the window is hidden.
 import { tune, mult } from './fxtune.js';
-import { natureBar, bloodBar } from './fxdraw.js';
+import { natureBar, bloodBar, drenched } from './fxdraw.js';
 
 // palettes per theme: hottest to coolest
 export const PAL = {
@@ -220,7 +220,8 @@ export function skullBar(l, r, stops, opts = {}) {
       const id = fx + tone;
       if (id === s.fx) continue;
       s.fx = id; s.theme = fx; s.pal = palFor(fx, tone);
-      s.el.innerHTML = skullSVG(style, s.pal, 'k' + (uidN++), tat, t.skulls.int);
+      // the Blood theme's skull is always Drenched: the Bone skull, with the blood drawn over it on the front canvas
+      s.el.innerHTML = skullSVG(fx === 'blood' ? 'bone' : style, s.pal, 'k' + (uidN++), fx === 'blood' ? 0 : tat, t.skulls.int);
       const svg = s.el.querySelector('svg'); if (svg && s.side < 0) svg.style.transform = 'scaleX(-1)';
     }
   };
@@ -286,7 +287,7 @@ export function skullBar(l, r, stops, opts = {}) {
     if (!t.skulls.on || !rate) return;
     const engulf = ENGULF[style], fr = FRONT[style] || 0;
     for (const s of sides) {
-      if (!s.pal) continue;
+      if (!s.pal || s.theme === 'blood') continue;                  // the Blood skull drips instead of burning
       const g = geo(s), sp = skW / 60, dir = s.side;            // dir: the way the skull faces
       const n = skW * 0.08 * rate * (RATE[style] || 1) * skI * dt * 60;
       for (let i = 0; i < n; i++) {
@@ -345,6 +346,7 @@ export function skullBar(l, r, stops, opts = {}) {
     gb.setTransform(1, 0, 0, 1, 0, 0); gb.clearRect(0, 0, back.width, back.height); gb.setTransform(dpr, 0, 0, dpr, 0, 0);
     gf.setTransform(1, 0, 0, 1, 0, 0); gf.clearRect(0, 0, front.width, front.height); gf.setTransform(dpr, 0, 0, dpr, 0, 0);
     drawBars(rate, dt);
+    if (t.skulls.on) for (const s of sides) if (s.theme === 'blood') { const g = geo(s); s.dst = s.dst || {}; drenched(gf, s.dst, g.x, g.y, skW, s.side < 0 ? -1 : 1, rate ? dt : 0, H + 20, rate); }
     if (rate) {
       emitSkulls(rate, dt);
       parts = drawParts(gb, parts, dt); fparts = drawParts(gf, fparts, dt); drawBolts(dt);

@@ -3,13 +3,14 @@
 //             ripples at the base (blue)
 //   specter   "Souls of the Damned": green fel fire; a swarm of tiny screaming heads snakes round the border, hands claw out
 //             from behind it and green ooze drips down the sides (Settings > Versus > Souls of the Damned)
-//   blood     red blood dripping off the frame (thick and often); now and then a red wave snakes round the border
+//   blood     "Fresh and glossy": a drip curtain along the top and glossy drips of every size running down the top and sides
 //   lightning white-blue crackle on the border; every few seconds a bolt races round it
-//   nature    vines creep in from the corners (brown and green) and leaves drift down
+//   nature    "Overgrown log frame": a weathered log frame with moss and cut ends, two vines with swaying leaves, falling leaves
 // Size and intensity come from Settings > Versus > Effects > Posters. "Calm" runs slower and sparser; "Still" and the
 // system's reduce-motion setting leave the steady CSS glow only. Each one stops by itself when its poster leaves the page.
 import { tune, mult } from './fxtune.js';
 import * as S from './store.js';
+import * as D from './fxdraw.js';
 
 // ---- Souls of the Damned: settings, images and a soft glow ----
 const clampN = (v, lo, hi, def) => { const n = Number(v); return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : def; };
@@ -225,47 +226,20 @@ const THEMES = {
   },
   blood: {
     glow: false,
-    init: () => ({ drips: [], skull: null, next: 2 + Math.random() * 3, t: 0 }),
+    init: () => ({ drips: [], top: null }),
     step(S, g, o, dt, k) {
-      const { w, h, ox, oy, sz, calm } = o;
-      S.t += dt;
-      if (Math.random() < dt * (calm ? 4.2 : 10.5) * k) {
-        const r = Math.random(); let x, y;
-        if (r < 0.6) { x = ox + Math.random() * w; y = oy; } else { x = ox + (r < 0.8 ? 0 : w); y = oy + Math.random() * h * 0.5; }
-        S.drips.push({ x, y, y0: y, len: 0, max: (14 + Math.random() * 30) * sz, v: 0, r: (2 + Math.random() * 2.5) * sz, fall: false });
+      const { w, h, ox, oy, sz, calm } = o, rate = (calm ? 1.2 : 2.6) * k;
+      // glossy drips of every thickness and length run down from the top edge and both sides; some hang a while
+      for (let n = dt * rate; n > 0; n--) {
+        if (Math.random() >= n) continue;
+        const side = Math.random() < 0.45, x = side ? (Math.random() < 0.5 ? ox + Math.random() * 6 : ox + w - Math.random() * 6) : ox + 4 + Math.random() * (w - 8);
+        S.drips.push(D.newDrip(x, side ? oy + Math.random() * h * 0.5 : oy, sz, 85, Math.random() < 0.15));
       }
-      // ooze along the top edge
-      g.fillStyle = 'rgba(150,0,16,0.35)';
-      for (let i = 0; i < 9; i++) { const x = ox + (i + 0.5) * w / 9, bob = Math.sin(S.t * 2 + i) * 2; g.beginPath(); g.ellipse(x, oy + bob, (w / 18) * 1.1, 5 * sz, 0, 0, 7); g.fill(); }
-      S.drips = S.drips.filter((d) => {
-        if (!d.fall) { d.len += (calm ? 8 : 16) * dt; if (d.len >= d.max) d.fall = true; }
-        else { d.v += 160 * dt; d.y += d.v * dt; }
-        const top = d.fall ? d.y - d.max * 0.6 : d.y0;
-        const gr = g.createLinearGradient(d.x, top, d.x, d.y + d.len);
-        gr.addColorStop(0, 'rgba(120,0,12,0.05)'); gr.addColorStop(1, 'rgba(178,8,28,0.95)');
-        g.strokeStyle = gr; g.lineWidth = d.r * 0.9; g.lineCap = 'round'; g.beginPath(); g.moveTo(d.x, top); g.lineTo(d.x, d.y + d.len); g.stroke();
-        g.fillStyle = 'rgba(196,14,36,0.98)'; g.beginPath(); g.arc(d.x, d.y + d.len, d.r, 0, 7); g.fill();
-        return d.y + d.len < o.H + 10;
-      });
-      // a red wave that snakes round the border now and then
-      S.next -= dt;
-      if (!S.skull && S.next <= 0) S.skull = { d: Math.random() * 2 * (w + h), run: 0, len: (calm ? 6 : 4) };
-      if (S.skull) {
-        const s = S.skull; s.run += dt;
-        const P = 2 * (w + h), speed = P / s.len, seg = 46;
-        g.lineCap = 'round'; g.lineJoin = 'round';
-        for (let pass = 0; pass < 2; pass++) {
-          g.beginPath();
-          for (let i = 0; i <= seg; i++) {
-            const along = s.d + s.run * speed - i * 4 * sz, [x, y, side] = edgePoint(along, w, h);
-            const wave = Math.sin(s.run * 10 - i * 0.45) * 5 * sz * (1 - i / seg);
-            const nx = side === 1 ? wave : side === 3 ? -wave : 0, ny = side === 0 ? -wave : side === 2 ? wave : 0;
-            if (i === 0) g.moveTo(ox + x + nx, oy + y + ny); else g.lineTo(ox + x + nx, oy + y + ny);
-          }
-          g.strokeStyle = pass ? 'rgba(220,30,50,0.95)' : 'rgba(110,0,10,0.45)'; g.lineWidth = (pass ? 3.2 : 8) * sz; g.stroke();
-        }
-        if (s.run >= s.len) { S.skull = null; S.next = (calm ? 9 : 5) / Math.max(0.3, k) + Math.random() * 3; }
-      }
+      if (S.drips.length > 140) S.drips.splice(0, S.drips.length - 140);
+      S.drips = D.stepDrips(g, S.drips, calm ? dt * 0.6 : dt, o.H + 10, 0.95);
+      // over them, the drip curtain along the top: a band of blood with drips hanging from it
+      S.top = S.top || D.makeCurtain(Math.max(8, Math.round(w / 12)));
+      D.curtain(g, S.top, ox - 2, ox + w + 2, oy - 3 * sz, 9 * sz, calm ? dt * 0.5 : dt, 1.25 * sz, o.H + 10);
     },
   },
   lightning: {
@@ -299,49 +273,44 @@ const THEMES = {
   },
   nature: {
     glow: false,
-    init: () => ({ grow: 0, leaves: [], t: 0 }),
+    init: () => ({ grow: 0, fall: [], t: 0, vt: 1 }),
     step(S, g, o, dt, k) {
-      const { w, h, ox, oy, sz, calm } = o;
-      S.t += dt;
-      S.grow = Math.min(1, S.grow + dt / (calm ? 9 : 5));
-      // one vine from each corner, growing along both edges that meet there; drawn once per growth step into a
-      // layer of its own (redrawing every leaf each frame is what made this theme slow)
-      const reach = Math.round((0.18 + 0.32 * Math.min(1, k)) * S.grow * 50) / 50;
-      if (!S.layer || S.reach !== reach || S.lw !== o.W || S.lh !== o.H || S.lsz !== sz) {
-        S.reach = reach; S.lw = o.W; S.lh = o.H; S.lsz = sz;
-        S.layer = S.layer || document.createElement('canvas');
-        S.layer.width = Math.round(o.W * o.dpr); S.layer.height = Math.round(o.H * o.dpr);
-        const v = S.layer.getContext('2d'); v.setTransform(o.dpr, 0, 0, o.dpr, 0, 0); v.clearRect(0, 0, o.W, o.H);
-        const corners = [[0, 0, 1, 1], [w, 0, -1, 1], [w, h, -1, -1], [0, h, 1, -1]];
-        for (const [cx, cy, sx, sy] of corners) {
-          for (const along of ['x', 'y']) {
-            const L = (along === 'x' ? w : h) * reach;
-            v.strokeStyle = '#6b4a2b'; v.lineWidth = 2.6 * sz; v.lineCap = 'round'; v.beginPath();
-            for (let q = 0; q <= L; q += 3) {
-              const wav = Math.sin(q / 9) * 4 * sz;
-              const x = ox + cx + (along === 'x' ? sx * q : -sx * wav), y = oy + cy + (along === 'y' ? sy * q : -sy * wav);
-              if (q === 0) v.moveTo(x, y); else v.lineTo(x, y);
-            }
-            v.stroke();
-            for (let q = 12; q <= L; q += 16) {
-              const wav = Math.sin(q / 9) * 4 * sz, side = (q / 16) % 2 ? 1 : -1;
-              const x = ox + cx + (along === 'x' ? sx * q : -sx * wav), y = oy + cy + (along === 'y' ? sy * q : -sy * wav);
-              v.save(); v.translate(x, y); v.rotate((along === 'x' ? 0 : Math.PI / 2) + side * 0.9);
-              v.fillStyle = side > 0 ? '#5f9e3a' : '#7dbb4a'; v.beginPath(); v.ellipse(6 * sz, 0, 6 * sz, 2.8 * sz, 0, 0, 7); v.fill();
-              v.strokeStyle = 'rgba(30,60,20,0.6)'; v.lineWidth = 0.7; v.beginPath(); v.moveTo(0, 0); v.lineTo(11 * sz, 0); v.stroke();
-              v.restore();
-            }
+      const { w, h, ox, oy, sz, calm } = o, th = 12 * sz;
+      S.t += dt; S.grow = Math.min(1, S.grow + dt / (calm ? 8 : 4));
+      const R = { x: ox - th / 2, y: oy - th / 2, w: w + th, h: h + th };
+      const fresh = (c) => { c.width = Math.round(o.W * o.dpr); c.height = Math.round(o.H * o.dpr); const v = c.getContext('2d'); v.setTransform(o.dpr, 0, 0, o.dpr, 0, 0); v.clearRect(0, 0, o.W, o.H); return v; };
+      // the log frame, moss and cut log ends: baked once per size
+      if (!S.frame || S.fw !== o.W || S.fh !== o.H || S.fsz !== sz) {
+        S.fw = o.W; S.fh = o.H; S.fsz = sz; S.frame = S.frame || document.createElement('canvas');
+        const v = fresh(S.frame);
+        v.save(); v.shadowColor = 'rgba(0,0,0,.6)'; v.shadowBlur = 10; v.fillStyle = v.createPattern(D.bark(), 'repeat');
+        v.beginPath(); v.rect(ox - th, oy - th, w + th * 2, h + th * 2); v.rect(ox, oy, w, h); v.fill('evenodd'); v.restore();
+        v.strokeStyle = 'rgba(255,220,170,.18)'; v.lineWidth = 1; v.strokeRect(ox - th + 0.5, oy - th + 0.5, w + th * 2 - 1, h + th * 2 - 1);
+        v.strokeStyle = 'rgba(0,0,0,.6)'; v.strokeRect(ox - 0.5, oy - 0.5, w + 1, h + 1);
+        const L = 2 * (R.w + R.h);
+        for (let i = 0; i < L / 3.3; i++) { const [x, y] = edgePoint(i * 3.3, R.w, R.h), j = (i * 53) % 7; v.fillStyle = `rgba(${70 + j * 8},${110 + j * 9},${40 + j * 4},${0.5 + j * 0.05})`; v.beginPath(); v.arc(R.x + x + ((i * 31) % 9 - 4) * sz, R.y + y + ((i * 17) % 9 - 4) * sz - 2 * sz, (1.1 + (j % 3) * 0.6) * sz, 0, 7); v.fill(); }
+        for (const [cx, cy] of [[R.x, R.y], [R.x + R.w, R.y], [R.x, R.y + R.h], [R.x + R.w, R.y + R.h]]) D.logEnd(v, cx, cy, th * 0.75);
+      }
+      g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.drawImage(S.frame, 0, 0); g.restore();
+      // two vines creeping round it with leaves swaying: redrawn ten times a second, not every frame
+      S.vt += dt;
+      if (!S.vines || S.vt > 0.1 || S.vw !== o.W || S.vh !== o.H) {
+        S.vt = 0; S.vw = o.W; S.vh = o.H; S.vines = S.vines || document.createElement('canvas');
+        const v = fresh(S.vines), Ltot = 2 * (R.w + R.h), reach = S.grow * (0.55 + 0.45 * Math.min(1, k));
+        for (const [ph, amp, col, wid] of [[0, 7, '#2f5a1c', 3], [2.4, 5, '#3c6e22', 2.2]]) {
+          const n = Math.round(Ltot / 3), pts = [];
+          for (let i = 0; i <= n * reach; i++) {
+            const d = i / n * Ltot, [ex, ey, sd] = edgePoint(d, R.w, R.h), wv = Math.sin(d * 0.045 / sz + ph + Math.sin(S.t * 0.4) * 0.1) * amp * sz;
+            pts.push([R.x + ex + (sd === 1 ? wv : sd === 3 ? -wv : 0), R.y + ey + (sd === 0 ? -wv : sd === 2 ? wv : 0), d]);
           }
+          D.strokePts(v, pts, (wid + 1.6) * sz, 'rgba(10,25,6,.6)'); D.strokePts(v, pts, wid * sz, col);
+          for (let i = 6; i < pts.length; i += 9) { const [x, y, d] = pts[i]; D.leaf(v, x, y, (9 + (i % 4) * 2) * sz, Math.sin(d * 0.05 / sz + ph) * 1.3 + (i % 2 ? 1.2 : -1.9) + Math.sin(S.t * 1.6 + i) * 0.12, D.LEAF[(i * 37) % 3], true); }
         }
       }
-      g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.drawImage(S.layer, 0, 0); g.restore();
-      if (Math.random() < dt * (calm ? 0.5 : 1.3) * k) S.leaves.push({ x: ox + Math.random() * w, y: oy - 10, vy: 22 + Math.random() * 20, rot: Math.random() * 6, vr: (Math.random() - 0.5) * 3, sw: Math.random() * 6, col: Math.random() < 0.3 ? '#a8742f' : Math.random() < 0.5 ? '#7dbb4a' : '#5f9e3a' });
-      S.leaves = S.leaves.filter((p) => {
-        p.y += p.vy * dt; p.sw += dt * 2; p.rot += p.vr * dt;
-        const x = p.x + Math.sin(p.sw) * 16;
-        g.save(); g.translate(x, p.y); g.rotate(p.rot); g.fillStyle = p.col; g.beginPath(); g.ellipse(0, 0, 6 * sz, 2.8 * sz, 0, 0, 7); g.fill(); g.restore();
-        return p.y < o.H + 10;
-      });
+      g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.drawImage(S.vines, 0, 0); g.restore();
+      // the odd leaf falls past
+      if (Math.random() < dt * (calm ? 0.5 : 1.2) * k) S.fall.push({ x: ox - 10 + Math.random() * (w + 20), y: oy - 14, r: Math.random() * 6, v: 14 + Math.random() * 12, s: (7 + Math.random() * 4) * sz, c: D.LEAF[Math.floor(Math.random() * 5)] });
+      S.fall = S.fall.filter((f) => { f.y += f.v * dt; f.x += Math.sin(f.y * 0.05 + f.r) * 0.6; f.r += dt * 1.4; D.leaf(g, f.x, f.y, f.s, f.r, f.c, false); return f.y < o.H + 10; });
     },
   },
 };

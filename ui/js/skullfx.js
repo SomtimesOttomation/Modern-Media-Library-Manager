@@ -3,6 +3,7 @@
 // and ten glowing tattoos (Settings > Versus). Glows are pre-drawn once and stamped, the number of sparks is capped,
 // and drawing stops when the bar leaves the page or the window is hidden.
 import { tune, mult } from './fxtune.js';
+import { natureBar, bloodBar } from './fxdraw.js';
 
 // palettes per theme: hottest to coolest
 export const PAL = {
@@ -232,6 +233,18 @@ export function skullBar(l, r, stops, opts = {}) {
     for (const s of sides) {
       const g = geo(s), len = g.x1 - g.x0, P = s.pal; if (len < 2 || !P) continue;
       gb.globalAlpha = 1; gb.globalCompositeOperation = 'source-over';
+      // Nature (a mossy log with a vine) and Blood (a thick river of blood) have bars of their own (fxdraw.js), drawn
+      // with the tip on the left; the right side's is mirrored
+      if (s.theme === 'nature' || s.theme === 'blood') {
+        s.fxst = s.fxst && s.fxst.theme === s.theme ? s.fxst : { theme: s.theme };
+        gb.save(); gb.shadowBlur = 0;
+        let tip = g.x0, mid = g.x1;
+        if (s.side > 0) { gb.translate(W, 0); gb.scale(-1, 1); tip = W - g.x1; mid = W - g.x0; }
+        if (s.theme === 'nature') natureBar(gb, s.fxst, tip, mid, y, dt, bS);
+        else bloodBar(gb, s.fxst, tip, mid, y, dt, bS, rate * bI, H + 20);
+        gb.restore();
+        continue;
+      }
       gb.shadowColor = P[2]; gb.shadowBlur = 8 + 16 * bI;
       const lg = gb.createLinearGradient(s.side < 0 ? g.x1 : g.x0, 0, s.side < 0 ? g.x0 : g.x1, 0);
       lg.addColorStop(0, P[3]); lg.addColorStop(0.6, P[2]); lg.addColorStop(1, P[1]);

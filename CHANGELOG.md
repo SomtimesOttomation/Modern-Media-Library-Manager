@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.23.0
+
+**Feature**
+- Box office runs: paste a weekend-by-weekend, week-by-week or country-by-country table into a movie card (Box office runs > Paste box office). MMLM works out the columns, shows a preview, and keeps the figures on this PC; the first weekend can fill the opening weekend used by Compare. Nothing is fetched from any site.
+- Water theme: rain on glass over the poster - beads build up and heavier drops run down, sweeping up beads and leaving streaks.
+
+**Bug/Fix**
+- Fetch info only asks OMDb about movies missing a Rotten Tomatoes critics score, Metacritic score or domestic box office, and not again within 30 days for one OMDb has already answered, so a full run no longer burns through the 1,000-a-day limit.
+
 ## 0.22.0
 
 **Feature**

@@ -6,6 +6,7 @@ import { esc, num, v, fmtInt, fmtMoney, fmtSize, fmtHMS, fmtRun, hdrLabel, poste
 import { hdrClass, deviceStatus, ALL_DEVICES, STATUS } from './devices.js';
 import { BASE_YEAR } from '../inflation.js';
 import { addToCollection } from './collections.js';
+import { cardSection } from './boxoffice.js';
 
 function spec(title, pairs) {
   const p = pairs.filter((x) => x[1] !== '' && x[1] != null && x[1] !== 0 && x[1] !== '0');
@@ -182,6 +183,12 @@ export function openCard(r, toast, back) {
   overlay((close) => {
     const box = document.createElement('div');
     box.innerHTML = titleSheet(r);
+    // box office runs pasted in by hand (movies only), above the specs
+    if (!r.Show && r.Rid) {
+      const at = box.querySelector('.specs');
+      const put = () => { const old = box.querySelector('.bo-card'); const sec = cardSection(r, put, () => openCard(r, toast, back)); if (old) old.replaceWith(sec); else at.before(sec); };
+      put();
+    }
     box.addEventListener('click', (e) => {
       const t = e.target.closest('[data-close],[data-export],[data-fetch],[data-url],[data-addcol],[data-alldet]');
       if (!t) return;

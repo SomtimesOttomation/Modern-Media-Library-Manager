@@ -7,6 +7,7 @@ export const TABS = ['movies', 'tv'];
 const lib = () => ({ status: 'idle', rows: [], fields: [], byName: new Map(), error: '' });
 
 export const state = {
+  bo: {},
   ready: false,
   host: bridge.isHost,
   version: '',
@@ -59,6 +60,7 @@ function prepare(raw, tab) {
     r._genres = splitList(r.Genre);
     r._search = [r.Title, r.Show, r.Genre, r.Cast, r.Studio, r.Director, r.Year || '', r.Collection].join(' ').toLowerCase();
     for (const k of ['Poster', 'Art', 'Logo', 'Banner']) if (r[k] && !/^(https?:|data:|blob:)/.test(r[k])) r[k] = (bridge.isHost ? 'https://mmlm.cache/' : '') + r[k];
+    if (tab === 'movies') applyBoxOffice(r);                                                    // pasted-in figures (boxoffice.js)
     for (const [f, a] of ADJ_FIELDS) if (r[f] > 0) { const v = adjust(r[f], r.Year); if (v > 0) r[a] = Math.round(v); }   // inflation.js
     return r;
   });
@@ -66,6 +68,21 @@ function prepare(raw, tab) {
   if (raw.fields.some((f) => f.n === 'BoxOfficeWorldwide')) for (const [f, a] of ADJ_FIELDS) if (!raw.fields.some((x) => x.n === a)) raw.fields.push({ n: a, t: 'double', g: 'Box office', s: false });
   return { rows, fields: raw.fields, byName: new Map(raw.fields.map((f) => [f.n, f])) };
 }
+// ---- box office pasted or typed in (movie card > Box office runs) ----
+// Kept apart from the scan in boxoffice-movies.json; an opening weekend from it fills the library's own when that is empty.
+export function applyBoxOffice(r) {
+  const b = state.bo && state.bo[r.Rid];
+  if (b && b.opening > 0 && !(r._openScan > 0)) { r._openScan = r._openScan ?? (r.OpeningDomestic || 0); if (!(r._openScan > 0)) r.OpeningDomestic = b.opening; }
+  if (b && b.openingWW > 0 && !(r.OpeningWorldwide > 0)) r.OpeningWorldwide = b.openingWW;
+}
+export async function saveBoxOffice(r, data) {
+  const all = await bridge.request('boxoffice.save', { rid: r.Rid, data });
+  state.bo = all || {};
+  if (!(r._openScan > 0)) { r.OpeningDomestic = data && data.opening > 0 ? data.opening : (r._openScan || 0); }
+  for (const [f, a] of ADJ_FIELDS) { const v = r[f] > 0 ? adjust(r[f], r.Year) : 0; r[a] = v > 0 ? Math.round(v) : 0; }
+  notify('library');
+}
+
 // The failed-request rule: a library that failed to load is not asked for again when the page redraws, only when the
 // person asks (Retry or Refresh).
 export async function loadLibrary(tab, { force = false } = {}) {
@@ -73,6 +90,7 @@ export async function loadLibrary(tab, { force = false } = {}) {
   if (!force && L.status !== 'idle') return;
   L.status = 'loading'; L.error = ''; notify('library');
   try {
+    if (tab === 'movies') { try { state.bo = (await bridge.request('boxoffice.get')) || {}; } catch (e) { state.bo = {}; } }
     const raw = await bridge.request('library.get', { tab }, 120000);
     if (raw.empty) { Object.assign(L, lib(), { status: 'empty' }); }
     else if (raw.pending) { L.status = 'pending'; }                  // being built from the last scan; a 'library' event follows

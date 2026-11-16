@@ -727,3 +727,21 @@ body.dragging { cursor: ew-resize; user-select: none; }
 .dm-sub { margin: 4px 0 8px; }
 .dm-sub > summary { cursor: pointer; padding: 4px 0; }
 .dm-sub[open] > summary { margin-bottom: 8px; }
+/* box office runs (views/boxoffice.js) */
+.bo-card { margin: 10px 0 12px; min-width: 0; }
+.bo-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 6px; }
+.bo-tabs button { border: 1px solid var(--line); background: var(--surface2, transparent); color: inherit; border-radius: 999px; padding: 2px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+.bo-tabs button.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.bo-scroll { max-height: 240px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.bo-t { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.bo-t th, .bo-t td { padding: 4px 8px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line); }
+.bo-t th[scope=row], .bo-t thead th:first-child { text-align: left; font-weight: 500; }
+.bo-t thead th { position: sticky; top: 0; background: var(--surface, var(--bg)); font-weight: 600; }
+.bo-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+.card.modal.bo-host { width: min(720px, 94vw); }
+.bo-dlg { display: grid; gap: 10px; min-width: 0; }
+.bo-dlg h2 { margin: 0; }
+.bo-in { width: 100%; box-sizing: border-box; font: 12px/1.4 ui-monospace, Consolas, monospace; resize: vertical; }
+.bo-opts { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
+.bo-msg { margin: 0; color: var(--muted); }
+.bo-foot { display: flex; justify-content: flex-end; gap: 8px; }

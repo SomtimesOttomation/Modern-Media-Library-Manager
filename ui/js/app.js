@@ -333,3 +333,11 @@ S.init().then(() => {
   view.replaceChildren(h('div', { class: 'state' }, h('h2', null, 'Could not start'), h('p', null, e.message)));
 });
 void bridge;
+
+// the pinned Movies / TV Shows row sits right under the top bar, whatever height the top bar has
+{
+  const chrome = document.getElementById('chrome');
+  const setH = () => document.documentElement.style.setProperty('--chrome-h', chrome.getBoundingClientRect().height + 'px');
+  try { new ResizeObserver(setH).observe(chrome); } catch (e) { addEventListener('resize', setH); }
+  setH();
+}

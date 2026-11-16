@@ -745,3 +745,6 @@ body.dragging { cursor: ew-resize; user-select: none; }
 .bo-opts { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
 .bo-msg { margin: 0; color: var(--muted); }
 .bo-foot { display: flex; justify-content: flex-end; gap: 8px; }
+/* the Movies / TV Shows row (title, Collections, Tools, sort, views) stays pinned under the top bar while the page scrolls */
+.lib-head { position: sticky; top: var(--chrome-h, 0px); z-index: 15; background: var(--bg); margin-top: -8px; padding: 8px 0; box-shadow: 0 6px 8px -8px rgba(0,0,0,.35); }
+.colpop, .lib-head .menu, .lib-head [role=menu] { z-index: 16; }

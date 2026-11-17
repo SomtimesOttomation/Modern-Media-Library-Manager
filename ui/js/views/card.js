@@ -55,7 +55,7 @@ function links(r) {
   const out = [];
   if (r.IMDBID) out.push(['IMDb', `https://www.imdb.com/title/${encodeURIComponent(r.IMDBID)}/`]);
   if (r.TMDBID) out.push(['TMDB', `https://www.themoviedb.org/${r.Show ? 'tv' : 'movie'}/${encodeURIComponent(r.TMDBID)}`]);
-  return `<div class="links">${out.map(([n, u]) => `<button type="button" data-url="${esc(u)}">${n} \u2197</button>`).join('')}${ADDCOL}${r.__show ? '' : ALLDET}</div>`;
+  return `<div class="links">${out.map(([n, u]) => `<button type="button" data-url="${esc(u)}">${n} \u2197</button>`).join('')}${ADDCOL}${r.__show ? '' : ALLDET}${!r.Show && r.Rid ? '<button type="button" data-ig="1" title="Make a picture of this movie or one of its actors">Infographic</button>' : ''}</div>`;
 }
 // Fetch info for just this movie (Tools > Fetch info, narrowed to it); not for TV episodes
 const FETCH_BTN = '<button class="xp xf" type="button" data-fetch="1" title="Look up ratings, Metacritic and box office for this movie"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3"/></svg><span>Fetch info</span></button>';
@@ -129,14 +129,14 @@ function showSheet(name, eps) {
 /* ---- Save the open card as a picture ----
    The card is cloned with every computed style written inline, drawn through an SVG foreignObject onto a canvas and
    sent to the backend as a PNG, which saves it in Pictures\Modern Media Library Manager. */
-const blobToDataUrl = (b) => new Promise((ok, no) => { const f = new FileReader(); f.onload = () => ok(f.result); f.onerror = () => no(f.error); f.readAsDataURL(b); });
-const loadImage = (src) => new Promise((ok, no) => { const im = new Image(); im.onload = () => ok(im); im.onerror = () => no(new Error('image')); im.src = src; });
-async function imageAsDataUrl(src) {
+export const blobToDataUrl = (b) => new Promise((ok, no) => { const f = new FileReader(); f.onload = () => ok(f.result); f.onerror = () => no(f.error); f.readAsDataURL(b); });
+export const loadImage = (src) => new Promise((ok, no) => { const im = new Image(); im.onload = () => ok(im); im.onerror = () => no(new Error('image')); im.src = src; });
+export async function imageAsDataUrl(src) {
   if (!src) return null;
   if (/^data:/i.test(src)) return src;
   try { const im = await loadImage(src), c = document.createElement('canvas'); c.width = im.naturalWidth; c.height = im.naturalHeight; c.getContext('2d').drawImage(im, 0, 0); return c.toDataURL('image/jpeg', 0.92); } catch (e) { return null; }
 }
-function inlineStyles(src, dst) {
+export function inlineStyles(src, dst) {
   const cs = getComputedStyle(src); let t = '';
   for (let i = 0; i < cs.length; i++) { const p = cs[i]; if (/^(animation|transition)/.test(p)) continue; t += p + ':' + cs.getPropertyValue(p) + ';'; }
   dst.style.cssText = t;
@@ -190,8 +190,9 @@ export function openCard(r, toast, back) {
       put();
     }
     box.addEventListener('click', (e) => {
-      const t = e.target.closest('[data-close],[data-export],[data-fetch],[data-url],[data-addcol],[data-alldet]');
+      const t = e.target.closest('[data-close],[data-export],[data-fetch],[data-url],[data-addcol],[data-alldet],[data-ig]');
       if (!t) return;
+      if (t.dataset.ig) { import('./infographic.js').then((m) => m.openInfographic({ kind: 'movie', r }, toast)); return; }
       if (t.dataset.fetch) { import('./tools.js').then((m) => m.fetchDialog('movies', [r.Rid])); return; }
       if (t.dataset.alldet) {
         const specs = box.querySelector('.specs'), have = box.querySelector('.alldet');

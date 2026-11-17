@@ -61,6 +61,17 @@ async function run() {
   const html = await page.content();
   check(!/[A-Z]:\\|\/library\/parts|FullPath/.test(html), 'no file paths on the page');
   await page.keyboard.press('Escape');
+  // infographics: every layout opened from a movie card draws, and one saves as a picture
+  await page.click('.wall .pc'); await page.click('.sheet [data-ig]'); await page.waitForTimeout(400);
+  for (const t of ['Stat sheet', 'Box office run', 'Tech spec', 'Story card', 'Reception', 'Actor career', 'Actor profile']) {
+    await page.click(`.ig-lays button:has-text("${t}")`); await page.waitForTimeout(150);
+    check(await page.isVisible('.ig-stage .ig'), `Infographic: ${t} draws`);
+  }
+  await page.click('.ig-lays button:has-text("Stat sheet")'); await page.waitForTimeout(150);
+  await page.click('.ig-top button:has-text("Save as picture")'); await page.waitForTimeout(2500);
+  check(await page.isVisible('text=Saved:'), 'Infographic: Save as picture saves a PNG');
+  await page.screenshot({ path: path.join(outDir, 'e2e-infographic.png') });
+  await page.click('.ig-top button:has-text("Close")'); await page.waitForTimeout(200);
   await page.click('#nav a[data-route="tv"]');
   await page.waitForTimeout(500);
   await page.click('#btn-refresh');
@@ -125,6 +136,9 @@ async function run() {
   await page.goto('https://mmlm.ui/index.html#/stats');
   await page.waitForTimeout(1500);
   check(await page.isVisible('.kpi'), 'Stats opens after a reload (library read back from the cache)');
+  await page.click('.dashstrip button:has-text("Infographics")'); await page.waitForTimeout(400);
+  for (const t of ['Top-grossing actors', 'Actors over the years', 'Critics vs audiences']) { await page.click(`.ig-lays button:has-text("${t}")`); await page.waitForTimeout(150); check(await page.isVisible('.ig-stage .ig'), `Infographic (library): ${t} draws`); }
+  await page.click('.ig-top button:has-text("Close")');
   check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
   await b.close();
   host.stdin.end();

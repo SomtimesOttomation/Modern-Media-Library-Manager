@@ -91,6 +91,7 @@ export function manageCollections(tab) {
         return h('div', { class: 'colmgr-row' }, name, query || h('small', null, `${c.items.length} title${c.items.length === 1 ? '' : 's'}, hand-picked`),
           h('small', null, `${countIn(c, tab)} here`),
           h('button', { class: 'btn', type: 'button', onclick: () => { close(); S.setQuery(q(c.name)); } }, 'Show'),
+          tab === 'movies' ? h('button', { class: 'btn', type: 'button', title: 'Make a picture of this collection', onclick: () => { close(); import('./infographic.js').then((m) => m.openInfographic({ kind: 'collection', name: c.name })); } }, 'Infographic') : null,
           h('button', { class: 'btn', type: 'button', title: 'Delete (click twice)', onclick: async (e) => {
             if (!e.currentTarget.dataset.sure) { e.currentTarget.dataset.sure = '1'; e.currentTarget.textContent = 'Sure?'; return; }
             await S.saveCollections(S.state.collections.filter((x) => x !== c)); paint();

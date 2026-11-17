@@ -429,7 +429,10 @@ function fetchHint(list) {
 // out are bigger and glow harder, and the bar glows more as the lead grows. Stops: the scored metrics (8 at most),
 // or the rounds of a tournament.
 // the skull bar lives in skullfx.js; the options come from Settings > Versus
-const skullBar = (l, r, stops) => { const s = S.state.settings; return skullBarFx(l, r, stops, { style: s.skStyle, tattoo: s.skTattoo, radius: s.fxRadius, eyeCol: s.nmEyeCol, eyeSize: s.nmEyeSize, eyeInt: s.nmEyeInt }); };
+const skullBar = (l, r, stops) => { const s = S.state.settings; return skullBarFx(l, r, stops, { style: s.skStyle, tattoo: s.skTattoo, radius: s.fxRadius, eyeCol: s.nmEyeCol, eyeSize: s.nmEyeSize, eyeInt: s.nmEyeInt,
+  themedPick: { fire: s.tsFire, poster: s.tsPoster },
+  themed: { auraTheme: s.tsAuraTheme, auraCol: s.tsAuraCol, auraSize: s.tsAuraSize, auraInt: s.tsAuraInt, eyeTheme: s.tsEyeTheme, eyeCol: s.tsEyeCol, eyeSize: s.tsEyeSize, eyeInt: s.tsEyeInt,
+    fxTheme: s.tsFxTheme, fxCol: s.tsFxCol, fxSize: s.tsFxSize, fxInt: s.tsFxInt, emAmt: s.tsEmAmt, emInt: s.tsEmInt } }); };
 
 function banner(l, r, a, b, how) {
   const w = l > r ? 'l' : r > l ? 'r' : '';

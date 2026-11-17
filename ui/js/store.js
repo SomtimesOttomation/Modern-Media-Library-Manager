@@ -18,7 +18,7 @@ export const state = {
   miRun: null,              // the MediaInfo read in progress (mediainfo events)
   settings: { theme: 'system', updateCheck: false, moviesView: 'posters', tvView: 'posters', moviesSort: 'added', tvSort: 'title', moviesSortRev: false, tvSortRev: false,
     columns: [], hideDupes: false, posterScale: 100, tvScale: 100, clearScale: 100, bannerScale: 100, doctorFreq: 'off', doctorAck: false, doctorDay: 0, doctorTime: '03:00', doctorStyle: 'compact', doctorChecks: ['unreadable', 'unmatched', 'wrongmatch', 'gaps', 'poster', 'dupes', 'av1'], widthPreset: 'full', customWidth: false, contentWidth: 0, artLogo: false, artBackground: false, artBanner: false, cmpInflation: false,
-    fxLeft: 'auto', fxRight: 'auto', fxMotion: 'full', skStyle: 'bone', skTattoo: 0, fxRadius: 50, nmEyeCol: '#7dff4a', nmEyeSize: 50, nmEyeInt: 60, dmSkulls: 24, dmHands: 8, dmClaw: 28, dmVariety: 0, dmDrips: 0, vsStyle: 'arcade', cmpTally: true, cmpWalkover: true, cmpImdb: true,
+    fxLeft: 'auto', fxRight: 'auto', fxMotion: 'full', skStyle: 'bone', skTattoo: 0, fxRadius: 50, nmEyeCol: '#7dff4a', nmEyeSize: 50, nmEyeInt: 60, tsFire: 'inferno', tsPoster: 'neon', tsAuraTheme: true, tsAuraCol: '#ff6a1f', tsAuraSize: 50, tsAuraInt: 40, tsEyeTheme: true, tsEyeCol: '#ffb347', tsEyeSize: 40, tsEyeInt: 50, tsFxTheme: true, tsFxCol: '#ff6a1f', tsFxSize: 50, tsFxInt: 50, tsEmAmt: 50, tsEmInt: 50, dmSkulls: 24, dmHands: 8, dmClaw: 28, dmVariety: 0, dmDrips: 0, vsStyle: 'arcade', cmpTally: true, cmpWalkover: true, cmpImdb: true,
     cmpFun: false, cmpMetrics: null, cmpInfo: null, miPath: '', miFrom: '', miTo: '', fxTune: '', vsColors: null },
   plex: { url: '', hasToken: false },
   counts: { movies: { count: 0, when: '' }, tv: { count: 0, when: '' } },

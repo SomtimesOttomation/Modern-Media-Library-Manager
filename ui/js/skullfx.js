@@ -5,6 +5,7 @@
 import { tune, mult } from './fxtune.js';
 import { natureBar, bloodBar, drenched } from './fxdraw.js';
 import { natureSkull, NATURE_SKULL_IN_USE } from './natureskulls.js';
+import { themedSkull, themedBar, THEMED_SKULLS } from './themeskulls.js';
 
 // palettes per theme: hottest to coolest
 export const PAL = {
@@ -177,6 +178,10 @@ export function skullBar(l, r, stops, opts = {}) {
   const R = mult(Number.isFinite(Number(opts.radius)) ? Number(opts.radius) : 50);
   // the Tribal mask's eye glow (Settings > Versus > Skull bar)
   const eye = { col: /^#[0-9a-f]{6}$/i.test(opts.eyeCol || '') ? opts.eyeCol : '#7dff4a', size: Number.isFinite(Number(opts.eyeSize)) ? Number(opts.eyeSize) : 50, int: Number.isFinite(Number(opts.eyeInt)) ? Number(opts.eyeInt) : 60 };
+  // the themed skulls (Fire, Water, Lightning, Souls of the Damned, Poster colours): which look, and their aura, eye glow,
+  // effects and embers (Settings > Versus > Skull bar)
+  const tsOpts = opts.themed || {};
+  const tsKey = (theme) => { const list = THEMED_SKULLS[theme]; if (!list) return ''; const want = (opts.themedPick || {})[theme]; return list.some(([k]) => k === want) ? want : list[0][0]; };
   const skS = mult(t.skulls.size), skI = mult(t.skulls.int), bS = mult(t.bar.size), bI = mult(t.bar.int);
   const skW = 48 * skS, skH = skW * 100 / 120;
   const height = Math.round(Math.max(64, skH * 0.62 + 40 * bS + 34 * R));
@@ -222,10 +227,12 @@ export function skullBar(l, r, stops, opts = {}) {
       const fx = cmp.dataset['fx' + s.key] || 'poster', tone = cs.getPropertyValue(s.key === 'l' ? '--cl' : '--cr').trim() || (s.key === 'l' ? '#ff9a3c' : '#6fb7ff');
       const id = fx + tone;
       if (id === s.fx) continue;
-      s.fx = id; s.theme = fx; s.pal = palFor(fx, tone);
+      s.fx = id; s.theme = fx; s.tone = tone; s.pal = palFor(fx, tone);
       // the Blood theme's skull is always Drenched and the Nature theme's the Tribal mask: the Bone skull, with the
       // blood or the mask drawn over it on the front canvas
       const own = fx === 'blood' || fx === 'nature';
+      // a themed skull is drawn whole on the front canvas (it shakes, opens its jaw and has fire behind it)
+      if (tsKey(fx)) { s.el.innerHTML = ''; continue; }
       s.el.innerHTML = skullSVG(own ? 'bone' : style, s.pal, 'k' + (uidN++), own ? 0 : tat, t.skulls.int);
       const svg = s.el.querySelector('svg'); if (svg && s.side < 0) svg.style.transform = 'scaleX(-1)';
     }
@@ -241,6 +248,15 @@ export function skullBar(l, r, stops, opts = {}) {
       gb.globalAlpha = 1; gb.globalCompositeOperation = 'source-over';
       // Nature (a mossy log with a vine) and Blood (a thick river of blood) have bars of their own (fxdraw.js), drawn
       // with the tip on the left; the right side's is mirrored
+      if (tsKey(s.theme)) {
+        s.bst = s.bst && s.bst.theme === s.theme ? s.bst : { theme: s.theme };
+        let tip = g.x0, mid = g.x1;
+        gb.save(); gb.shadowBlur = 0;
+        if (s.side > 0) { gb.translate(W, 0); gb.scale(-1, 1); tip = W - g.x1; mid = W - g.x0; }
+        const own = themedBar(gb, s.bst, s.theme, tip, mid, y, dt * rate, bS);
+        gb.restore();
+        if (own) continue;
+      }
       if (s.theme === 'nature' || s.theme === 'blood') {
         s.fxst = s.fxst && s.fxst.theme === s.theme ? s.fxst : { theme: s.theme };
         gb.save(); gb.shadowBlur = 0;
@@ -292,7 +308,7 @@ export function skullBar(l, r, stops, opts = {}) {
     if (!t.skulls.on || !rate) return;
     const engulf = ENGULF[style], fr = FRONT[style] || 0;
     for (const s of sides) {
-      if (!s.pal || s.theme === 'blood' || s.theme === 'nature') continue;   // the Blood skull drips and the Nature one is masked, neither burns
+      if (!s.pal || s.theme === 'blood' || s.theme === 'nature' || tsKey(s.theme)) continue;   // themed skulls have their own effects   // the Blood skull drips and the Nature one is masked, neither burns
       const g = geo(s), sp = skW / 60, dir = s.side;            // dir: the way the skull faces
       const n = skW * 0.08 * rate * (RATE[style] || 1) * skI * dt * 60;
       for (let i = 0; i < n; i++) {
@@ -354,6 +370,12 @@ export function skullBar(l, r, stops, opts = {}) {
     gf.globalCompositeOperation = 'source-over'; gf.globalAlpha = 1;          // the flames leave the canvas adding light
     if (t.skulls.on) for (const s of sides) if (s.theme === 'blood') { const g = geo(s); s.dst = s.dst || {}; drenched(gf, s.dst, g.x, g.y, skW, s.side < 0 ? -1 : 1, rate ? dt : 0, H + 20, rate); }
     if (t.skulls.on) for (const s of sides) if (s.theme === 'nature') { const g = geo(s); s.nst = s.nst || {}; s.nst.eye = eye; natureSkull(gf, s.nst, NATURE_SKULL_IN_USE, g.x, g.y, skW, s.side < 0 ? -1 : 1, rate ? dt * rate : 0); }
+    if (t.skulls.on) for (const s of sides) {
+      const key = tsKey(s.theme); if (!key) continue;
+      const g = geo(s), tone = s.tone || '';
+      s.tst = s.tst || {};
+      themedSkull(gf, s.tst, key, g.x, g.y, skW, s.side < 0 ? -1 : 1, rate ? dt * rate : 0, tsOpts, tone, s.n / stops);
+    }
     if (rate) {
       emitSkulls(rate, dt);
       parts = drawParts(gb, parts, dt); fparts = drawParts(gf, fparts, dt); drawBolts(dt);

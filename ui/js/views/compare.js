@@ -89,7 +89,7 @@ async function posterColours(url) {
   colourCache.set(url, out);
   return out;
 }
-// Auto: red/orange -> fire, deep blue -> water, pale blue or grey-white -> lightning, green -> spectral,
+// Auto: a horror movie -> blood (applyFx); otherwise red/orange -> fire, deep blue -> water, pale blue or grey-white -> lightning, green -> spectral,
 // brown/olive -> nature; anything else glows in the poster's own colours
 function autoFx(cols, side) {
   if (!cols.length) return side === 'l' ? 'fire' : 'water';
@@ -103,9 +103,11 @@ function autoFx(cols, side) {
   return 'poster';
 }
 const FX_NAMES = [['auto', 'Auto'], ['fire', 'Fire'], ['water', 'Water'], ['specter', 'Souls of the Damned'], ['blood', 'Blood'], ['lightning', 'Lightning'], ['nature', 'Nature'], ['poster', 'Poster colours'], ['off', 'Off']];
-async function applyFx(el, url, setting, side) {
+// a horror movie gets Blood (Fresh and glossy) on Auto, whatever its poster's colours
+const isHorror = (r) => !!r && /\bhorror\b/i.test([r.Genre, ...(r._genres || [])].join(' '));
+async function applyFx(el, url, setting, side, r) {
   const cols = await posterColours(url);
-  const fx = setting === 'auto' ? autoFx(cols, side) : setting;
+  const fx = setting === 'auto' ? (isHorror(r) ? 'blood' : autoFx(cols, side)) : setting;
   el.classList.remove(...FX_NAMES.map((x) => 'fx-' + x[0]));
   el.classList.add('fx-' + fx);
   const c1 = cols[0] || '#8ea4ff', c2 = cols[1] || cols[0] || '#b06cff';
@@ -213,7 +215,7 @@ function posterBox(r, side, label, small) {
   if (fun()) {
     const t = tune().poster;
     box.style.setProperty('--gk', t.on ? mult(t.int).toFixed(2) : '0');
-    applyFx(box, r?.Poster, t.on ? (S.state.settings[side === 'l' ? 'fxLeft' : 'fxRight'] || 'auto') : 'off', side);
+    applyFx(box, r?.Poster, t.on ? (S.state.settings[side === 'l' ? 'fxLeft' : 'fxRight'] || 'auto') : 'off', side, r);
   }
   return box;
 }
@@ -427,7 +429,10 @@ function fetchHint(list) {
 // out are bigger and glow harder, and the bar glows more as the lead grows. Stops: the scored metrics (8 at most),
 // or the rounds of a tournament.
 // the skull bar lives in skullfx.js; the options come from Settings > Versus
-const skullBar = (l, r, stops) => skullBarFx(l, r, stops, { style: S.state.settings.skStyle, tattoo: S.state.settings.skTattoo, radius: S.state.settings.fxRadius });
+const skullBar = (l, r, stops) => { const s = S.state.settings; return skullBarFx(l, r, stops, { style: s.skStyle, tattoo: s.skTattoo, radius: s.fxRadius, eyeCol: s.nmEyeCol, eyeSize: s.nmEyeSize, eyeInt: s.nmEyeInt,
+  themedPick: { fire: s.tsFire, poster: s.tsPoster },
+  themed: { auraTheme: s.tsAuraTheme, auraCol: s.tsAuraCol, auraSize: s.tsAuraSize, auraInt: s.tsAuraInt, eyeTheme: s.tsEyeTheme, eyeCol: s.tsEyeCol, eyeSize: s.tsEyeSize, eyeInt: s.tsEyeInt,
+    fxTheme: s.tsFxTheme, fxCol: s.tsFxCol, fxSize: s.tsFxSize, fxInt: s.tsFxInt, emAmt: s.tsEmAmt, emInt: s.tsEmInt } }); };
 
 function banner(l, r, a, b, how) {
   const w = l > r ? 'l' : r > l ? 'r' : '';

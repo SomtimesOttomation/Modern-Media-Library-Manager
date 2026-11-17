@@ -745,3 +745,7 @@ body.dragging { cursor: ew-resize; user-select: none; }
 .bo-opts { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
 .bo-msg { margin: 0; color: var(--muted); }
 .bo-foot { display: flex; justify-content: flex-end; gap: 8px; }
+.nm-col { display: flex; gap: 8px; align-items: center; grid-column: 1 / -1; }
+.nm-col input[type=color] { width: 40px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; }
+.nm-col input[type=text] { width: 90px; font-family: ui-monospace, Consolas, monospace; }
+.ts-own { display: inline-flex; gap: 4px; align-items: center; }

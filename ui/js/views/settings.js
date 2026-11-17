@@ -10,6 +10,7 @@ import { openTraffic } from './traffic.js';
 import { chosen, openMetrics, MAX_SCORED } from '../metrics.js';
 import { BASE_YEAR } from '../inflation.js';
 import { SKULL_STYLES, TATTOOS } from '../skullfx.js';
+import { THEMED_SKULLS } from '../themeskulls.js';
 import { ELEMENTS, tune, saveTune, resetTune, vsColors, VS_DEFAULT, startTabGlow, stopTabGlow, tabGlowLeft } from '../fxtune.js';
 
 // In-page overlay (no alert/confirm/prompt): Escape or a click outside closes it.
@@ -308,12 +309,21 @@ function funTab(repaint) {
       h('input', { type: 'range', min: String(min), max: String(max), step: String(step), value: String(v), 'aria-label': label,
         oninput: (e) => { out.textContent = show(+e.target.value); }, onchange: (e) => set(key, +e.target.value) }), out);
   };
+  // a colour with its hex box, and a tick for using each theme's own colour instead
+  const colRow = (label, themeKey, colKey, def) => {
+    const own = s[themeKey] !== false, col = /^#[0-9a-f]{6}$/i.test(s[colKey] || '') ? s[colKey] : def;
+    const pick = (v) => S.saveSettings({ [colKey]: v.toLowerCase(), [themeKey]: false }).then(repaint);
+    return h('label', null, h('span', null, label + ' colour'), h('span', { class: 'nm-col' },
+      h('input', { type: 'color', value: col, 'aria-label': label + ' colour', onchange: (e) => pick(e.target.value) }),
+      h('input', { type: 'text', value: col, maxlength: '7', spellcheck: 'false', 'aria-label': label + ' colour as hex', onchange: (e) => { let v = e.target.value.trim(); if (v[0] !== '#') v = '#' + v; if (/^#[0-9a-f]{6}$/i.test(v)) pick(v); else e.target.value = col; } }),
+      h('span', { class: 'ts-own' }, h('input', { type: 'checkbox', checked: own ? true : null, 'aria-label': label + ': use each theme\'s own colour', onchange: (e) => set(themeKey, e.target.checked) }), h('small', null, 'Theme colour'))));
+  };
   const side = (key, label) => h('div', { class: 'fx-row' }, h('span', { class: 'fx-lbl' }, label),
     ...FX.map(([k, t]) => h('button', { type: 'button', class: `fx-opt${(s[key] || 'auto') === k ? ' on' : ''}`, 'aria-pressed': (s[key] || 'auto') === k ? 'true' : 'false', title: t, onclick: () => set(key, k) },
       h('span', { class: `fx-sw fx-${k === 'auto' ? 'poster' : k}`, style: { '--fx1': '#d6408c', '--fx2': '#8c50f0' } }), h('small', null, t))));
   const segBtns = (key, opts, def) => h('div', { class: 'seg' }, opts.map(([k, t]) => h('button', { type: 'button', class: (s[key] || def) === k ? 'active' : '', onclick: () => set(key, k) }, t)));
   return [
-    h('p', null, h('b', null, 'Compare: poster borders '), h('small', null, "Auto picks from the poster's main colours: red or orange is fire, deep blue is water, pale blue or white is lightning, green is Souls of the Damned, brown or olive is nature; anything else glows in the poster's own colours. The skulls and the bar take the same theme.")),
+    h('p', null, h('b', null, 'Compare: poster borders '), h('small', null, "Auto gives a horror movie Blood; otherwise it picks from the poster's main colours: red or orange is fire, deep blue is water, pale blue or white is lightning, green is Souls of the Damned, brown or olive is nature; anything else glows in the poster's own colours. The skulls and the bar take the same theme.")),
     h('div', { class: `fx-grid motion-${s.fxMotion || 'full'}` }, side('fxLeft', 'Left side'), side('fxRight', 'Right side')),
     hr(),
     h('p', null, h('b', null, 'Animation '), segBtns('fxMotion', [['still', 'Still'], ['calm', 'Calm'], ['full', 'Full']], 'full')),
@@ -333,6 +343,30 @@ function funTab(repaint) {
         SKULL_STYLES.map(([k, t]) => h('option', { value: k, selected: (s.skStyle || 'bone') === k ? true : null }, t)))),
       rangeRow('Tattoo', 'skTattoo', 0, 10, 1, 0, (v) => TATTOOS[v]?.[0] || 'None'),
       rangeRow('Effect radius', 'fxRadius', 0, 100, 5, 50, (v) => String(v), 'How far flames, sparks and wisps spread from the bars and skulls')),
+    h('p', null, h('small', null, 'Every theme has a skull of its own: Fire is Inferno or Molten, Water the Coral reef, Lightning Storm-charged, Souls of the Damned Fel-possessed, and Poster colours Neon glass or Painted (in the poster\'s colours). Inferno and Fel-possessed build up as the bar fills.')),
+    h('div', { class: 'sk-set' },
+      h('label', null, h('span', null, 'Fire skull'), h('select', { 'aria-label': 'Fire skull', onchange: (e) => set('tsFire', e.target.value) },
+        THEMED_SKULLS.fire.map(([k, t]) => h('option', { value: k, selected: (s.tsFire || 'inferno') === k ? true : null }, t)))),
+      h('label', null, h('span', null, 'Poster colours skull'), h('select', { 'aria-label': 'Poster colours skull', onchange: (e) => set('tsPoster', e.target.value) },
+        THEMED_SKULLS.poster.map(([k, t]) => h('option', { value: k, selected: (s.tsPoster || 'neon') === k ? true : null }, t)))),
+      colRow('Aura', 'tsAuraTheme', 'tsAuraCol', '#ff6a1f'),
+      rangeRow('Aura intensity', 'tsAuraInt', 0, 100, 5, 40, (v) => String(v), 'How bright the halo behind the skull is (0 for none)'),
+      rangeRow('Aura size', 'tsAuraSize', 0, 100, 5, 50, (v) => String(v), 'How far the halo spreads'),
+      colRow('Eye glow', 'tsEyeTheme', 'tsEyeCol', '#ffb347'),
+      rangeRow('Eye glow intensity', 'tsEyeInt', 0, 100, 5, 50, (v) => String(v), 'How bright the eye glows (0 for none)'),
+      rangeRow('Eye glow size', 'tsEyeSize', 0, 100, 5, 40, (v) => String(v), 'How big the glow round the eye is'),
+      colRow('Effects', 'tsFxTheme', 'tsFxCol', '#ff6a1f'),
+      rangeRow('Effects intensity', 'tsFxInt', 0, 100, 5, 50, (v) => String(v), 'How strong the fire, lightning, fel fire, lava and fish are'),
+      rangeRow('Effects size', 'tsFxSize', 0, 100, 5, 50, (v) => String(v), 'How big the fire, lightning, fel fire, lava and fish are'),
+      rangeRow('Embers', 'tsEmAmt', 0, 100, 5, 50, (v) => String(v), 'How many embers fly off Inferno and Fel-possessed'),
+      rangeRow('Ember intensity', 'tsEmInt', 0, 100, 5, 50, (v) => String(v), 'How bright the embers glow')),
+    h('p', null, h('small', null, 'On a Blood side the skull is always the Drenched skull, and on a Nature side the Tribal mask. The mask\'s eye glows:')),
+    h('div', { class: 'sk-set' },
+      h('label', null, h('span', null, 'Mask eye colour'), h('span', { class: 'nm-col' },
+        h('input', { type: 'color', value: s.nmEyeCol || '#7dff4a', 'aria-label': 'Mask eye colour', onchange: (e) => set('nmEyeCol', e.target.value) }),
+        h('input', { type: 'text', value: s.nmEyeCol || '#7dff4a', maxlength: '7', spellcheck: 'false', 'aria-label': 'Mask eye colour as hex', onchange: (e) => { const v = e.target.value.trim(); if (/^#[0-9a-f]{6}$/i.test(v)) set('nmEyeCol', v); else e.target.value = s.nmEyeCol || '#7dff4a'; } }))),
+      rangeRow('Mask eye size', 'nmEyeSize', 0, 100, 5, 50, (v) => String(v), 'How big the glow round the eye is'),
+      rangeRow('Mask eye intensity', 'nmEyeInt', 0, 100, 5, 60, (v) => String(v), 'How bright the eye glows')),
     hr(),
     h('details', { class: 'dm-sub', open: (dmOpen ?? (s.fxLeft === 'specter' || s.fxRight === 'specter')) ? true : null, ontoggle: (e) => { dmOpen = e.target.open; } },
       h('summary', null, h('b', null, 'Souls of the Damned'), h('small', null, ' the green theme: skulls, hands and ooze')),

@@ -103,13 +103,20 @@ async function run() {
   check((await page.$$('.cmp-poster[data-fx]')).length === 2 && await page.isVisible('.cmp-vs'), 'Compare in Fun mode: themed borders and the VS');
   check(await page.isVisible('.cmp-vs.vs-fire') && await page.isVisible('.sk-bar'), 'Compare in Fun mode: the burning VS and the skull bar');
   await page.waitForTimeout(600);
-  check((await page.$$('.sk-skull svg')).length === 2 && (await page.$$('.sk-bar canvas')).length === 2, 'Skull bar: one skull per side, drawn over the elemental bars');
-  check(await page.$eval('.sk-skull svg', (e) => e.style.transform.includes('scaleX(-1)')), 'Skull bar: the left skull faces left (outward)');
+  check((await page.$$('.sk-skull')).length === 2 && (await page.$$('.sk-bar canvas')).length === 2, 'Skull bar: one skull per side, drawn over the elemental bars');
+  check(await page.$eval('.sk-bar canvas:last-of-type', (c) => { const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; for (let i = 3; i < d.length; i += 4) if (d[i]) return true; return false; }), 'Skull bar: the themed skulls are drawn on the canvas');
   await page.click('#btn-settings'); await page.click('.settings-tabs button:has-text("Versus")'); await page.waitForTimeout(300);
+  await page.selectOption('select[aria-label="Fire skull"]', 'molten'); await page.waitForTimeout(300);
+  check((await page.$eval('select[aria-label="Fire skull"]', (e) => e.value)) === 'molten' && await page.isVisible('input[aria-label="Effects colour as hex"]'), 'Versus: the themed skull picks and their aura, eye glow and effects settings are there');
+  await page.$eval('input[aria-label="Aura colour as hex"]', (e) => { e.value = '22aaff'; e.dispatchEvent(new Event('change', { bubbles: true })); }); await page.waitForTimeout(300);
+  check((await page.$eval('input[aria-label="Aura colour as hex"]', (e) => e.value)) === '#22aaff' && !(await page.$eval('input[aria-label="Aura: use each theme\'s own colour"]', (e) => e.checked)), 'Versus: a typed aura hex saves and turns off the theme colour');
+  for (const i of [0, 1]) { await page.locator('.fx-opt[title="Off"]').nth(i).click(); await page.waitForTimeout(300); }
+  await page.waitForTimeout(300);
   await page.selectOption('select[aria-label="Skull look"]', 'sugardark'); await page.waitForTimeout(300);
   await page.$eval('input[aria-label="Tattoo"]', (e) => { e.value = '3'; e.dispatchEvent(new Event('change', { bubbles: true })); }); await page.waitForTimeout(300);
   check((await page.textContent('.sk-set')).includes('Pentagram'), 'Versus: the tattoo slider names the tattoo');
   await page.keyboard.press('Escape'); await page.waitForTimeout(1200);
+  check(await page.$eval('.sk-skull svg', (e) => e.style.transform.includes('scaleX(-1)')), 'Skull bar: with the theme off, the left skull faces left (outward)');
   check((await page.$eval('.sk-skull', (e) => e.innerHTML)).includes('#ff4fa3') && (await page.$eval('.sk-skull', (e) => e.innerHTML)).includes('L22.1,24.7'), 'Skull bar: the chosen skull look and tattoo are drawn');
   await page.screenshot({ path: path.join(outDir, 'e2e-skullbar.png') });
   await page.click('.cmp-tools button:has-text("Collection vs")'); await page.waitForTimeout(500);

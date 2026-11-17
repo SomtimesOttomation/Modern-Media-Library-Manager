@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.24.0
+
+**Feature**
+- Nature becomes the Overgrown log frame: a mossy log border with vines; on the skull bar the bar is a mossy log.
+- Blood becomes Fresh and glossy: thick, shiny drips and a glossy river of blood on the skull bar. On Auto, a horror movie gets Blood.
+- The Blood theme's skull is Drenched: stained red, capped in blood and dripping gobs of it.
+- The Nature theme's skull is the Tribal mask, with a glowing eye whose colour, size and intensity are in Settings > Versus.
+- Every other theme now has a skull of its own on the skull bar:
+  - Fire: Inferno (engulfed in flame that grows as the bar fills, with jets of fire, glowing teeth, dripping lava, embers and a jet from the eye near the end) or Molten (pick in Settings).
+  - Water: Coral reef - coral, an anemone and shells; every 10 to 15 seconds a fish swims out of the eye and the jaw snaps it up.
+  - Lightning: Storm-charged - veins full of racing pulses; the charge builds for 20 seconds while the skull shakes, then discharges and sits charred and smoking for 7 seconds.
+  - Souls of the Damned: Fel-possessed - over 20 seconds it is engulfed in fel fire, grows demon horns and a floating crown of fel fire, its eyes leave flame trails; it holds the form for 10 seconds, then resets.
+  - Poster colours: Neon glass or Painted, in the poster's colours.
+- Fire and Souls of the Damned skull bars are now flamethrower jets, and the Lightning bar crackles with arcs of different sizes.
+- New skull settings in Settings > Versus > Skull bar: Aura, Eye glow and Effects (each with a colour wheel, a hex box or the theme's own colour, plus intensity and size) and Embers (amount and intensity).
+
 ## 0.23.0
 
 **Feature**

@@ -343,6 +343,8 @@ export function render(el, redraw, toast) {
     } }, 'Swap sides'),
     h('label', { class: 'cmp-infl', title: `Box office in ${BASE_YEAR} dollars, adjusted for US inflation from each release year (worldwide is approximate)` },
       h('input', { type: 'checkbox', checked: infl() ? true : null, onchange: (e) => S.saveSettings({ cmpInflation: e.target.checked }).then(redraw) }), ' Adjust for inflation'),
+    h('button', { class: 'btn', type: 'button', title: 'Make a picture of this comparison', onclick: () => import('./infographic.js').then((m) => (pick.mode === 'movie'
+      ? m.openInfographic({ kind: 'pair', a: byRid.get(pick.left), b: byRid.get(pick.right) }, toast) : m.openInfographic({ kind: 'collection', name: pick.cLeft }, toast))) }, 'Infographic'),
     fun() ? h('button', { class: 'btn', type: 'button', title: 'Border effects and the VS', onclick: () => import('./settings.js').then((m) => m.openSettings('fun', redraw)) }, 'Effects') : null);
   root.append(bar);
 

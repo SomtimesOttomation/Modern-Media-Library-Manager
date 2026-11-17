@@ -139,6 +139,7 @@ export function mount(ctx) {
       h('div', { class: 'seg', role: 'tablist', 'aria-label': 'Dashboards' },
         h('button', { type: 'button', class: active === 'overview' ? 'active' : '', onclick: () => setActive('overview') }, 'Overview'),
         ...mine.map((d) => h('button', { type: 'button', class: active === d.id ? 'active' : '', onclick: () => setActive(d.id) }, d.name))),
+      tab === 'movies' ? h('button', { class: 'btn', type: 'button', title: 'Top-grossing actors, and critics against audiences, as pictures', onclick: () => import('./infographic.js').then((m) => m.openInfographic({ kind: 'library' })) }, 'Infographics') : null,
       h('button', { class: 'btn', type: 'button', onclick: () => { const d = newDashboard(tab, `My dashboard ${mine.length + 1}`, mine.length === 0); setActive(d.id); } }, '+ New dashboard'),
       cur ? h('input', { class: 'dashname', type: 'text', value: cur.name, 'aria-label': 'Dashboard name', maxlength: '40', onchange: (e) => { cur.name = e.target.value.trim() || cur.name; saveDashboards(); draw(); } }) : null,
       cur ? h('button', { class: 'btn', type: 'button', title: 'Delete this dashboard (click twice)', onclick: (e) => {

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.25.0
+
+**Feature**
+- Infographics: pictures made from your library, saved as PNGs in Pictures\Modern Media Library Manager.
+  - From a movie card (Infographic): Stat sheet, Box office run (from a pasted run), Tech spec, Story card (9:16, in the poster's colours or plain dark), Reception, and Actor career and Actor profile for anyone in its cast.
+  - From Compare (Infographic): Head to head for the two movies, or the left collection's pictures in Collection mode.
+  - From Manage collections (Infographic): Timeline, Ranked (by Rotten Tomatoes, Metacritic, IMDb, audience or an average), Box office (optionally adjusted for inflation), Your collection, Watch order (story order set by hand and kept per collection) and Critics vs audiences.
+  - From Stats (Infographics): top-grossing actors of a year, how they ranked over six years, and critics vs audiences across the library.
+  - Actor and top-grossing pictures use the cast lists of the movies in your library; where Rotten Tomatoes has no audience score, the IMDb rating stands in.
+
 ## 0.24.0
 
 **Feature**

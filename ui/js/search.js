@@ -44,6 +44,7 @@ const PHRASES = [
   ['4k|uhd|2160p', '4K', (r) => r.ResolutionClass === '4K'], ['1080p|full hd|fhd', '1080p', (r) => r.ResolutionClass === '1080p'],
   ['720p', '720p', (r) => r.ResolutionClass === '720p'], ['sd|dvd quality', 'SD', (r) => r.ResolutionClass === 'SD'],
   ['dolby vision|dovi', 'Dolby Vision', (r) => lc(r.HDRType).includes('dolby vision')], ['hdr10+|hdr10 plus', 'HDR10+', (r) => lc(r.HDRType).includes('hdr10+') || lc(r.HDRStack).includes('hdr10+')],
+  ['hdr10', 'HDR10', (r) => /hdr10(?!\+)/i.test(String(r.HDRType)) || /hdr10(?!\+)/i.test(String(r.HDRStack))], ['hlg', 'HLG', (r) => /hlg/i.test(String(r.HDRType))],
   ['hdr', 'HDR (any)', (r) => !!r.HDRType && r.HDRType !== 'SDR'], ['sdr', 'SDR', (r) => !r.HDRType || r.HDRType === 'SDR'],
   ['fel', 'DV FEL', (r) => r.DVLayer === 'FEL'], ['mel', 'DV MEL', (r) => r.DVLayer === 'MEL'],
   ['atmos', 'Dolby Atmos', (r) => lc(r.ObjectAudio).includes('atmos')], ['dts:x|dtsx', 'DTS:X', (r) => lc(r.ObjectAudio).includes('dts:x')],

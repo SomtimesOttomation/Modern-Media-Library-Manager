@@ -2,7 +2,7 @@
 // expand / collapse-all column to the right of Title. Click a show for its seasons and episodes, an episode for its card.
 import * as S from '../store.js';
 import { h } from '../util.js';
-import { esc, num, fmtSize, posterHtml, tileHtml, searchRows, chipsHtml, fillWall, sortMenu } from '../common.js';
+import { esc, num, fmtSize, posterHtml, tileHtml, searchRows, chipsHtml, fillWall, sortMenu, hdrLabel } from '../common.js';
 import * as dashboard from './stats.js';
 import { collectionMenu, cmControls, CM, cmToggle } from './collections.js';
 import { toolsMenu, viewRids } from './tools.js';
@@ -13,13 +13,31 @@ import { stateBox, gridColumns, cellHtml, colLabel, chooseColumns, viewSeg, view
 
 const byName = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
 const firstGenre = (s) => (s.eps[0]._genres[0] || '￿').toLowerCase();
+// Picture quality of a show: its best copy, and how much of it is that good. With a search, only the episodes that
+// match count (sh.vis), so "4k" sorted by Resolution puts the shows that are all 4K first.
+const RES_RANK = { '4K': 4, '1080p': 3, '720p': 2, SD: 1 };
+const hdrRank = (e) => { const t = String(e.HDRType || ''); return /dolby vision/i.test(t) ? 5 : /hdr10\+/i.test(t) ? 4 : /hdr10/i.test(t) ? 3 : /hlg/i.test(t) ? 2 : t && t !== 'SDR' ? 2 : 1; };
+const vis = (s) => s.vis || s.eps;
+const quality = (rank) => (s) => { const e = vis(s), best = Math.max(0, ...e.map(rank)); return best + e.filter((x) => rank(x) === best).length / Math.max(1, e.length) * .99; };
+const resQ = quality((e) => RES_RANK[e.ResolutionClass] || 0), hdrQ = quality(hdrRank);
+const sumOf = (f) => (s) => vis(s).reduce((a, e) => a + num(e[f]), 0);
+const avgOf = (f) => (s) => { const v = vis(s).map((e) => num(e[f])).filter((x) => x > 0); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0; };
+const descBy = (f) => (a, b) => f(b) - f(a) || byName(a, b);
 export const TV_SORTS = [
   ['title', 'Title', byName],
   ['aired', 'First aired', (a, b) => (a.sum.firstAired === b.sum.firstAired ? byName(a, b) : !a.sum.firstAired ? 1 : !b.sum.firstAired ? -1 : b.sum.firstAired.localeCompare(a.sum.firstAired))],
   ['added', 'Date added', (a, b) => b.sum.added.localeCompare(a.sum.added) || byName(a, b)],
   ['genre', 'Genre', (a, b) => firstGenre(a).localeCompare(firstGenre(b)) || byName(a, b)],
   ['seasons', 'Seasons', (a, b) => b.nSeasons - a.nSeasons || byName(a, b)],
+  ['episodes', 'Episodes', descBy((s) => vis(s).length)],
+  ['res', 'Resolution', descBy(resQ)],
+  ['hdr', 'HDR', descBy(hdrQ)],
+  ['size', 'Size', descBy(sumOf('FileSizeGB'))],
+  ['bitrate', 'Video bitrate (average)', descBy(avgOf('VideoBitRateMbps'))],
+  ['rating', 'Rating', descBy(avgOf('Rating'))],
 ];
+// the quality badges on a show's tile: the resolution and HDR most of its (matching) episodes have
+const most = (eps, f) => { const m = new Map(); for (const e of eps) { const k = f(e); if (k) m.set(k, (m.get(k) || 0) + 1); } return [...m.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || ''; };
 
 // Shows built once per loaded library (not on every redraw).
 let cache = { rows: null, shows: [] };
@@ -62,7 +80,8 @@ export function mount(ctx) {
     const q = S.state.query;
     let list = all;
     let epFilter = null, chipList = [];
-    if (q) { const f = searchRows(L.rows, q, L, S.state.collections); chipList = f.chips; const hit = new Set(f.rows); epFilter = hit; list = all.filter((sh) => sh.eps.some((e) => hit.has(e))); }
+    // with a search, a show is listed when any episode matches, and its counts, badges, grid row and sort use only those
+    if (q) { const f = searchRows(L.rows, q, L, S.state.collections); chipList = f.chips; const hit = new Set(f.rows); epFilter = hit; list = all.map((sh) => ({ ...sh, vis: sh.eps.filter((e) => hit.has(e)) })).filter((sh) => sh.vis.length); }
     viewRids.tv = epFilter ? [...epFilter] : null;
     const sortDef = TV_SORTS.find((x) => x[0] === s.tvSort) || TV_SORTS[0];
     list = list.slice().sort(sortDef[2]);
@@ -87,7 +106,8 @@ export function mount(ctx) {
       body.append(wall);
       const years = (sh) => (!sh.sum.y0 ? '' : sh.sum.y0 === sh.sum.y1 ? String(sh.sum.y0) : `${sh.sum.y0}–${sh.sum.y1}`);
       stopWall = fillWall(wall, list, (sh) => tileHtml({ key: sh.name, poster: posterHtml(sh.poster, sh.name), title: sh.name,
-        sub: [years(sh), `${sh.nSeasons} season${sh.nSeasons === 1 ? '' : 's'}`, `${sh.eps.length} ep.`].filter(Boolean).join(' · '), res: '', hdr: '', rating: 0, cm: CM.tv.on ? CM.tv.picked.has(sh.name) : undefined }));
+        sub: [years(sh), `${sh.nSeasons} season${sh.nSeasons === 1 ? '' : 's'}`, sh.vis && sh.vis.length !== sh.eps.length ? `${sh.vis.length} of ${sh.eps.length} ep.` : `${sh.eps.length} ep.`].filter(Boolean).join(' · '),
+        res: most(vis(sh), (e) => e.ResolutionClass), hdr: most(vis(sh), (e) => hdrLabel(e).replace(/^DV P\d.*$/, 'DV')), rating: 0, cm: CM.tv.on ? CM.tv.picked.has(sh.name) : undefined }));
       wall.addEventListener('click', (e) => {
         const t = e.target.closest('.pc'); if (!t) return;
         if (e.target.closest('[data-cm]')) { const sh = byKey.get(t.dataset.k); if (sh) pick(sh, t); return; }
@@ -174,7 +194,7 @@ export function mount(ctx) {
         if (it.k === 'show') {
           const o = open.has('s:' + it.sh.name);
           const cmc = CM.tv.on ? `<td class="cm-col"><span class="cm-add${CM.tv.picked.has(it.sh.name) ? ' on' : ''}" role="button" data-cm="1">${CM.tv.picked.has(it.sh.name) ? '\u2713' : '+'}</span></td>` : '';
-          return `<tr class="show" data-i="${i}">${cmc}<td class="ttl" title="${esc(it.sh.name)}"><span class="tw">${o ? '▾' : '▸'}</span>${esc(it.sh.name)}</td><td class="muted">${it.sh.nSeasons} season${it.sh.nSeasons === 1 ? '' : 's'} · ${it.sh.eps.length} ep.</td>${cols.map((c) => agg(it.sh.eps, c)).join('')}</tr>`;
+          return `<tr class="show" data-i="${i}">${cmc}<td class="ttl" title="${esc(it.sh.name)}"><span class="tw">${o ? '▾' : '▸'}</span>${esc(it.sh.name)}</td><td class="muted">${it.sh.nSeasons} season${it.sh.nSeasons === 1 ? '' : 's'} · ${it.sh.vis && it.sh.vis.length !== it.sh.eps.length ? `${it.sh.vis.length} of ${it.sh.eps.length}` : it.sh.eps.length} ep.</td>${cols.map((c) => agg(vis(it.sh), c)).join('')}</tr>`;
         }
         if (it.k === 'season') {
           const o = open.has(`s:${it.sh.name}|${it.n}`);

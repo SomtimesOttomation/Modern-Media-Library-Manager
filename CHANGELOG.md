@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.26.0
+
+**Feature**
+- Glass: when DashLauncher's Glass setting is on (Windows 11 Acrylic), MMLM turns see-through over the blurred desktop. Cards and dialogs are frosted; the top bar, navigation bar, grids, scan progress and update window get the strongest frost; text, posters and badges stay solid. Only inside DashLauncher, never on its own.
+
+**Bug/Fix**
+- TV search by picture quality: a show's tile, grid row, episode count and sorting now use only the episodes that match the search (so "4k" no longer shows "mixed").
+- TV tiles show the resolution and HDR most of a show's episodes have.
+- TV Sort By adds Resolution, HDR, Size, Episodes, Video bitrate and Rating. Resolution and HDR put shows that are entirely that quality first.
+- New search words: hdr10 and hlg.
+
 ## 0.25.0
 
 **Feature**

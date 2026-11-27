@@ -13,6 +13,7 @@ export const state = {
   version: '',
   hostMode: 'standalone',
   hostTheme: '',
+  hostGlass: false,         // DashLauncher's Glass setting (host.theme { theme, glass }); never on standalone
   showStatus: {},           // TV: show name -> { state: 'Ongoing'|'Ended', tmdb, lastAir } (TV Shows > Fetch info)
   mi: {},                   // Compare: rid -> [max brightness, average brightness, failed] from MediaInfo
   miRun: null,              // the MediaInfo read in progress (mediainfo events)
@@ -224,7 +225,10 @@ export const updateReady = () => state.update.phase === 'available' || state.upd
 // ---- settings, theme, traffic -----------------------------------------------------------------------------------
 export const inLauncher = () => state.hostMode === 'launcher';
 export function applyTheme() {
-  document.documentElement.dataset.theme = (inLauncher() && state.hostTheme) ? state.hostTheme : (state.settings.theme || 'system');
+  const de = document.documentElement;
+  de.dataset.theme = (inLauncher() && state.hostTheme) ? state.hostTheme : (state.settings.theme || 'system');
+  // Glass: the launcher draws the blurred desktop behind a transparent page (only inside DashLauncher)
+  if (inLauncher() && state.hostGlass) de.dataset.glass = '1'; else delete de.dataset.glass;
   notify('theme');
 }
 export async function saveSettings(patch) {
@@ -271,6 +275,7 @@ export async function init() {
   state.version = info.version || '';
   state.hostMode = info.mode || 'standalone';
   state.hostTheme = info.theme || '';
+  state.hostGlass = info.glass === true;
   state.settings = { ...state.settings, ...(info.settings || {}) };
   state.plex = info.plex || state.plex;
   state.halted = !!info.halted;
@@ -280,7 +285,7 @@ export async function init() {
   applyTheme();
 
   // host events (dash contract): launcher theme, tab shown again, kill switch
-  bridge.on('host.theme', (d) => { state.hostTheme = (d && d.theme) || ''; applyTheme(); });
+  bridge.on('host.theme', (d) => { state.hostTheme = (d && d.theme) || ''; state.hostGlass = !!(d && d.glass === true); applyTheme(); });
   bridge.on('host.visible', () => notify('visible'));
   bridge.on('host.hidden', () => notify('hidden'));
   bridge.on('traffic', (d) => { state.halted = !!(d && d.stopped); notify('traffic'); });

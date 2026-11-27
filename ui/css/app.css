@@ -513,3 +513,39 @@ a.plink:hover { color: var(--accent2); }
 .ewr-seed > .ewr-team:last-child { justify-self: end; flex-direction: row-reverse; }
 .ewr-team.better { background: var(--surface2); box-shadow: inset 3px 0 0 var(--accent); }
 .ewr-seed > .ewr-team:last-child.better { box-shadow: inset -3px 0 0 var(--accent); }
+
+/* ---- Glass (DashLauncher's Windows 11 Acrylic backdrop) --------------------------------------------------------
+   html[data-glass] is set only inside DashLauncher when its Glass setting is on (host.theme { glass: true }). The page is
+   transparent and the launcher's blurred desktop shows through; surfaces turn translucent and frost what is behind them.
+   Text, posters, badges and scores stay solid. Grids, the navigation bar and the bars get the strongest frost. */
+:root[data-glass] {
+  --bg: transparent; --surface: rgba(255,255,255,.62); --surface2: rgba(255,255,255,.48); --line: rgba(19,23,34,.12);
+  --glass-strong: rgba(255,255,255,.82); --glass-soft: rgba(255,255,255,.30); --glass-on-text: #ffffff; --glass-blur: 18px; --glass-blur-strong: 28px;
+}
+:root[data-glass][data-theme="dark"] {
+  --bg: transparent; --surface: rgba(30,36,52,.62); --surface2: rgba(40,48,68,.52); --line: rgba(232,236,244,.12);
+  --glass-strong: rgba(22,27,40,.84); --glass-soft: rgba(20,24,36,.30); --glass-on-text: #0d1017;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-glass]:not([data-theme="light"]) {
+    --bg: transparent; --surface: rgba(30,36,52,.62); --surface2: rgba(40,48,68,.52); --line: rgba(232,236,244,.12);
+    --glass-strong: rgba(22,27,40,.84); --glass-soft: rgba(20,24,36,.30); --glass-on-text: #0d1017;
+  }
+}
+:root[data-glass], :root[data-glass] body { background: transparent; }
+/* the whole window: a light frost, so the gaps between posters and the headers read as glass while posters stay solid */
+:root[data-glass] #app { background: var(--glass-soft); backdrop-filter: blur(var(--glass-blur)); -webkit-backdrop-filter: blur(var(--glass-blur)); }
+:root[data-glass] .card, :root[data-glass] .kpi, :root[data-glass] .sheet, :root[data-glass] .sortmenu {
+  backdrop-filter: blur(var(--glass-blur)); -webkit-backdrop-filter: blur(var(--glass-blur)); }
+/* strongest frost: the top bar, the navigation bar, grids and tables, scan progress and the kill-switch bar */
+:root[data-glass] #topbar, :root[data-glass] .navpill-row, :root[data-glass] .navpill, :root[data-glass] .vgrid,
+:root[data-glass] .syncbar, :root[data-glass] .haltbar, :root[data-glass] .upd {
+  background: var(--glass-strong); backdrop-filter: blur(var(--glass-blur-strong)) saturate(1.2); -webkit-backdrop-filter: blur(var(--glass-blur-strong)) saturate(1.2); }
+:root[data-glass] .navpill-row { background: transparent; }
+:root[data-glass] #app { min-height: 100vh; }
+:root[data-glass] .vgrid th { background: var(--glass-strong); }
+:root[data-glass] .overlay { background: rgba(0,0,0,.28); }
+:root[data-glass] .card.modal { background: var(--glass-strong); backdrop-filter: blur(var(--glass-blur-strong)); -webkit-backdrop-filter: blur(var(--glass-blur-strong)); }
+:root[data-glass] .toast { color: var(--glass-on-text); box-shadow: 0 8px 24px rgba(0,0,0,.25); }
+/* fields and boxes that used the page colour as their own background */
+:root[data-glass] .setup-form input, :root[data-glass] .scan-times, :root[data-glass] .mi-field input, :root[data-glass] .vs-col input[type=text] { background: var(--surface2); }

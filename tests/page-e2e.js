@@ -86,6 +86,22 @@ async function run() {
   check(await page.isVisible('.sortmenu button:has-text("Resolution")') && await page.isVisible('.sortmenu button:has-text("HDR")'), 'TV Sort By has Resolution and HDR');
   await page.click('.sortmenu button:has-text("Resolution")'); await page.waitForTimeout(300);
   await page.fill('#psearch', ''); await page.waitForTimeout(500);
+  // Glass: only inside DashLauncher with glass on; the page goes transparent, posters stay solid
+  const glass = await page.evaluate(async () => {
+    const S = await import('/js/store.js'), de = document.documentElement, out = {};
+    S.state.hostGlass = true; S.applyTheme(); out.standalone = 'glass' in de.dataset;
+    const mode = S.state.hostMode; S.state.hostMode = 'launcher'; S.applyTheme();
+    out.on = de.dataset.glass === '1'; out.bg = getComputedStyle(document.body).backgroundColor; out.poster = getComputedStyle(document.querySelector('.pimg')).backgroundColor;
+    de.style.background = 'repeating-linear-gradient(45deg,#e8553a 0 40px,#2b6fd6 40px 80px,#f2c14e 80px 120px)';
+    return { ...out, mode };
+  });
+  check(!glass.standalone && glass.on && /rgba\(0, 0, 0, 0\)|transparent/.test(glass.bg) && !/rgba\(.*, 0\)$/.test(glass.poster), 'Glass: set only in the launcher; page transparent, posters solid');
+  await page.screenshot({ path: path.join(outDir, 'e2e-glass.png') });
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; }); await page.click('.seg button:has-text("Grid")'); await page.waitForTimeout(400);
+  await page.screenshot({ path: path.join(outDir, 'e2e-glass-dark.png') });
+  await page.click('.seg button:has-text("Posters")'); await page.waitForTimeout(300);
+  await page.evaluate(async (mode) => { const S = await import('/js/store.js'); S.state.hostGlass = false; S.state.hostMode = mode; S.applyTheme(); document.documentElement.style.background = ''; }, glass.mode);
+  check(await page.evaluate(() => !('glass' in document.documentElement.dataset)), 'Glass: turned off again when the launcher sends glass false');
   await page.click('.seg button:has-text("Grid")');
   await page.click('.xall');
   check((await page.$$('tr.ep')).length === 10, 'Expand all shows every episode in the grid');

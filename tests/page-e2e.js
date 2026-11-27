@@ -77,6 +77,15 @@ async function run() {
   await page.click('#btn-refresh');
   await page.waitForSelector('.wall .pc', { timeout: 30000 });
   check((await page.$$('.wall .pc')).length === 2, 'F5 / refresh scans TV: one tile per show (2 shows)');
+  check((await page.$$eval('.wall .pc .badges .b', (x) => x.map((e) => e.textContent))).includes('1080p'), 'TV tiles show the resolution most episodes have');
+  await page.fill('#psearch', '4k'); await page.waitForTimeout(700);
+  check(await page.isVisible('text=Nothing matches'), 'TV search "4k" finds no shows when every episode is 1080p');
+  await page.fill('#psearch', '1080p'); await page.waitForTimeout(700);
+  check((await page.$$('.wall .pc')).length === 2, 'TV search "1080p" finds both shows');
+  await page.click('.sortbtn button[aria-haspopup="menu"] >> nth=-1'); await page.waitForTimeout(200);
+  check(await page.isVisible('.sortmenu button:has-text("Resolution")') && await page.isVisible('.sortmenu button:has-text("HDR")'), 'TV Sort By has Resolution and HDR');
+  await page.click('.sortmenu button:has-text("Resolution")'); await page.waitForTimeout(300);
+  await page.fill('#psearch', ''); await page.waitForTimeout(500);
   await page.click('.seg button:has-text("Grid")');
   await page.click('.xall');
   check((await page.$$('tr.ep')).length === 10, 'Expand all shows every episode in the grid');
